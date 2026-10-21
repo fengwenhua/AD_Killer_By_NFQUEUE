@@ -828,11 +828,17 @@ def update_failure_feedback_regression(browser, errors, screenshots=None):
         expect(retry).to_have_attribute('aria-busy', 'true')
         expect(retry).to_have_text('加载中…')
         expect(retry).to_be_disabled()
-        expect(retry).to_be_focused()
+        retry.evaluate('e=>e.blur()')  # Also exercise browsers that blur on disable.
         if screenshots:
             page.screenshot(path=str(screenshots / f'release-retry-loading-{theme}-320.png'))
         expect(retry).to_have_attribute('aria-busy', 'false')
+        expect(retry).to_be_focused()
         expect(page.locator('.release-error')).to_contain_text('HTTP 403')
+        retry.click()
+        expect(retry).to_have_attribute('aria-busy', 'true')
+        page.locator('#settingsBack').focus()
+        expect(retry).to_have_attribute('aria-busy', 'false')
+        expect(page.locator('#settingsBack')).to_be_focused()
         assert page.evaluate('previewNativeBusy.every(item=>item.busy)')
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
         page.close()

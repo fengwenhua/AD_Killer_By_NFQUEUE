@@ -22,6 +22,16 @@ const entries = [
 ];
 const positions = new Map();
 let lastEntry = '', revision = 0;
+async function reloadNotes(event) {
+  const button = event.currentTarget;
+  const focused = document.activeElement === button;
+  await props.updates.loadReleaseNotes(true);
+  await nextTick();
+  // Chromium versions differ on whether disabling a focused button blurs it.
+  // Restore only if the user has not moved focus or left this settings detail.
+  if (focused && active.value === 'releases' && root.value && button.isConnected &&
+      (document.activeElement === document.body || document.activeElement === button)) button.focus({ preventScroll: true });
+}
 async function show(id) {
   if (id && !entries.some(entry => entry.id === id)) return;
   const pane = root.value?.closest('.page');
@@ -108,7 +118,7 @@ async function show(id) {
         <ol v-if="updates.latestRelease && !updates.notesLoading" class="release-list">
           <li><div class="release-heading"><b>v{{ updates.latestRelease.version }}</b><span class="badge">{{ updates.latestRelease.preview ? '预览版' : '正式版' }}</span><time v-if="updates.latestRelease.date">{{ updates.latestRelease.date }}</time></div><h3>{{ updates.latestRelease.title }}</h3><pre class="release-body">{{ updates.latestRelease.body || '本次发布未填写更新说明。' }}</pre></li>
         </ol>
-        <div class="release-actions"><ActionButton id="reloadReleaseNotes" icon="sync" :busy="updates.notesLoading" @click="updates.loadReleaseNotes(true)">{{ updates.notesLoading ? '加载中…' : '重新加载' }}</ActionButton></div>
+        <div class="release-actions"><ActionButton id="reloadReleaseNotes" icon="sync" :busy="updates.notesLoading" @click="reloadNotes">{{ updates.notesLoading ? '加载中…' : '重新加载' }}</ActionButton></div>
       </section></div>
     </div>
   </div>
