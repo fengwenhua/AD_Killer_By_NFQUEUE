@@ -31,6 +31,8 @@ window.previewTestFails = false;
 window.previewContentFails = false;
 window.previewContentDelay = 0;
 window.previewVersion = __VERSION_FIXTURE__;
+window.previewModuleReady = "";
+window.previewModuleReboot = false;
 window.previewEngineState = "stopped";
 window.previewStartFails = true;
 window.previewStartDelay = 0;
@@ -51,6 +53,13 @@ window.ksu = {
     previewCommands.push(command);
     let text = "", errno = 0;
     if(command.includes(" --version-status")) text = JSON.stringify(previewVersion);
+    else if(command.includes(" --module-update-status")) text=JSON.stringify({version:previewModuleReady,rebootRequired:previewModuleReboot});
+    else if(command.includes(" --module-update-check")) {
+      const version="9.0", name="AD_Killer_By_NFQUEUE-v9.0.zip", base="https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/releases";
+      text=JSON.stringify({tag_name:"v"+version,draft:false,prerelease:false,html_url:base+"/tag/v"+version,body:"测试发布说明 <img src=x onerror=alert(1)>",assets:[{name,size:500,browser_download_url:base+"/download/v"+version+"/"+name},{name:name+".sha256",browser_download_url:base+"/download/v"+version+"/"+name+".sha256"}]});
+    }
+    else if(command.includes(" --module-update-download ")) {previewModuleReady="9.0";text=JSON.stringify({status:"started",job_id:"987-654"});}
+    else if(command.includes(" --module-update-install ")) {previewModuleReboot=true;text=JSON.stringify({status:"started",job_id:"987-655"});}
     else if(command.includes(" --status")) text = JSON.stringify({
       iptables_active:previewEngineState==="running", running:previewEngineState==="running",
       runtime:previewEngineState, last_error:previewEngineState==="error"?previewEngineError:"",
@@ -420,10 +429,13 @@ def motion_and_settings_regression(browser, errors, screenshots):
         expect(page.locator('#aboutVersion')).to_contain_text(VERSION_FIXTURE['version'])
         expect(page.locator('#versionSource')).to_have_text('已读取本机模块')
         assert page.locator('#releaseNotes .release-list > li').count() == 1
-        assert page.locator('#getUpdate').is_disabled()
+        expect(page.locator('#getUpdate')).to_be_enabled()
         before = page.evaluate('previewCommands.length')
-        page.locator('#getUpdate').evaluate('e=>e.click()')
-        assert page.evaluate('previewCommands.length') == before
+        page.locator('#getUpdate').click()
+        expect(page.locator('#moduleUpdateStatus')).to_contain_text('发现 v9.0')
+        assert page.evaluate('previewCommands.length') > before
+        expect(page.locator('#downloadModuleUpdate')).to_be_enabled()
+        assert page.locator('.module-update img').count() == 0
         page.locator('#settingsBack').click()
         assert not any(url.startswith(('http:', 'https:')) for url in requests)
         assert not page.evaluate("previewCommands.some(c=>/ --(?:start|stop|daemon|reload|update-start|sources-save|apps-apply)(?: |$)/.test(c))")
@@ -660,11 +672,38 @@ def version_fallback_regression(browser, errors):
         expect(page.locator('#moduleVersion')).to_contain_text('v' + (VERSION_FIXTURE['version'] if kind == 'offline' else '1.0.0'))
         page.locator('nav [data-page="settings"]').click()
         page.locator('[data-settings-entry="about"]').click()
-        assert page.locator('#getUpdate').is_disabled()
+        expect(page.locator('#getUpdate')).to_be_enabled()
+        assert page.locator('#downloadModuleUpdate').count() == 0
         if kind == 'offline':
             expect(page.locator('#versionSource')).to_contain_text('未核实引擎')
         else:
             expect(page.locator('#versionMismatch')).to_be_visible()
+        page.close()
+
+
+def module_update_regression(browser, errors):
+    for width in (320, 393):
+        page = browser.new_page(viewport={'width': width, 'height': 852}, reduced_motion='reduce')
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.add_init_script(mock_script())
+        page.goto((ROOT / 'module/webroot/index.html').as_uri())
+        expect(page.locator('#versionSource')).to_have_text('已读取本机模块')
+        page.locator('nav [data-page="settings"]').click()
+        page.locator('[data-settings-entry="about"]').click()
+        assert not page.evaluate("previewCommands.some(c=>c.includes('--module-update-check'))")
+        page.locator('#getUpdate').click()
+        expect(page.locator('#downloadModuleUpdate')).to_be_visible()
+        assert not page.evaluate("previewCommands.some(c=>c.includes('--module-update-download'))")
+        page.locator('#downloadModuleUpdate').click()
+        expect(page.locator('#installModuleUpdate')).to_be_visible()
+        assert not page.evaluate("previewCommands.some(c=>c.includes('--module-update-install'))")
+        page.locator('#installModuleUpdate').click()
+        expect(page.locator('#confirmModuleInstall')).to_be_visible()
+        assert not page.evaluate("previewCommands.some(c=>c.includes('--module-update-install'))")
+        page.locator('#confirmModuleInstall').click()
+        expect(page.locator('#moduleUpdateStatus')).to_contain_text('安装成功')
+        assert page.locator('#installModuleUpdate').count() == 0
+        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
         page.close()
 
 
@@ -1083,6 +1122,7 @@ def main():
                         page.locator("#source-4").check()
                         assert source_order() == saved_order and page.locator("#saveSources").is_disabled()
                     page.close()
+            module_update_regression(browser, errors)
             adaptive_regression(browser, args.screenshots, errors)
             assert not errors, errors
             print("Vue WebUI 52 viewport/theme combinations, offline loading, fold/rotate draft preservation and functional regressions passed")

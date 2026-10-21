@@ -199,6 +199,13 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread \
 
 python3 "$ROOT/tests/test_data_paths.py"
 
+${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" \
+    "$ROOT/tests/test_module_update.cpp" "$ROOT/src/module_update.cpp" \
+    "$ROOT/src/net.cpp" "$ROOT/src/net_policy.cpp" \
+    "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" -ldl -lz \
+    -o "$BUILD_DIR/test_module_update"
+"$BUILD_DIR/test_module_update"
+
 ${CXX:-c++} $COMPILE_FLAGS \
     -I"$ROOT/src" \
     "$ROOT/tests/test_rule_bundle.cpp" \

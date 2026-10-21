@@ -258,10 +258,16 @@ nav button.active .icon { stroke-width: 2; }
 .module-facts dt { color: var(--muted); flex: none; }
 .module-facts dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
 .module-facts code { font-size: 11px; }
-.update-placeholder { display: grid; gap: 16px; background: var(--input); padding: 18px; border-radius: 18px; }
-.update-placeholder b { font-size: 13px; }
-.update-placeholder p { margin: 5px 0 0; font-size: 12px; }
-.update-placeholder .btn:disabled { opacity: 1; color: var(--muted); border-style: dashed; background: var(--surface); box-shadow: none; }
+.module-update { display: grid; gap: 12px; background: var(--input); padding: 18px; border-radius: 18px; min-width: 0; }
+.module-update b { font-size: 13px; }
+.module-update p { margin: 0; font-size: 12px; }
+.update-channel { display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: 13px; }
+.update-channel input { width: 20px; height: 20px; flex: none; }
+.update-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.update-actions .btn { flex: 1 1 120px; }
+.update-notes { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 12px; max-height: 240px; overflow-y: auto; }
+.update-confirm { display: grid; gap: 12px; }
+.module-update > a { display: flex; align-items: center; gap: 6px; min-height: 44px; font-size: 12px; }
 .about-footer { display: grid; gap: 12px; margin-top: 22px; color: var(--muted); font-size: 10px; }
 .about-footer a { color: var(--main); display: inline-flex; align-items: center; gap: 6px; min-height: 44px; width: fit-content; font-size: 12px; text-decoration: none; }
 .about-footer .icon { width: 14px; height: 14px; }

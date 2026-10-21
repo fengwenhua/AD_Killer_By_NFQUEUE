@@ -79,6 +79,7 @@ $CXX -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -fvisibility=hidden \
   -static-libstdc++ \
   -o "$BIN" \
   "$HERE/src/main.cpp" "$HERE/src/engine.cpp" "$HERE/src/rules.cpp" \
+  "$HERE/src/module_update.cpp" \
   "$HERE/src/rule_stream.cpp" \
   "$HERE/src/snapshot_merge.cpp" \
   "$HERE/src/metrics.cpp" \
@@ -113,6 +114,7 @@ echo "[4/4] 打包 zip..."
 ZIP="$DIST/AD_Killer_By_NFQUEUE-v${VERSION}.zip"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-315532800}" \
   python3 "$HERE/scripts/package_module.py" "$PKG" "$ZIP"
+python3 "$HERE/scripts/release_metadata.py" "$ZIP" "$HERE/CHANGELOG.md"
 
 echo "✅ 完成: $ZIP"
 echo "   校验: $ZIP.sha256"

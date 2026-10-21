@@ -116,6 +116,8 @@ jobs:
           path: |
             dist/AD_Killer_By_NFQUEUE-v*.zip
             dist/AD_Killer_By_NFQUEUE-v*.zip.sha256
+            dist/update.json
+            dist/changelog.md
 
   prerelease:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -139,6 +141,8 @@ jobs:
           test -n "$version"
           test -f "release/AD_Killer_By_NFQUEUE-${tag}.zip"
           test -f "release/AD_Killer_By_NFQUEUE-${tag}.zip.sha256"
+          test -f release/update.json
+          test -f release/changelog.md
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag already exists; leaving it unchanged."
             exit 0
@@ -146,7 +150,8 @@ jobs:
           gh release create "$tag" \
             "release/AD_Killer_By_NFQUEUE-${tag}.zip" \
             "release/AD_Killer_By_NFQUEUE-${tag}.zip.sha256" \
+            release/update.json release/changelog.md \
             --target "$GITHUB_SHA" \
             --title "$tag Preview" \
-            --notes "Automated preview built from commit $GITHUB_SHA after the complete CI suite passed. Review it before marking it as the latest stable release." \
+            --notes-file release/changelog.md \
             --prerelease

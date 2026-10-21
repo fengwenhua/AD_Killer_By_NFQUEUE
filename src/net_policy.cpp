@@ -10,6 +10,12 @@ void set_error(std::string *error, const char *message) {
 
 }  // namespace
 
+bool https_download(const std::string &url) {
+    std::string prefix = url.substr(0,8);
+    for (char &ch : prefix) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return prefix == "https://";
+}
+
 bool validate_download_url(const std::string &url, std::string *error) {
     if (url.empty() || url.size() > 4096) {
         set_error(error, "URL 长度非法");
@@ -74,7 +80,7 @@ std::vector<std::string> build_curl_download_argv(
         "--disable", "--globoff",
         "--fail", "--silent", "--show-error", "--location",
         "--max-redirs", std::to_string(MAX_DOWNLOAD_REDIRECTS),
-        "--proto", "=http,https", "--proto-redir", "=http,https",
+        "--proto", "=http,https", "--proto-redir", https_download(url) ? "=https" : "=http,https",
         "--connect-timeout", "15", "--max-time", "300",
         "--max-filesize", std::to_string(MAX_RULE_DOWNLOAD_BYTES),
         "--output", output_path, "--", url,

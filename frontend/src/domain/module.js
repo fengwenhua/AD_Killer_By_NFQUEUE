@@ -11,10 +11,10 @@ export function parseModuleInfo(value) {
 
 export function releaseNotes(build = BUILD_INFO) {
   return [
-    { version: build.version, current: true, title: '首次开源版本', changes: [
-      '项目、模块、二进制、数据目录与发布包统一更名为 AD_Killer_By_NFQUEUE。',
-      '完成数据目录、防火墙链、WebUI 与发布包的统一命名。',
-      '补充 YH_Hosts 来源致谢、学习用途免责声明与公开发布说明。',
+    { version: build.version, current: true, title: '模块在线更新', changes: [
+      '支持手动检查 GitHub 正式版，以及可选的预览版。',
+      '后台下载、SHA-256 校验、管理器安装与重启提示，重新打开界面可恢复任务。',
+      '提供管理器标准 updateJson；CI 通过后生成更新元数据并发布预览包。',
     ] },
   ];
 }

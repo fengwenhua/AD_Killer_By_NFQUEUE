@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from package_module import FILES, create_module_zip, write_checksum  # noqa: E402
 from verify_checksum import verify_checksum  # noqa: E402
 from validate_android_elf import validate_android_elf  # noqa: E402
+from release_metadata import generate  # noqa: E402
 
 
 def test_android_elf() -> None:
@@ -81,6 +82,23 @@ def main() -> None:
         first = base / "first.zip"
         second = base / "second.zip"
         create_module_zip(package, first, 315532800)
+        release_zip = base / f"AD_Killer_By_NFQUEUE-v{version}.zip"
+        create_module_zip(package, release_zip, 315532800)
+        write_checksum(release_zip)
+        notes = base / "notes.md"
+        notes.write_text("# Release notes\n")
+        metadata = generate(release_zip, notes)
+        assert metadata["versionCode"] == int(properties["versionCode"])
+        assert metadata["zipUrl"].endswith(release_zip.name)
+        assert metadata["sha256"] == hashlib.sha256(release_zip.read_bytes()).hexdigest()
+        assert (base / "changelog.md").read_text() == notes.read_text()
+        release_zip.with_name(release_zip.name+".sha256").write_text("bad checksum")
+        try:
+            generate(release_zip, notes)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("metadata must reject package/checksum mismatch")
         for name, _ in FILES:
             os.utime(package / name, (1900000000, 1900000000))
         create_module_zip(package, second, 315532800)

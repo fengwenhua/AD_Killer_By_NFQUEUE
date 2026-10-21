@@ -32,6 +32,7 @@
 #include "cgroup_isolation.h"
 #include "hagezi_source.h"
 #include "source_preview.h"
+#include "module_update.h"
 
 #include <cstdio>
 #include <cerrno>
@@ -894,7 +895,7 @@ static std::string update_job_path(const std::string &job_id, const char *suffix
 }
 
 // 由后端创建唯一任务并脱离 WebUI exec 会话。状态和日志均按 job_id 隔离。
-static int cmd_update_start(const std::string &test_url = "") {
+static int cmd_update_start(const std::string &test_url = "", const std::string &module_version = "", bool install_module = false) {
     std::string error;
     if (!test_url.empty() && !is_builtin_source(test_url) && !validate_download_url(test_url, &error)) {
         fprintf(stderr, "%s\n", error.c_str());
@@ -946,11 +947,11 @@ static int cmd_update_start(const std::string &test_url = "") {
         if (setenv("ADK_NFQ_UPDATE_JOB", job_id.c_str(), 1) != 0) _exit(1);
         auto isolated = isolate_daemon_cgroups();
         if (!isolated.ok) {
-            log_line("错误", "后台来源任务无法脱离调用方冻结组：%s", isolated.error.c_str());
+            log_line("错误", "后台任务无法脱离调用方冻结组：%s", isolated.error.c_str());
             write_file_atomic(state_path.c_str(), finished_update_job_state(1));
             _exit(1);
         }
-        int result = cmd_update(test_url);
+        int result = module_version.empty() ? cmd_update(test_url) : module_update::worker(module_version, install_module);
         write_file_atomic(state_path.c_str(), finished_update_job_state(result));
         _exit(result);
     }
@@ -1213,6 +1214,10 @@ static void usage() {
             "  AD_Killer_By_NFQUEUE --update           拉取规则源更新\n"
             "  AD_Killer_By_NFQUEUE --update-start     创建后台更新 job\n"
             "  AD_Killer_By_NFQUEUE --update-status ID 查询更新 job 状态\n"
+            "  AD_Killer_By_NFQUEUE --module-update-check stable|preview 检查模块 Release\n"
+            "  AD_Killer_By_NFQUEUE --module-update-download VERSION 后台下载并校验模块\n"
+            "  AD_Killer_By_NFQUEUE --module-update-install VERSION 后台安装已校验模块\n"
+            "  AD_Killer_By_NFQUEUE --module-update-status 查询安装包与重启状态\n"
             "  AD_Killer_By_NFQUEUE --sources-list     读取启用/停用来源 JSON\n"
             "  AD_Killer_By_NFQUEUE --sources-save     从 stdin 校验并原子保存来源\n"
             "  AD_Killer_By_NFQUEUE --source-test URL  后台测试单源，不发布规则\n"
@@ -1241,6 +1246,17 @@ int main(int argc, char **argv) {
     }
 
     if (arg == "--install")        return cmd_install();
+    if (arg == "--module-update-check") {
+        if (argc != 3 || (strcmp(argv[2],"stable") != 0 && strcmp(argv[2],"preview") != 0)) { usage(); return 1; }
+        return module_update::release_info(strcmp(argv[2],"preview") == 0);
+    }
+    if (arg == "--module-update-status") return module_update::status();
+    if (arg == "--module-update-download" || arg == "--module-update-install") {
+        if (geteuid() != 0 || argc != 3 || !module_update::newer_version(argv[2], MODULE_VERSION)) {
+            fprintf(stderr,"模块更新需要 root 权限和比当前版本更高的数字版本号\n"); return 1;
+        }
+        return cmd_update_start("",argv[2],arg == "--module-update-install");
+    }
     if (arg == "--start")          return cmd_start();
     if (arg == "--stop")           return cmd_stop();
     if (arg == "--daemon")         return cmd_daemon();

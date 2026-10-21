@@ -54,6 +54,8 @@ int main() {
            "curl argv must terminate option parsing before URL");
     expect(std::find(curl.begin(), curl.end(), "=http,https") != curl.end(),
            "curl must restrict initial and redirect protocols");
+    expect(*(std::find(curl.begin(), curl.end(), "--proto-redir")+1) == "=https",
+           "HTTPS downloads must reject redirects to HTTP");
     expect(curl.size() > 2 && curl[1] == "--disable" && curl[2] == "--globoff",
            "curl must ignore curlrc and not expand URL glob expressions");
 

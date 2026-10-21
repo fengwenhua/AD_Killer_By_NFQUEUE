@@ -211,7 +211,7 @@ std::string download_via_libcurl(const std::string &url,
     option_error |= p_easy_setopt(easy, CURLOPT_MAXREDIRS_,
                                   static_cast<long>(MAX_DOWNLOAD_REDIRECTS));
     option_error |= p_easy_setopt(easy, CURLOPT_PROTOCOLS_, CURLPROTO_HTTP_HTTPS);
-    option_error |= p_easy_setopt(easy, CURLOPT_REDIR_PROTOCOLS_, CURLPROTO_HTTP_HTTPS);
+    option_error |= p_easy_setopt(easy, CURLOPT_REDIR_PROTOCOLS_, https_download(url) ? (1L << 1) : CURLPROTO_HTTP_HTTPS);
     option_error |= p_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER_, 1L);
     option_error |= p_easy_setopt(easy, CURLOPT_SSL_VERIFYHOST_, 2L);
     option_error |= p_easy_setopt(easy, CURLOPT_NOSIGNAL_, 1L);
@@ -385,7 +385,9 @@ std::string prefix_libcurl(const std::string &url, PrefixContext &context) {
     options |= p_easy_setopt(easy, CURLOPT_FOLLOWLOCATION_, 1L);
     options |= p_easy_setopt(easy, CURLOPT_MAXREDIRS_, static_cast<long>(MAX_DOWNLOAD_REDIRECTS));
     options |= p_easy_setopt(easy, CURLOPT_PROTOCOLS_, CURLPROTO_HTTP_HTTPS);
-    options |= p_easy_setopt(easy, CURLOPT_REDIR_PROTOCOLS_, CURLPROTO_HTTP_HTTPS);
+    options |= p_easy_setopt(easy, CURLOPT_REDIR_PROTOCOLS_, https_download(url) ? (1L << 1) : CURLPROTO_HTTP_HTTPS);
+    const std::string user_agent = std::string(MODULE_ID)+"/"+MODULE_VERSION;
+    options |= p_easy_setopt(easy, CURLOPT_USERAGENT_, user_agent.c_str());
     options |= p_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER_, 1L);
     options |= p_easy_setopt(easy, CURLOPT_SSL_VERIFYHOST_, 2L);
     options |= p_easy_setopt(easy, CURLOPT_NOSIGNAL_, 1L);
@@ -413,7 +415,7 @@ std::string prefix_exec(const std::string &url, PrefixContext &context) {
     const char *program = find_executable(paths, sizeof(paths) / sizeof(paths[0]));
     if (!program) return "没有支持片段预览的安全 curl 后端";
     std::vector<std::string> arguments = {program, "--disable", "--globoff", "--fail", "--silent", "--show-error",
-        "--location", "--max-redirs", "5", "--proto", "=http,https", "--proto-redir", "=http,https",
+        "--location", "--max-redirs", "5", "--proto", "=http,https", "--proto-redir", https_download(url) ? "=https" : "=http,https",
         "--connect-timeout", "5", "--max-time", "15", "--range", "0-" + std::to_string(context.limit - 1),
         // Small prefixes must reach the pipe without waiting for a stdio block
         // to fill (the server may deliberately stream the tail very slowly).
