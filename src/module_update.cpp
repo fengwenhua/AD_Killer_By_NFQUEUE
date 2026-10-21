@@ -192,17 +192,27 @@ static int release_response(bool preview, bool notes) {
     std::string body;
     bool limited = false;
     bool metadata = false;
+    bool api_request = false;
+    long http_status = 0;
     std::string error;
     if (!preview && !notes) {
-        error = download_prefix(std::string(REPO)+"/releases/latest/download/update.json",body,limited,32768);
+        error = download_prefix_status(std::string(REPO)+"/releases/latest/download/update.json",body,limited,32768,http_status);
         metadata = error.empty();
     }
-    if (notes || preview || !error.empty())
-        error = download_prefix(std::string(API)+(notes ? "?per_page=1" : preview ? "?per_page=3" : "/latest"),body,limited,32768);
+    if (notes || preview || !error.empty()) {
+        api_request = true;
+        error = download_prefix_status(std::string(API)+(notes ? "?per_page=1" : preview ? "?per_page=3" : "/latest"),body,limited,32768,http_status);
+    }
     if (error.empty() && limited) error = "Release 信息超过 32 KiB，请打开项目发布页查看";
     net_curl_shutdown();
     if (!error.empty()) {
-        printf("{\"status\":\"error\",\"message\":%s}\n",source_json_string(error).c_str());
+        if (api_request && (http_status == 403 || http_status == 429)) {
+            error = "GitHub API 访问受限（HTTP " + std::to_string(http_status) + "），当前网络可能已用完匿名请求配额。请稍后重试或切换网络。";
+            if (preview) error += "正式版检查可关闭“包含预览版”。";
+        }
+        else if (http_status >= 400)
+            error = "GitHub 请求失败（HTTP " + std::to_string(http_status) + "），请稍后重试。";
+        printf("{\"status\":\"error\",\"http_status\":%ld,\"message\":%s}\n",http_status,source_json_string(error).c_str());
         return 1;
     }
     // The WebUI validates the JSON shape and only accepts this repository's

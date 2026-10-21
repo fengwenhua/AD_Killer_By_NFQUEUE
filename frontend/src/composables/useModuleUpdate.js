@@ -3,11 +3,12 @@ import { selectRelease, latestReleaseNotes, compareVersions, versionParts } from
 import { lastJson, validJob as validJobId } from '../domain/rules.js';
 import { useLifetime } from './useLifetime.js';
 import { getStorage } from '../services/storage.js';
+import { afterPaint } from '../services/paint.js';
 
 const KEY = 'ad-killer-by-nfqueue-module-update';
 const AUTO_KEY = 'ad-killer-by-nfqueue-auto-update-check';
 const PREVIEW_KEY = 'ad-killer-by-nfqueue-update-preview';
-export function useModuleUpdate(api, info, feedback, storage = getStorage(), pollMs = 800) {
+export function useModuleUpdate(api, info, feedback, storage = getStorage(), pollMs = 800, paint = afterPaint) {
   const saved = key => { try { return storage?.getItem(key) === 'true'; } catch { return false; } };
   const save = (key, value) => { try { storage?.setItem(key, String(value)); } catch { /* session-only preference */ } };
   const life = useLifetime(), preview = ref(saved(PREVIEW_KEY)), autoCheck = ref(saved(AUTO_KEY));
@@ -21,6 +22,14 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
   const canInstall = computed(() => supported.value && !!ready.value && versionParts(ready.value) && compareVersions(ready.value,info.version.value)>0 && !reboot.value);
   const status = (text, type = '') => { message.value = text; kind.value = type; };
   const remember = task => { try { task ? storage?.setItem(KEY,JSON.stringify(task)) : storage?.removeItem(KEY); } catch { /* unavailable storage */ } };
+  const failure = (result, fallback) => {
+    const detail = lastJson(result.stdout)?.message;
+    return typeof detail === 'string' && detail.trim() ? detail.slice(0, 500) : fallback;
+  };
+  async function finishFeedback(started) {
+    // Fast failures (e.g. a cached 403) must still have a perceptible busy state.
+    if (life.active && typeof requestAnimationFrame === 'function') await life.wait(Math.max(0, 400 - (Date.now() - started)));
+  }
   function setPreview(value) {
     preview.value = value === true; save(PREVIEW_KEY, preview.value); channelRevision++;
     release.value = null; confirming.value = false;
@@ -32,16 +41,19 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
   }
   async function loadReleaseNotes(force = false) {
     if (notesLoading.value || (latestRelease.value && !force)) return;
+    const started = Date.now();
     notesLoading.value = true; notesError.value = '';
     try {
+      await paint();
+      if (!life.active) return;
       const result = await api.command('--module-release-notes');
       if (!life.active) return;
-      if (result.code) throw new Error('无法读取 GitHub 发布日志，请检查网络或稍后重试。');
+      if (result.code) throw new Error(failure(result, '无法读取 GitHub 发布日志，请检查网络或稍后重试。'));
       const value = latestReleaseNotes(JSON.parse(result.stdout));
       if (!value) throw new Error('GitHub 暂无可用的发布日志。');
       latestRelease.value = value;
     } catch (error) { if (life.active) { latestRelease.value = null; notesError.value = error instanceof SyntaxError ? 'GitHub 发布日志格式无效，请稍后重试。' : error.message; } }
-    finally { notesLoading.value = false; }
+    finally { await finishFeedback(started); notesLoading.value = false; }
   }
   async function state() {
     const result = await api.command('--module-update-status');
@@ -53,19 +65,22 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
   async function check() {
     if (checking.value || busy.value) return;
     const channel = preview.value, revision = channelRevision;
+    const started = Date.now();
     checking.value = true; release.value = null; confirming.value = false;
     status('正在检查 GitHub Release…');
     try {
+      await paint();
+      if (!life.active || revision !== channelRevision) return;
       const result = await api.command(`--module-update-check ${channel ? 'preview' : 'stable'}`);
       if (!life.active || revision !== channelRevision) return;
-      if (result.code) throw new Error('检查失败：网络不可达、GitHub 请求限流或尚无正式版，请稍后重试。');
+      if (result.code) throw new Error(failure(result, '检查失败：网络不可达、GitHub 请求限流或尚无正式版，请稍后重试。'));
       const selected = selectRelease(JSON.parse(result.stdout),channel);
       if (!selected) throw new Error('暂未找到包含有效安装包与校验和的版本。');
       release.value = selected;
       if (!supported.value) status('已获取发布信息；请在匹配的已安装模块界面中下载或安装。','warning');
       else status(available.value ? `发现 v${selected.version}${selected.preview ? ' 预览版' : ''}，可下载并校验。` : '当前已是最新版本或比发布版本更新。',available.value ? 'success' : '');
     } catch (error) { if (life.active && revision === channelRevision) status(error instanceof SyntaxError ? '更新信息格式无效，请稍后重试。' : error.message,'error'); }
-    finally { checking.value = false; }
+    finally { await finishFeedback(started); checking.value = false; }
   }
   async function observe(task) {
     let errors = 0;

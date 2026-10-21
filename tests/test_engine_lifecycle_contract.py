@@ -25,6 +25,7 @@ def main() -> None:
     assert handlers < daemon.index("find_queue_conflict()") < remove_rules, (
         "foreign queue preflight must reject before any firewall cleanup"
     )
+    assert daemon.index('"rules_empty"') < remove_rules < setup_queue
     assert 'write_runtime_state(g_fault.load() ? "error" : "stopped")' in daemon
     assert 'record_engine_error("queue_receive_failed"' in source
     assert daemon.count("if (stop_requested())") >= 4, (
@@ -44,6 +45,7 @@ def main() -> None:
         "static int cmd_daemon()", 1
     )[0]
     assert start.index("prepare_daemon_cgroups()") < start.index("pid_t pid = fork()")
+    assert start.index('"error_rules_empty"') < start.index('write_conf_value(FILE_STATE_CONF, "enabled"') < start.index("pid_t pid = fork()")
     assert start.index("prepare_daemon_cgroups()") < start.index("export ADK_NFQ_START_DISPATCHED")
     assert '"cgroup_isolation_failed"' in main_source
     assert "daemon_cgroup_frozen(old)" in start

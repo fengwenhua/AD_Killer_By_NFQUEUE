@@ -42,7 +42,7 @@
 
 ```bash
 NDK=/path/to/android-ndk ./build.sh
-python3 tests/verify_checksum.py dist/AD_Killer_By_NFQUEUE-v1.2.zip
+python3 tests/verify_checksum.py dist/AD_Killer_By_NFQUEUE-v1.2.1.zip
 ```
 
 构建产物位于 `dist/`。版本号仅在 [`module/module.prop`](module/module.prop) 中维护。

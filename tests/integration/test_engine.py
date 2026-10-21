@@ -183,6 +183,17 @@ def main() -> None:
         command(BINARY, "--autostart", "on")
         assert not (DATA / "daemon.pid").exists(), "boot setting started an engine"
         command(BINARY, "--autostart", "off")
+        before = (DATA / 'state.conf').read_bytes()
+        empty = subprocess.run([BINARY, '--start'], capture_output=True, text=True, timeout=10)
+        assert empty.returncode != 0 and json.loads(empty.stdout)['status'] == 'error_rules_empty'
+        assert '同步开源规则' in json.loads(empty.stdout)['message']
+        assert (DATA / 'state.conf').read_bytes() == before, 'empty startup changed boot/enabled policy'
+        assert not (DATA / 'daemon.pid').exists()
+        direct = subprocess.run([BINARY, '--daemon'], capture_output=True, text=True, timeout=10)
+        assert direct.returncode != 0
+        assert 'rules_empty' in (DATA / 'engine_error.conf').read_text()
+        for table in TABLES:
+            assert 'ADK_NFQ_' not in firewall(table, '-S'), 'empty startup attached traffic'
         (DATA / "custom_rules.txt").write_text("ads.example.com\n")
         firewall("iptables", "-A", "OUTPUT", *anonymous_drop)
         canary = True

@@ -24,10 +24,11 @@ export function useEngine(api, feedback) {
   const state = ref(null), total = ref(null), action = ref(''), setting = ref(''), scope = ref(0), error = ref('');
   const ready = computed(() => !!state.value);
   const running = computed(() => !!state.value?.running && !!state.value?.iptables_active);
+  const needsRules = computed(() => ready.value && !running.value && state.value.rules_black === 0 && state.value.rules_white === 0);
   const kind = computed(() => running.value ? 'ok' : state.value?.runtime === 'error' ? 'bad' : state.value?.runtime === 'starting' ? 'warn' : 'neutral');
   const badge = computed(() => !ready.value ? '未连接' : ({ ok: '正在守护', bad: '上次启动失败', warn: '启动中', neutral: '已暂停' })[kind.value]);
   const title = computed(() => !ready.value ? '等待连接管理器' : ({ ok: '拦截已开启', bad: '当前未运行，上次启动失败', warn: '正在准备守护', neutral: '当前未接管网络' })[kind.value]);
-  const description = computed(() => error.value || (!ready.value ? '请在 KernelSU / APatch 中打开模块 WebUI。' : running.value ? '规则已接管当前网络请求，广告域名将被拦截。' : kind.value === 'bad' ? state.value.last_error || '引擎已退出，请查看运行日志与诊断。' : kind.value === 'warn' ? '正在加载规则、建立队列与路由，请稍候。' : '本模块未接管网络；其他网络模块的状态请分别检查。'));
+  const description = computed(() => error.value || (!ready.value ? '请在 KernelSU / APatch 中打开模块 WebUI。' : running.value ? '规则已接管当前网络请求，广告域名将被拦截。' : kind.value === 'bad' ? state.value.last_error || '引擎已退出，请查看运行日志与诊断。' : kind.value === 'warn' ? '正在加载规则、建立队列与路由，请稍候。' : needsRules.value ? '尚无可用规则，请先点击“同步开源规则”，同步成功后再启动守护。' : '本模块未接管网络；其他网络模块的状态请分别检查。'));
   let refreshing;
   async function refresh() {
     if (refreshing) return refreshing;
@@ -38,7 +39,8 @@ export function useEngine(api, feedback) {
       state.value = next;
       scope.value = Number(next.scope) === 1 ? 1 : 0;
       const stats = keyValues(await api.readFile(PATHS.stats));
-      if (life.active) total.value = stats.black !== undefined ? (Number(stats.black) || 0) + (Number(stats.white) || 0) : null;
+      if (life.active) total.value = stats.black !== undefined ? (Number(stats.black) || 0) + (Number(stats.white) || 0)
+        : Number.isSafeInteger(next.rules_black) && Number.isSafeInteger(next.rules_white) ? next.rules_black + next.rules_white : null;
       return next;
     })();
     try { return await refreshing; } finally { refreshing = null; }
@@ -51,6 +53,11 @@ export function useEngine(api, feedback) {
     await life.wait(32); // let the WebView paint before a synchronous native call
     try {
       const result = await api.command(`--${verb}`), reply = lastJson(result.stdout);
+      if (verb === 'start' && reply?.status === 'error_rules_empty') {
+        const message = '请先点击“同步开源规则”，同步成功后再启动守护。';
+        error.value = message; feedback.log(message); feedback.toast(message);
+        return;
+      }
       let outcome;
       if (result.code || !reply || String(reply.status || '').startsWith('error') || reply.status === 'fork_failed') {
         const query = lastJson((await api.command('--status-fast')).stdout);

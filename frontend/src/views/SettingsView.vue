@@ -49,7 +49,7 @@ async function show(id) {
     </div>
     <div v-show="!active" id="settingsMenu" class="card settings-menu" role="group" aria-label="设置项目">
       <template v-for="entry in entries" :key="entry.id">
-        <SettingSwitch v-if="entry.id === 'updates'" id="autoCheckUpdate" class="settings-auto" label="自动检查更新" help="打开界面时检查，不自动下载或安装" :checked="updates.autoCheck" @change="updates.setAutoCheck" />
+        <SettingSwitch v-if="entry.id === 'updates'" id="autoCheckUpdate" class="settings-entry settings-auto" label="自动检查更新" help="打开界面时检查新版本" :checked="updates.autoCheck" @change="updates.setAutoCheck"><template #leading><span class="settings-entry-icon"><UiIcon name="sync" /></span></template></SettingSwitch>
         <button type="button" class="settings-entry" :data-settings-entry="entry.id" :aria-controls="'settings-' + entry.id" @click="show(entry.id)">
           <span class="settings-entry-icon"><UiIcon :name="entry.icon" /></span>
           <span class="settings-entry-label">{{ entry.title }}</span>
@@ -104,10 +104,11 @@ async function show(id) {
         <div class="section-heading"><h2 id="releaseTitle">更新日志</h2><span class="badge">GitHub Release</span></div>
         <p class="subtle">只显示最新一次发布，包含预览版。</p>
         <p v-if="updates.notesLoading" class="sync-note" role="status">正在读取 GitHub 发布日志…</p>
-        <div v-else-if="updates.notesError" class="release-error"><p class="sync-note" data-kind="error" role="status">{{ updates.notesError }}</p><ActionButton icon="sync" @click="updates.loadReleaseNotes(true)">重新加载</ActionButton></div>
+        <div v-else-if="updates.notesError" class="release-error"><p class="sync-note" data-kind="error" role="status">{{ updates.notesError }}</p></div>
         <ol v-if="updates.latestRelease && !updates.notesLoading" class="release-list">
           <li><div class="release-heading"><b>v{{ updates.latestRelease.version }}</b><span class="badge">{{ updates.latestRelease.preview ? '预览版' : '正式版' }}</span><time v-if="updates.latestRelease.date">{{ updates.latestRelease.date }}</time></div><h3>{{ updates.latestRelease.title }}</h3><pre class="release-body">{{ updates.latestRelease.body || '本次发布未填写更新说明。' }}</pre></li>
         </ol>
+        <div class="release-actions"><ActionButton id="reloadReleaseNotes" icon="sync" :busy="updates.notesLoading" @click="updates.loadReleaseNotes(true)">{{ updates.notesLoading ? '加载中…' : '重新加载' }}</ActionButton></div>
       </section></div>
     </div>
   </div>

@@ -83,9 +83,10 @@ def main():
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--running', action='store_true')
     parser.add_argument('--baseline-zip', type=Path)
+    parser.add_argument('--browser-path', help='Use an existing Chrome/Chromium executable')
     args = parser.parse_args()
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
+        browser = playwright.chromium.launch(executable_path=args.browser_path)
         try:
             if args.baseline_zip:
                 with tempfile.TemporaryDirectory(prefix='ad_killer_by_nfqueue_perf_') as directory:

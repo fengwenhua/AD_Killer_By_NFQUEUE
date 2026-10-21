@@ -14,6 +14,10 @@ std::string download_file(const std::string &url, const std::string &path);
 // backend, same HTTP(S)/TLS/redirect restrictions. Never writes formal rules.
 std::string download_prefix(const std::string &url, std::string &prefix,
                             bool &limited, size_t byte_limit = 4096);
+// Same bounded operation, additionally returning the final HTTP status (0 when
+// no response was received). Does not expose credentials or response headers.
+std::string download_prefix_status(const std::string &url, std::string &prefix,
+                                   bool &limited, size_t byte_limit, long &http_status);
 
 // libcurl 是否可用(dlopen 成功)
 bool net_curl_available();

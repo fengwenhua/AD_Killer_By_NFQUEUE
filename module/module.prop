@@ -1,7 +1,7 @@
 id=AD_Killer_By_NFQUEUE
 name=AD Killer (by NFQUEUE)
-version=v1.2
-versionCode=120
+version=v1.2.1
+versionCode=121
 author=fengwenhua
 description=基于 Linux 内核 NFQUEUE 的系统级去广告模块。纯 C++ 实现,规则源可自定义,无运行期外部依赖。
 updateJson=https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/releases/latest/download/update.json

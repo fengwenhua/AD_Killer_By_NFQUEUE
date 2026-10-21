@@ -22,10 +22,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
-            if self.path in ('/redirect', '/file', '/loop'):
+            if self.path in ('/redirect', '/file', '/loop', '/redirect-error'):
                 self.send_response(302)
-                self.send_header('Location', {'/redirect': '/text', '/file': 'file:///etc/passwd', '/loop': '/loop'}[self.path])
+                self.send_header('Location', {'/redirect': '/text', '/file': 'file:///etc/passwd', '/loop': '/loop', '/redirect-error': '/403'}[self.path])
                 self.end_headers()
+                return
+            if self.path in ('/403', '/429'):
+                self.send_response(int(self.path[1:]))
+                self.end_headers()
+                self.wfile.write(b'{"message":"API rate limit exceeded"}')
                 return
             if self.path in ('/ignored-range', '/slow-tail'):
                 self.send_response(200)  # deliberately ignore Range
@@ -85,6 +90,13 @@ def main():
         env['CURL_HOME'] = str(base)
         try:
             for probe in probes:
+                for path, expected in (('/text', 200), ('/403', 403), ('/429', 429), ('/404', 404), ('/redirect-error', 403)):
+                    result = subprocess.run([str(probe), '--http-status', f'http://127.0.0.1:{servers[0].server_port}{path}'], capture_output=True, text=True, timeout=10, env=env)
+                    data = json.loads(result.stdout)
+                    assert data['http_status'] == expected, (probe.name, path, data)
+                    assert (result.returncode == 0) == (expected == 200), (probe.name, path, data)
+                    if expected != 200:
+                        assert data['bytes'] == 0, 'HTTP error body was exposed as successful content'
                 for path in ('/text', '/gzip', '/redirect', '/empty', '/html', '/ignored-range', '/slow-tail', '/binary', '/short', '/404', '/file', '/loop'):
                     start = time.monotonic()
                     result = subprocess.run([str(probe), f'http://127.0.0.1:{servers[0].server_port}{path}'], capture_output=True, text=True, timeout=10, env=env)

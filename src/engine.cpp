@@ -572,12 +572,13 @@ int run_daemon() {
         fail_engine_start("rule_load_failed", initial_rules->load_error);
         return 1;
     }
+    if (!initial_rules->ok) {
+        fail_engine_start("rules_empty", "尚无可用规则，请先点击“同步开源规则”，同步成功后再启动守护。");
+        return 1;
+    }
     save_rule_stats(*initial_rules);
     publish_rules_snapshot(initial_rules);
-    if (!initial_rules->ok)
-        log_line("警告", "规则库为空,引擎将以全放行模式启动");
-    else
-        log_line("规则", "已加载:黑 %zu / 白 %zu (mode %d)",
+    log_line("规则", "已加载:黑 %zu / 白 %zu (mode %d)",
                  initial_rules->black.size(), initial_rules->white.size(),
                  initial_rules->mode);
     if (stop_requested()) {

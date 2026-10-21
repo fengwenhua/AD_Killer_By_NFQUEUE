@@ -2,9 +2,7 @@ import { computed, onScopeDispose, ref } from 'vue';
 import { HAGEZI_ID, lastJson, sourceUrlError } from '../domain/rules.js';
 import { shellQuote } from '../services/bridge.js';
 import { PREVIEW_DEFAULT, previewCharacters } from './useUiPreferences.js';
-
-const paint = () => typeof requestAnimationFrame === 'function'
-  ? new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))) : Promise.resolve();
+import { afterPaint as paint } from '../services/paint.js';
 
 export function useSourcePreview(api, characters = ref(PREVIEW_DEFAULT), afterPaint = paint, now = Date.now) {
   const active = ref(null), cache = new Map(), inflight = new Map(), queue = [];

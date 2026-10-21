@@ -73,7 +73,7 @@ test('unverified/mismatched builds cannot download, failed check clears stale re
 test('late responses are discarded after disposal and failed jobs never enable installation', async () => {
   const scope=effectScope(); let resolve;
   const model=scope.run(()=>useModuleUpdate({command:()=>new Promise(done=>{resolve=done;})},info(),{log(){}},null,1));
-  const pending=model.check(); scope.stop(); resolve(ok(fixture())); await pending;
+  const pending=model.check(); await Promise.resolve(); scope.stop(); resolve(ok(fixture())); await pending;
   assert.equal(model.release.value,null);
   const other=effectScope();
   const failed=other.run(()=>useModuleUpdate({command:async cmd=>cmd.startsWith('--module-update-check')?ok(fixture()):cmd.startsWith('--module-update-download')?ok({status:'started',job_id:'1-2'}):ok({status:'failed',exit_code:1}),readJob:async()=> 'SHA mismatch'},info(),{log(){}},null,1));
@@ -142,7 +142,36 @@ test('release notes load lazily, cache one result, retry failures and ignore dis
   let finish;
   const other=effectScope(), late=other.run(()=>useModuleUpdate({command:()=>new Promise(resolve=>{finish=resolve;})},info(),{log(){}},null));
   const pending=late.loadReleaseNotes(); assert.equal(late.notesLoading.value,true);
-  other.stop(); finish(ok([fixture()])); await pending; assert.equal(late.latestRelease.value,null);
+  await Promise.resolve(); other.stop(); finish(ok([fixture()])); await pending; assert.equal(late.latestRelease.value,null);
+});
+
+test('check and notes paint busy feedback before entering a synchronous native bridge', async () => {
+  for (const method of ['check','loadReleaseNotes']) {
+    const scope=effectScope(), events=[]; let paintDone;
+    const paint=()=>{events.push('paint');return new Promise(resolve=>{paintDone=resolve;});};
+    const model=scope.run(()=>useModuleUpdate({command:async()=>{
+      events.push('native');
+      assert.equal(method==='check'?model.checking.value:model.notesLoading.value,true);
+      return {code:1,stdout:JSON.stringify({status:'error',http_status:403,message:'GitHub API 访问受限（HTTP 403），请稍后重试。'}),stderr:''};
+    }},info(),{log(){}},null,1,paint));
+    try {
+      const pending=model[method]();
+      assert.deepEqual(events,['paint']);
+      paintDone(); await pending;
+      assert.deepEqual(events,['paint','native']);
+      assert.match(method==='check'?model.message.value:model.notesError.value,/HTTP 403/);
+      assert.equal(model.checking.value,false); assert.equal(model.notesLoading.value,false);
+    } finally {scope.stop();}
+  }
+});
+
+test('closing during paint cancels native work instead of starting a hidden network request', async () => {
+  for (const method of ['check','loadReleaseNotes']) {
+    let finish, calls=0;
+    const scope=effectScope(), model=scope.run(()=>useModuleUpdate({command:async()=>{calls++;return ok([]);}},info(),{log(){}},null,1,()=>new Promise(resolve=>{finish=resolve;})));
+    const pending=model[method](); scope.stop(); finish(); await pending;
+    assert.equal(calls,0); assert.equal(model.checking.value,false); assert.equal(model.notesLoading.value,false);
+  }
 });
 
 test('denied preference storage remains usable; overlapping checks and stale channels are guarded', async () => {

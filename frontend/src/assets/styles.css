@@ -96,7 +96,8 @@ h2 { font-size: 16px; margin-bottom: 16px; }
 .btn.primary { background: var(--main); border-color: var(--main); color: var(--on-main); box-shadow: 0 4px 12px #5748c71a; }
 .btn.ghost { background: transparent; font-size: 12px; min-height: 44px; padding: 8px 12px; }
 .btn.loading .icon { display: none; }
-.btn.loading::before { content: ''; width: 18px; height: 18px; flex: none; border: 2px solid var(--line); border-top-color: currentColor; border-radius: 50%; animation: spin .8s linear infinite; }
+.btn.loading::before { content: ''; width: 18px; height: 18px; flex: none; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
+.btn.loading:disabled { opacity: 1; cursor: progress; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .row { display: flex; gap: 10px; flex-wrap: wrap; }
 .row > .btn { flex: 1; }
@@ -240,7 +241,7 @@ nav button.active .icon { stroke-width: 2; }
 .settings-back .icon { width: 18px; height: 18px; }
 .settings-separator { color: var(--muted); opacity: .6; font-size: 12px; }
 .settings-menu { padding: 0; overflow: hidden; }
-.settings-auto { margin: 0; padding: 16px 20px; border-top: 0; border-bottom: 1px solid var(--line); gap: 12px; }
+.settings-auto { margin: 0; }
 .settings-entry { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 76px; padding: 16px 20px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--text); text-align: left; }
 .settings-entry:last-child { border-bottom: 0; }
 .settings-entry:focus-visible { outline-offset: -4px; }
@@ -249,6 +250,7 @@ nav button.active .icon { stroke-width: 2; }
 .settings-entry-label { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; }
 .settings-entry-value { max-width: 38%; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; text-align: right; }
 .settings-entry > .icon { width: 16px; height: 16px; color: var(--muted); }
+.settings-auto .switch-copy { flex: 1; min-width: 0; }
 .about-identity { display: flex; gap: 16px; align-items: center; margin-block: 24px 20px; }
 .about-mark { display: grid; place-items: center; flex: none; width: 60px; height: 60px; border-radius: 21px; background: var(--main); color: var(--on-main); }
 .about-mark .icon { width: 32px; height: 32px; }
@@ -290,7 +292,8 @@ nav button.active .icon { stroke-width: 2; }
 .release-list h3 { font-size: 14px; margin: 9px 0; }
 .release-heading time { font-size: 11px; color: var(--muted); }
 .release-body { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 12px; line-height: 1.9; color: var(--muted); margin: 16px 0 0; }
-.release-error .btn { margin-top: 16px; }
+.release-actions { display: flex; margin-top: 20px; }
+.release-actions .btn { width: 100%; }
 @media (max-width: 359px) {
   :root { --gutter: 14px; }
   .card { padding: 18px; }

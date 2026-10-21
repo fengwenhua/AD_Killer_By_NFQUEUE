@@ -287,6 +287,17 @@ static int cmd_start() {
                    source_json_string(conflict).c_str());
             return 1;
         }
+        RuleDB candidate;
+        load_all_rules(candidate);
+        if (!candidate.load_valid || !candidate.ok) {
+            const std::string message = candidate.load_valid
+                ? "尚无可用规则，请先点击“同步开源规则”，同步成功后再启动守护。"
+                : "规则读取失败，请先点击“同步开源规则”修复规则后再启动守护。";
+            printf("{\"status\":\"%s\",\"message\":%s}\n",
+                   candidate.load_valid ? "error_rules_empty" : "error_rule_load",
+                   source_json_string(message).c_str());
+            return 1;
+        }
         if (!write_file_atomic(FILE_ENGINE_ERROR, "")) {
             printf("{\"status\":\"error_storage\"}\n");
             return 1;

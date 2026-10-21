@@ -34,7 +34,10 @@ window.previewVersion = __VERSION_FIXTURE__;
 window.previewModuleReady = "";
 window.previewModuleReboot = false;
 window.previewModuleCheckDelay = 0;
+window.previewModuleCheckFails = false;
+window.previewNativeBusy = [];
 window.previewReleaseNotesFails = false;
+window.previewRulesEmpty = false;
 window.previewEngineState = "stopped";
 window.previewStartFails = true;
 window.previewStartDelay = 0;
@@ -57,12 +60,15 @@ window.ksu = {
     if(command.includes(" --version-status")) text = JSON.stringify(previewVersion);
     else if(command.includes(" --module-update-status")) text=JSON.stringify({version:previewModuleReady,rebootRequired:previewModuleReboot});
     else if(command.includes(" --module-release-notes")) {
+      previewNativeBusy.push({kind:'notes',busy:document.querySelector('#reloadReleaseNotes')?.getAttribute('aria-busy')==='true'});
       errno=previewReleaseNotesFails?1:0;
-      text=JSON.stringify([{tag_name:"v9.0",draft:false,prerelease:true,name:"最新发布说明",published_at:"2026-10-21T08:00:00Z",html_url:"https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/releases/tag/v9.0",body:"来自 GitHub Release 的更新日志\n\n- 新版改进\n- 安全显示 <img src=x onerror=alert(1)>"}]);
+      text=JSON.stringify(errno?{status:'error',http_status:403,message:'GitHub API 访问受限（HTTP 403），当前网络可能已用完匿名请求配额。'}:[{tag_name:"v9.0",draft:false,prerelease:true,name:"最新发布说明",published_at:"2026-10-21T08:00:00Z",html_url:"https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/releases/tag/v9.0",body:"来自 GitHub Release 的更新日志\n\n- 新版改进\n- 安全显示 <img src=x onerror=alert(1)>"}]);
     }
     else if(command.includes(" --module-update-check")) {
+      previewNativeBusy.push({kind:'check',busy:document.querySelector('#getUpdate')?.getAttribute('aria-busy')==='true'});
       const version="9.0", name="AD_Killer_By_NFQUEUE-v9.0.zip", base="https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/releases";
       text=JSON.stringify({tag_name:"v"+version,draft:false,prerelease:false,html_url:base+"/tag/v"+version,body:"测试发布说明 <img src=x onerror=alert(1)>",assets:[{name,size:500,browser_download_url:base+"/download/v"+version+"/"+name},{name:name+".sha256",browser_download_url:base+"/download/v"+version+"/"+name+".sha256"}]});
+      if(previewModuleCheckFails){errno=1;text=JSON.stringify({status:'error',http_status:403,message:'GitHub API 访问受限（HTTP 403），当前网络可能已用完匿名请求配额。'});}
     }
     else if(command.includes(" --module-update-download ")) {previewModuleReady="9.0";text=JSON.stringify({status:"started",job_id:"987-654"});}
     else if(command.includes(" --module-update-install ")) {previewModuleReboot=true;text=JSON.stringify({status:"started",job_id:"987-655"});}
@@ -71,9 +77,10 @@ window.ksu = {
       runtime:previewEngineState, last_error:previewEngineState==="error"?previewEngineError:"",
       enabled:previewEngineState!=="stopped", ...previewSettings});
     else if(command.endsWith(" --start")) {
-      previewEngineState=previewStartFails?"error":"running";
+      if(previewRulesEmpty){errno=1;text=JSON.stringify({status:'error_rules_empty',message:'请先点击“同步开源规则”，同步成功后再启动守护。'});}
+      else {previewEngineState=previewStartFails?"error":"running";
       errno=previewStartFails?1:0;
-      text=JSON.stringify({status:previewStartFails?"error_queue_conflict":"starting",message:previewStartFails?previewEngineError:""});
+      text=JSON.stringify({status:previewStartFails?"error_queue_conflict":"starting",message:previewStartFails?previewEngineError:""});}
     }
     else if(command.endsWith(" --stop")) {previewEngineState="stopped";text='{"status":"stopped"}';}
     else if(command.includes(' --autostart ')) {previewSettings.autostart=command.endsWith(' on');text=JSON.stringify({autostart:previewSettings.autostart});}
@@ -101,7 +108,7 @@ window.ksu = {
     else if(command.includes(" --update-status")) text = (command.includes("777-888")?previewTestFails:previewUpdateFails) ?
       '{"status":"failed","exit_code":1}' : '{"status":"success","exit_code":0}';
     else if(command.includes("base64 ")) {
-      if(command.includes("rule_stats.conf")) text=btoa("black=185695\nwhite=1062\n");
+      if(command.includes("rule_stats.conf")) text=previewRulesEmpty?'':btoa("black=185695\nwhite=1062\n");
       else if(command.includes("source_stats.conf")) text=btoa("updated_at=1792410474\njob_id=123-456\npublish_status=published\ngeneration=999-111\nsource_count=2\naccepted_sources="+(previewPartial?1:2)+"\nunique_total=209084\nunique_white=119\nduplicate_lines=73170\n\n[source_0]\nurl=https://anti-ad.net/easylist.txt\nstatus="+(previewPartial?"download_error\nreason=network_timeout":"accepted")+"\nchecked_at=1792410460\naccepted_adguard=96641\nrejected_unsupported=97\n\n[source_1]\nurl=https://example.org/b\nstatus=accepted\naccepted_adguard=185613\nrejected_unsupported=798\n");
       else if(command.includes("custom_rules.txt")) text=btoa("ads.example.com\n@@safe.example.org\n");
       else if(command.includes("update-123-456.log")) text=btoa(unescape(encodeURIComponent(previewUpdateFails ?
@@ -609,7 +616,7 @@ def settings_and_status_regression(browser, errors, screenshots):
             expect(page.locator('#settingsMenu')).to_be_visible()
             page.wait_for_function("!document.querySelector('main').classList.contains('sliding')")
             assert halo.evaluate('e=>getComputedStyle(e).animationPlayState') == 'paused'
-            assert page.locator('.settings-entry:visible').count() == 4
+            assert page.locator('button.settings-entry:visible').count() == 4
             assert not page.locator('#previewCharacters').is_visible()
             assert not page.locator('#aboutModule').is_visible()
             assert not page.locator('#releaseNotes').is_visible()
@@ -712,6 +719,10 @@ def module_update_regression(browser, errors, screenshots=None):
             page.screenshot(path=str(screenshots / f'about-v12-{width}.png'))
         page.locator('#settingsBack').click()
         assert page.locator('#autoCheckUpdate').is_checked() is False
+        auto=page.locator('.settings-auto')
+        assert auto.locator('.settings-entry-icon').count() == 1
+        labels=page.locator('#settingsMenu .settings-entry-label, #settingsMenu .switch-copy label').all()
+        assert max(label.bounding_box()['x'] for label in labels)-min(label.bounding_box()['x'] for label in labels) <= 1
         assert page.locator('#settingsMenu').evaluate("e=>Array.from(e.children).map(c=>c.classList.contains('settings-auto')?'auto':c.dataset.settingsEntry).join(',')") == 'preview,auto,updates,releases,about'
         page.locator('[data-settings-entry="updates"]').click()
         assert not page.evaluate("previewCommands.some(c=>c.includes('--module-update-check'))")
@@ -747,11 +758,15 @@ def module_update_regression(browser, errors, screenshots=None):
         expect(page.locator('.release-error')).to_be_visible()
         assert page.locator('.release-list > li').count() == 0
         page.evaluate('previewReleaseNotesFails=false')
-        page.locator('.release-error button').click()
+        page.locator('#reloadReleaseNotes').click()
+        expect(page.locator('#reloadReleaseNotes')).to_have_attribute('aria-busy','true')
+        expect(page.locator('#reloadReleaseNotes')).to_be_disabled()
+        expect(page.locator('#reloadReleaseNotes')).to_have_text('加载中…')
         expect(page.locator('.release-heading > b')).to_have_text('v9.0')
         expect(page.locator('.release-body')).to_contain_text('来自 GitHub Release')
         assert page.locator('.release-list > li').count() == 1
         assert page.locator('.release-body img').count() == 0
+        assert page.evaluate('previewNativeBusy.every(item=>item.busy)'), 'native bridge was called before busy DOM rendered'
         if screenshots:
             page.screenshot(path=str(screenshots / f'release-notes-v12-{width}.png'))
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
@@ -776,6 +791,51 @@ def module_update_regression(browser, errors, screenshots=None):
     expect(page.locator('#appList')).to_have_attribute('aria-busy','false')
     assert not page.evaluate("previewCommands.some(c=>c.includes('--module-update-check'))")
     page.close()
+
+
+def update_failure_feedback_regression(browser, errors, screenshots=None):
+    # Real failure mode: an immediate cached/API 403, not an artificial 700ms
+    # request. Native entry must already see busy DOM, with stable retry focus.
+    for theme in ('light', 'dark'):
+        page = browser.new_page(viewport={'width': 320, 'height': 852}, color_scheme=theme, reduced_motion='reduce')
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.add_init_script(mock_script() + '\npreviewModuleCheckFails=true;previewReleaseNotesFails=true;previewRulesEmpty=true;')
+        page.goto((ROOT / 'module/webroot/index.html').as_uri())
+        expect(page.locator('#moduleVersion')).to_contain_text('v' + VERSION_FIXTURE['version'])
+        page.locator('#startBtn').click()
+        expect(page.locator('#stateDesc')).to_contain_text('请先点击“同步开源规则”')
+        assert page.evaluate('previewEngineState') == 'stopped'
+        assert not page.evaluate("previewCommands.some(c=>c.includes('--status-fast'))"), 'empty-rule failure must not poll for a nonexistent daemon'
+        page.locator('nav [data-page="settings"]').click()
+        if screenshots:
+            page.screenshot(path=str(screenshots / f'settings-auto-{theme}-320.png'))
+        page.locator('[data-settings-entry="updates"]').click()
+        page.locator('#getUpdate').click()
+        expect(page.locator('#getUpdate')).to_have_attribute('aria-busy', 'true')
+        expect(page.locator('#getUpdate')).to_be_disabled()
+        assert page.locator('#getUpdate').evaluate("e=>getComputedStyle(e,'::before').content") != 'none'
+        if screenshots:
+            page.screenshot(path=str(screenshots / f'update-check-loading-{theme}-320.png'))
+        expect(page.locator('#getUpdate')).to_have_attribute('aria-busy', 'false')
+        expect(page.locator('#moduleUpdateStatus')).to_contain_text('HTTP 403')
+        expect(page.locator('#moduleUpdateStatus')).to_contain_text('匿名请求配额')
+        assert page.locator('#downloadModuleUpdate').count() == 0
+        page.locator('#settingsBack').click()
+        page.locator('[data-settings-entry="releases"]').click()
+        expect(page.locator('.release-error')).to_be_visible()
+        retry = page.locator('#reloadReleaseNotes')
+        retry.click()
+        expect(retry).to_have_attribute('aria-busy', 'true')
+        expect(retry).to_have_text('加载中…')
+        expect(retry).to_be_disabled()
+        expect(retry).to_be_focused()
+        if screenshots:
+            page.screenshot(path=str(screenshots / f'release-retry-loading-{theme}-320.png'))
+        expect(retry).to_have_attribute('aria-busy', 'false')
+        expect(page.locator('.release-error')).to_contain_text('HTTP 403')
+        assert page.evaluate('previewNativeBusy.every(item=>item.busy)')
+        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
+        page.close()
 
 
 def lazy_sources_and_denied_settings_regression(browser, errors):
@@ -1194,6 +1254,7 @@ def main():
                         assert source_order() == saved_order and page.locator("#saveSources").is_disabled()
                     page.close()
             module_update_regression(browser, errors, args.screenshots)
+            update_failure_feedback_regression(browser, errors, args.screenshots)
             adaptive_regression(browser, args.screenshots, errors)
             assert not errors, errors
             print("Vue WebUI 52 viewport/theme combinations, offline loading, fold/rotate draft preservation and functional regressions passed")

@@ -357,7 +357,7 @@ std::string download_via_exec(const std::string &url,
 }  // namespace
 
 namespace {
-struct PrefixContext { std::string bytes; size_t limit = 4096; bool limited = false; };
+struct PrefixContext { std::string bytes; size_t limit = 4096; bool limited = false; long http_status = 0; };
 
 size_t write_prefix(char *data, size_t size, size_t count, void *user) {
     auto &context = *static_cast<PrefixContext *>(user);
@@ -399,6 +399,7 @@ std::string prefix_libcurl(const std::string &url, PrefixContext &context) {
     const bool info = p_easy_getinfo(easy, CURLINFO_RESPONSE_CODE_, &status) == 0 &&
                       p_easy_getinfo(easy, CURLINFO_EFFECTIVE_URL_, &effective) == 0;
     const bool valid = info && effective && validate_download_url(effective) && status >= 200 && status < 300;
+    context.http_status = status;
     p_easy_cleanup(easy);
     if (!options && valid && (performed == 0 || (performed == 23 && context.limited))) return "";
     return "预览 HTTP/TLS 请求失败（状态 " + std::to_string(status) + "）";
@@ -462,6 +463,7 @@ std::string prefix_exec(const std::string &url, PrefixContext &context) {
                 std::istringstream status_line(headers);
                 std::string protocol; int status = 0;
                 status_line >> protocol >> status;
+                context.http_status = status;
                 headers.erase(0, split + 4);
                 if (protocol.compare(0, 5, "HTTP/") != 0) { error = "预览响应头非法"; break; }
                 if (status >= 100 && status < 200) continue;
@@ -484,6 +486,12 @@ std::string prefix_exec(const std::string &url, PrefixContext &context) {
 } // namespace
 
 std::string download_prefix(const std::string &url, std::string &prefix, bool &limited, size_t byte_limit) {
+    long status = 0;
+    return download_prefix_status(url,prefix,limited,byte_limit,status);
+}
+
+std::string download_prefix_status(const std::string &url, std::string &prefix, bool &limited, size_t byte_limit, long &http_status) {
+    http_status = 0;
     prefix.clear(); limited = false;
     if (byte_limit == 0 || byte_limit > 32768) return "预览字节限制非法";
     std::string error;
@@ -495,6 +503,7 @@ std::string download_prefix(const std::string &url, std::string &prefix, bool &l
         // Do not double a slow request's latency. Exec fallback is for systems
         // without libcurl, not a retry of TLS/HTTP failures.
     } else error = prefix_exec(url, context);
+    http_status = context.http_status;
     if (error.empty()) { prefix = std::move(context.bytes); limited = context.limited; }
     return error;
 }

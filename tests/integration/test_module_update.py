@@ -29,6 +29,11 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path.startswith('/api') and self.server.api_status != 200:
+            self.send_response(self.server.api_status)
+            self.end_headers()
+            self.wfile.write(b'{"message":"API rate limit exceeded"}')
+            return
         if self.path.endswith('update.json'):
             content = json.dumps({'version': 'v1.1'}).encode()
         elif self.path == '/api?per_page=1':
@@ -49,6 +54,7 @@ def main():
     assert not MANAGER.exists() and not Path('/data/adb/apd').exists() and not Path('/data/adb/magisk').exists(), 'refusing existing root manager'
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     server.corrupt = False
+    server.api_status = 200
     threading.Thread(target=server.serve_forever, daemon=True).start()
     base = f'http://127.0.0.1:{server.server_port}'
     with tempfile.TemporaryDirectory(prefix='adk_module_update_cli_') as temporary:
@@ -79,9 +85,19 @@ def main():
             DATA.parent.mkdir(parents=True, exist_ok=True)
             command('--install')
             before = (DATA/'state.conf').read_bytes()
+            empty = json.loads(command('--start', success=False))
+            assert empty['status'] == 'error_rules_empty' and '同步开源规则' in empty['message']
+            assert (DATA/'state.conf').read_bytes() == before and not (DATA/'daemon.pid').exists()
             assert json.loads(command('--module-update-check', 'stable'))['update']['version'] == 'v1.1'
             assert json.loads(command('--module-release-notes')) == [{'tag_name': 'v1.1', 'body': 'Notes from GitHub Release'}]
             command('--module-release-notes', 'unexpected', success=False)
+            for status in (403, 429):
+                server.api_status = status
+                for args in (('--module-release-notes',), ('--module-update-check', 'preview')):
+                    failure = json.loads(command(*args, success=False))
+                    assert failure['http_status'] == status and '匿名请求配额' in failure['message']
+                assert 'update' in json.loads(command('--module-update-check', 'stable')), 'API quota should not break static stable metadata'
+            server.api_status = 200
             command('--module-update-download', '1.0', success=False)
             command('--module-update-download', '../bad', success=False)
             job('--module-update-install', success=False)

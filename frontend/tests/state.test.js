@@ -87,6 +87,23 @@ test('autostart persists only boot policy, never starts/stops; all settings use 
   } finally { scope.stop(); }
 });
 
+test('empty-rule startup explains synchronization first and never enters daemon polling', async () => {
+  const scope=effectScope(), commands=[], notices=[];
+  const state={running:false,iptables_active:false,runtime:'stopped',enabled:false,manual_stop:true,rules_black:0,rules_white:0};
+  const api={readFile:async()=>'',command:async cmd=>{
+    commands.push(cmd);
+    return cmd==='--start'?{code:1,stdout:JSON.stringify({status:'error_rules_empty',message:'no rules'}),stderr:''}:ok(state);
+  }};
+  const model=scope.run(()=>useEngine(api,{log(){},toast:msg=>notices.push(msg),consoleOpen:ref(false)}));
+  try {
+    await model.refresh(); assert.equal(model.total.value,0); await model.control('start');
+    assert.match(model.description.value,/先点击“同步开源规则”/);
+    assert.match(notices[0],/同步成功后再启动/);
+    assert.equal(model.running.value,false); assert.equal(model.action.value,'');
+    assert.deepEqual(commands,['--status','--start','--status']);
+  } finally {scope.stop();}
+});
+
 test('scope-specific app lists and custom rules retain commands and content semantics', async () => {
   const scope = effectScope(), current = ref(0), writes = [], commands = [];
   const api = {
