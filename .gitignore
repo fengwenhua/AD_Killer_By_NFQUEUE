@@ -1,0 +1,15 @@
+# 构建产物与运行数据(可随时删除,重新生成)
+dist/
+data/cache/
+data/out_rules/
+data/author_rules/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+frontend/node_modules/
+frontend/coverage/
+module/webroot/

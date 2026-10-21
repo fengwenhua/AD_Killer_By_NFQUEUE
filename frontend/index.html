@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="color-scheme" content="light dark">
+    <script>
+      // Set the palette before the first paint; storage may be denied by file://.
+      (() => {
+        let saved;
+        try { saved = localStorage.getItem('ad-killer-by-nfqueue-theme'); } catch {}
+        document.documentElement.dataset.theme = ['light', 'dark'].includes(saved) ? saved :
+          matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      })();
+    </script>
+    <title>AD_Killer_By_NFQUEUE · WebUI</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

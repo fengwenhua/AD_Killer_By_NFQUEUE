@@ -1,0 +1,1305 @@
+// ============================================================================
+// AD_Killer_By_NFQUEUE - CLI 入口与守护进程生命周期
+//
+// 13 个子命令:
+//   --install --start --stop --daemon --reload --update --status
+//   --version-status --mode N --scope N --dev on|off --quic on|off --autostart on|off --apps-apply
+//
+// 行为:
+//   - 各命令的 JSON 输出({"status": ...} 形态,WebUI 依赖)
+//   - --start 无 root 时经 su 重新拉起
+//   - --stop 的 stopping/stopped 状态输出与 runtime.state 写入
+//   - --dev 写 dev_mode_enabled 标志文件
+//   - daemon/update/DNS 独立有界日志
+// ============================================================================
+#include "common.h"
+#include "logging.h"
+#include "rules.h"
+#include "engine.h"
+#include "iptables.h"
+#include "net.h"
+#include "cli_utils.h"
+#include "exclusive_file_lock.h"
+#include "rule_bundle.h"
+#include "source_validator.h"
+#include "update_job.h"
+#include "rule_stream.h"
+#include "metrics.h"
+#include "source_config.h"
+#include "snapshot_merge.h"
+#include "queue_ownership.h"
+#include "startup_status.h"
+#include "cgroup_isolation.h"
+#include "hagezi_source.h"
+#include "source_preview.h"
+
+#include <cstdio>
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
+#include <unordered_map>
+#include <unordered_set>
+#include <sstream>
+#include <thread>
+#include <chrono>
+#include <fcntl.h>
+#include <signal.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+
+// ---------------------------------------------------------------------------
+// 目录初始化(幂等)
+static bool ensure_dir(const char *path, mode_t mode) {
+    if (mkdir(path, mode) != 0 && errno != EEXIST) return false;
+    struct stat st {};
+    return lstat(path, &st) == 0 && S_ISDIR(st.st_mode) &&
+           chmod(path, mode) == 0;
+}
+
+static bool ensure_dirs() {
+    return ensure_dir(DATA_DIR, 0755) &&
+           ensure_dir(DIR_LOG, 0755) &&
+           ensure_dir(DIR_UPDATE_JOBS, 0700);
+}
+
+static bool file_exists(const char *p) { return access(p, F_OK) == 0; }
+
+static bool valid_package_name(const std::string &name) {
+    if (name.empty() || name.size() > 255 || name.front() == '.' ||
+        name.back() == '.' || name.find('.') == std::string::npos)
+        return false;
+    for (unsigned char c : name) {
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '.'))
+            return false;
+    }
+    return name.find("..") == std::string::npos;
+}
+
+static std::string current_metrics_json() {
+    std::string content;
+    return metrics_json(read_file(FILE_METRICS, content)
+                            ? parse_metrics(content) : MetricsSnapshot{});
+}
+
+static std::string engine_diagnostics_json(bool frozen) {
+    return "\"frozen\":" + std::string(frozen ? "true" : "false") +
+           ",\"runtime\":" + source_json_string(frozen ? "error" : read_runtime_state()) +
+           ",\"last_error\":" + source_json_string(frozen
+               ? "守护进程被后台冻结，网络队列无法处理。请暂停并升级模块后重新启动。"
+               : read_conf_value(FILE_ENGINE_ERROR, "message")) +
+           ",\"last_error_code\":" + source_json_string(frozen ? "daemon_frozen"
+               : read_conf_value(FILE_ENGINE_ERROR, "code"));
+}
+
+static bool prepare_daemon_cgroups() {
+    configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
+    auto isolated = isolate_daemon_cgroups();
+    if (!isolated.ok) {
+        fail_engine_start("cgroup_isolation_failed",
+            "无法脱离调用方的后台冻结组，拒绝接管网络：" + isolated.error);
+        return false;
+    }
+    if (isolated.moved)
+        log_line("系统", "已将模块自身移出 %u 个继承的冻结层级；未修改管理器或系统冻结策略",
+                 isolated.moved);
+    return true;
+}
+
+// 是否具有 root 权限(iptables 需要真 root,uid!=0 时走 su 提升)
+static bool am_root() { return geteuid() == 0; }
+
+// 在候选路径中找一个可用的 su 二进制
+static std::string find_su() {
+    static const char *paths[] = {"/system/bin/su", "/system/xbin/su"};
+    for (const char *p : paths) {
+        if (access(p, X_OK) == 0) return p;
+    }
+    return "";
+}
+
+// ---------------------------------------------------------------------------
+// --install:安装初始化(目录与默认配置)
+static int cmd_install() {
+    // Serialize upgrades, but never chmod or otherwise reconfigure /data/adb.
+    ExclusiveFileLock install_lock("/data/adb/.AD_Killer_By_NFQUEUE.install.lock");
+    if (!install_lock.ok()) {
+        fprintf(stderr, "无法获取安装锁，请稍后重试\n");
+        return 1;
+    }
+    if (!ensure_dirs()) {
+        fprintf(stderr, "数据目录初始化失败: %s\n", DATA_DIR);
+        return 1;
+    }
+    bool ok = true;
+    // 默认 state.conf
+    if (!file_exists(FILE_STATE_CONF)) {
+        ok = write_file_atomic(FILE_STATE_CONF,
+                          "version=2\n"
+                          "mode=2\n"
+                          "scope=0\n"
+                          "dev_mode=false\n"
+                          "block_quic=false\n"
+                          "autostart=false\n"
+                          "enabled=false\n"
+                          "manual_stop=true\n"
+                          "updated_at=0\n") && ok;
+    }
+    if (!file_exists(FILE_ADBLOCK_MODE)) {
+        ok = write_file_atomic(FILE_ADBLOCK_MODE, "mode=2\n") && ok;
+    }
+    if (!file_exists(FILE_CUSTOM_RULES)) {
+        ok = write_file_atomic(FILE_CUSTOM_RULES, "") && ok;
+    }
+    if (!file_exists(FILE_APP_WHITELIST)) {
+        ok = write_file_atomic(FILE_APP_WHITELIST, "") && ok;
+    }
+    if (!file_exists(FILE_APP_INTERCEPT)) {
+        ok = write_file_atomic(FILE_APP_INTERCEPT, "") && ok;
+    }
+    // 默认规则源(本地可编辑)
+    // Serialize the read/compare/write against both sync and source editing.
+    bool sources_ok = [&]() {
+        ExclusiveFileLock lock(UPDATE_LOCK_FILE);
+        if (!lock.ok()) {
+            fprintf(stderr, "来源更新正在运行，安装已中止，请等待任务结束\n");
+            return false;
+        }
+        if (!file_exists(FILE_UPDATE_SOURCES))
+            return write_file_atomic(FILE_UPDATE_SOURCES, default_rule_sources_text());
+        return true;
+    }();
+    ok = sources_ok && ok;
+    if (!ok) {
+        fprintf(stderr, "默认配置写入失败: %s\n", DATA_DIR);
+        return 1;
+    }
+    log_line("安装", "模块安装完成,数据目录就绪: %s", DATA_DIR);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// 守护进程检测(pgrep + pid 文件)
+// [M] 方括号技巧避免 pgrep 匹配到 pgrep 自身的命令行
+// 返回 pid(>0)或 -1
+static int find_daemon_pid() {
+    // 先查 pid 文件(比 pgrep 快;同时校验 cmdline)
+    int pid = read_daemon_pid();
+    if (pid > 0) return pid;
+    // 兜底:pgrep(兼容 pid 文件丢失/旧版本残留)
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd),
+             "pgrep -f '[A]D_Killer_By_NFQUEUEd? --daemon' 2>/dev/null");
+    FILE *f = popen(cmd, "r");
+    if (!f) return -1;
+    char line[64] = {0};
+    while (fgets(line, sizeof(line), f)) {
+        pid = atoi(line);
+        if (is_daemon_pid(pid)) {
+            pclose(f);
+            return pid;
+        }
+    }
+    pclose(f);
+    return -1;
+}
+
+// ---------------------------------------------------------------------------
+// --start:拉起守护进程
+//
+// 进程模型:
+//   1. mkdir -p 日志目录;runtime.state = "starting"
+//   2. 检测守护进程(已在运行 → state="running" + {"status": "running"})
+//   3. 未运行:
+//      - 无 root → su -c 重入 --start({"status": "starting_su"})
+//      - 有 root → shell 防重入拉起:
+//          export ADK_NFQ_START_DISPATCHED=1; mkdir -p <dir>;
+//          umask 022; cd /; nohup <自身> --start >/dev/null 2>&1 < /dev/null &
+//        环境变量 DISPATCHED 标记"已派发",重入的 --start 直接 daemonize
+//   4. daemonize(双 fork + setsid)后 exec 自身为 --daemon
+static int cmd_start() {
+    if (!ensure_dirs()) {
+        printf("{\"status\": \"error_storage\"}\n");
+        return 1;
+    }
+
+    // 自身真实路径(readlink /proc/self/exe):无论从 modules 还是 modules_update
+    // 目录运行都正确,避免硬编码 MODULE_DIR_BASE 在安装期路径不对
+    char self[512];
+    ssize_t nl = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if (nl <= 0) {
+        snprintf(self, sizeof(self), "%s/AD_Killer_By_NFQUEUE", MODULE_DIR_BASE);
+    } else {
+        self[nl] = 0;
+    }
+
+    // 已派发标记:重入路径直接走守护化,避免无限循环
+    const char *dispatched = getenv("ADK_NFQ_START_DISPATCHED");
+
+    int old = find_daemon_pid();
+    if (!dispatched && old > 0) {
+        if (daemon_cgroup_frozen(old)) {
+            printf("{\"status\":\"error_daemon_frozen\",\"message\":\"守护已被冻结，请先暂停再重新启动\"}\n");
+            return 1;
+        }
+        if (read_runtime_state() == "running") {
+            EngineConfig cfg = load_engine_config();
+            IptablesConfig routes;
+            routes.block_quic = cfg.block_quic;
+            routes.scope = cfg.scope;
+            routes.bypass_uids = cfg.bypass_uids;
+            routes.intercept_uids = cfg.intercept_uids;
+            if (!iptables_chain_active(routes)) {
+                configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
+                log_line("系统", "守护仍在但路由校验失败；本次手动启动将优雅退出本模块旧实例，再使用当前二进制重建队列和双栈路由");
+                // Do not attach traffic to an unverified/old listener. A module
+                // upgrade can leave a deleted executable alive. Let that exact
+                // daemon release its queues and lifecycle lock before restart.
+                if (!is_daemon_pid(old) || kill(old, SIGTERM) != 0) {
+                    printf("{\"status\":\"error_recovery_signal\",\"message\":\"无法通知本模块旧守护退出，请刷新后重试\"}\n");
+                    return 1;
+                }
+                for (int i = 0; i < STOP_WAIT_MS / 100 && is_daemon_pid(old); i++)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                if (is_daemon_pid(old) || find_daemon_pid() > 0) {
+                    record_engine_error("recovery_stop_timeout", "旧守护尚未安全退出，未启动第二个实例；请先暂停后重试");
+                    printf("{\"status\":\"error_recovery_stop_timeout\",\"message\":\"旧守护尚未安全退出，未启动第二个实例；请先暂停后重试\"}\n");
+                    return 1;
+                }
+                old = -1;
+            }
+        }
+    }
+    if (!dispatched && old <= 0) {
+        std::string conflict = find_queue_conflict();
+        if (!conflict.empty()) {
+            configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
+            fail_engine_start("queue_conflict", conflict);
+            printf("{\"status\":\"error_queue_conflict\",\"message\":%s}\n",
+                   source_json_string(conflict).c_str());
+            return 1;
+        }
+        if (!write_file_atomic(FILE_ENGINE_ERROR, "")) {
+            printf("{\"status\":\"error_storage\"}\n");
+            return 1;
+        }
+    }
+
+    if (!dispatched &&
+        (!write_conf_value(FILE_STATE_CONF, "enabled", "true") ||
+         !write_conf_value(FILE_STATE_CONF, "manual_stop", "false"))) {
+        printf("{\"status\": \"error_storage\"}\n");
+        return 1;
+    }
+
+    // 检测守护进程是否已在运行
+    if (old > 0 && !dispatched) {
+        log_line("系统", "守护进程已在运行 (pid %d)", old);
+        // A live PID can still be initializing its queues/routes.
+        printf("{\"status\":\"%s\"}\n", read_runtime_state() == "running" ? "running" : "starting");
+        return 0;
+    }
+    // Escape before spawning background children: double fork/setsid does not
+    // detach an inherited Android app cgroup. Do not migrate the manager itself.
+    if (am_root() && !prepare_daemon_cgroups()) return 1;
+    if (!write_runtime_state("starting")) {
+        printf("{\"status\":\"error_storage\"}\n");
+        return 1;
+    }
+
+    if (!dispatched) {
+        // ---- 首次调用:派发后台重入 ----
+        // 无 root:经 su 重新拉起
+        if (!am_root()) {
+            std::string su = find_su();
+            if (!su.empty()) {
+                char cmd[1024];
+                snprintf(cmd, sizeof(cmd),
+                         "%s -c '%s --start' >/dev/null 2>&1 &",
+                         su.c_str(), self);
+                if (system(cmd) != 0) {
+                    printf("{\"status\": \"error_start\"}\n");
+                    return 1;
+                }
+                printf("{\"status\": \"starting_su\"}\n");
+                return 0;
+            }
+            printf("{\"status\": \"error_unauthorized\"}\n");
+            return 1;
+        }
+        // 有 root:shell 防重入拉起(nohup + 环境变量)
+        char cmd[1024];
+        snprintf(cmd, sizeof(cmd),
+                 "export ADK_NFQ_START_DISPATCHED=1; mkdir -p '%s'; "
+                 "umask 022; cd /; nohup '%s' --start >/dev/null 2>&1 < /dev/null &",
+                 DATA_DIR, self);
+        if (system(cmd) != 0) {
+            printf("{\"status\": \"error_start\"}\n");
+            return 1;
+        }
+        printf("{\"status\": \"starting\"}\n");
+        return 0;
+    }
+
+    // ---- 重入路径(DISPATCHED 已设):daemonize 后进入引擎 ----
+    pid_t pid = fork();
+    if (pid < 0) {
+        fail_engine_start("fork_failed", "守护进程 fork 失败");
+        printf("{\"status\": \"fork_failed\"}\n");
+        return 1;
+    }
+    if (pid > 0) {
+        // 中间父进程退出;守护由孙进程接手
+        return 0;
+    }
+    // 子进程:setsid + 二次 fork 彻底脱离会话(孙进程被 init 收养)
+    if (setsid() < 0) { fail_engine_start("setsid_failed", "守护进程 setsid 失败"); _exit(127); }
+    signal(SIGHUP, SIG_IGN);
+    pid_t pid2 = fork();
+    if (pid2 < 0) { fail_engine_start("fork_failed", "守护进程二次 fork 失败"); _exit(127); }
+    if (pid2 > 0) _exit(0);
+
+    // daemon 自己通过 bounded logger 写 engine.log；stdio 只负责彻底脱离调用会话。
+    int devnull = open("/dev/null", O_RDWR | O_CLOEXEC);
+    if (devnull >= 0) {
+        dup2(devnull, STDIN_FILENO);
+        dup2(devnull, STDOUT_FILENO);
+        dup2(devnull, STDERR_FILENO);
+        if (devnull > STDERR_FILENO) close(devnull);
+    }
+    umask(022);
+    chdir("/");
+    // exec 自身为 --daemon:cmdline 含 "--daemon",便于 pgrep / pid 校验
+    // 完整 argv[0] 用于身份校验，短 comm 名由 daemon 入口设置。
+    execl(self, DAEMON_ARGV0, "--daemon", (char *)nullptr);
+    fail_engine_start("exec_failed", "无法执行守护进程：" + std::string(strerror(errno)));
+    _exit(127);   // exec 失败
+}
+
+// --daemon 入口(由 --start exec 而来):写 pid 后进入引擎
+static int cmd_daemon() {
+    if (!ensure_dirs()) return 1;
+    ExclusiveFileLock daemon_lock(DAEMON_LOCK_FILE);
+    if (!daemon_lock.ok()) {
+        return 0;
+    }
+    configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
+    if (!write_file_atomic(FILE_ENGINE_ERROR, "")) return 1;
+    // Direct --daemon (including recovery after SIGKILL) must not expose an old
+    // "running" state while its queues/routes are still being rebuilt.
+    if (!write_runtime_state("starting")) {
+        log_line("致命", "无法写入启动状态,拒绝接管网络");
+        return 1;
+    }
+    // Also enforce this for direct --daemon and boot/recovery entry points,
+    // before a PID is published, workers are created or queues are opened.
+    if (!prepare_daemon_cgroups()) return 1;
+    int self_pid = (int)getpid();
+    if (!write_daemon_pid(self_pid)) {
+        fail_engine_start("pid_write_failed", "无法写入守护进程 pid 文件");
+        return 1;
+    }
+    int rc = run_daemon();
+    clear_daemon_pid_if(self_pid);
+    return rc;
+}
+
+// ---------------------------------------------------------------------------
+// --stop:安全停止
+// 流程:runtime.state="stopping" → 找守护进程(pgrep)
+// → SIGTERM 优雅退出 → 超时强杀 → 拔规则 → state="stopped" + {"status": "stopped"}
+static int cmd_stop() {
+    const bool enabled_saved =
+        write_conf_value(FILE_STATE_CONF, "enabled", "false");
+    const bool manual_stop_saved =
+        write_conf_value(FILE_STATE_CONF, "manual_stop", "true");
+    const bool config_saved = enabled_saved && manual_stop_saved;
+    write_runtime_state("stopping");
+    int pid = find_daemon_pid();
+    if (pid <= 0 && !iptables_any_left()) {
+        // 本来就没在跑
+        write_runtime_state("stopped");
+        log_line("系统", "引擎已停止,拦截规则已清理");
+        printf("{\"status\": \"stopped\"}\n");
+        return config_saved ? 0 : 1;
+    }
+    if (pid > 0 && is_daemon_pid(pid)) {
+        log_line("系统", "已向守护进程发送停止信号,等待安全退出");
+        kill(pid, SIGTERM);
+        // 轮询等待优雅退出
+        for (int i = 0; i < STOP_WAIT_MS / 100; i++) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (!is_daemon_pid(pid)) { pid = -1; break; }
+        }
+        if (pid > 0 && is_daemon_pid(pid)) {
+            // 超时:强杀兜底
+            log_line("系统", "守护进程退出超时,执行强制停止兜底");
+            kill(pid, SIGKILL);
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        }
+    }
+    // 守护进程持有生命周期锁并负责清理自己的 PID。强杀留下的旧 PID 会在
+    // read_daemon_pid() 中因 /proc 身份校验失效；这里不主动 unlink，避免
+    // 并发新实例刚写入 PID 时被旧 stop 命令误删。
+    iptables_remove_all();
+    write_runtime_state("stopped");
+    log_line("系统", "引擎已停止,拦截规则已清理");
+    printf("{\"status\": \"stopped\"}\n");
+    return config_saved ? 0 : 1;
+}
+
+// ---------------------------------------------------------------------------
+// --reload:热重载(运行中通知 SIGHUP;未运行报错)
+// 输出:{"status": "reloaded"} / {"status": "error"}
+static int cmd_reload() {
+    int pid = read_daemon_pid();
+    if (pid > 0 && kill(pid, SIGHUP) == 0) {
+        printf("{\"status\": \"reloaded\"}\n");
+        return 0;
+    }
+    printf("{\"status\": \"error\"}\n");
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// --mode N:切换规则强度(写配置;运行中热重载)
+static int cmd_mode(int mode) {
+    if (!valid_mode(mode)) {
+        fprintf(stderr, "参数错误\n用法: AD_Killer_By_NFQUEUE --mode 1|2 (1=仅Hosts 2=Hosts+AdGuard)\n");
+        return 1;
+    }
+    char v[8];
+    snprintf(v, sizeof(v), "%d", mode);
+    if (!write_conf_value(FILE_STATE_CONF, "mode", v)) {
+        fprintf(stderr, "配置写入失败: mode\n");
+        return 1;
+    }
+    int pid = read_daemon_pid();
+    if (pid > 0) {
+        kill(pid, SIGHUP);
+        log_line("系统", "模式已切换: %s,正在重载规则...",
+                 mode == MODE_HOSTS_ONLY ? "仅 Hosts" : "Hosts + AdGuard");
+    } else {
+        log_line("系统", "模式已切换: %s(引擎未运行,启动后生效)",
+                 mode == MODE_HOSTS_ONLY ? "仅 Hosts" : "Hosts + AdGuard");
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// --scope 0|1:切换作用域并让运行中的守护进程重建路由。
+static int cmd_scope(int scope) {
+    if (!valid_scope(scope)) {
+        fprintf(stderr, "参数错误\n用法: AD_Killer_By_NFQUEUE --scope 0|1 (0=全局 1=仅名单应用)\n");
+        return 1;
+    }
+    char value[8];
+    snprintf(value, sizeof(value), "%d", scope);
+    if (!write_conf_value(FILE_STATE_CONF, "scope", value)) {
+        fprintf(stderr, "配置写入失败: scope\n");
+        return 1;
+    }
+    int pid = read_daemon_pid();
+    if (pid > 0) {
+        kill(pid, SIGHUP);
+        log_line("系统", "作用域已切换为 %d,正在重建应用路由...", scope);
+        printf("{\"status\": \"reloading\", \"scope\": %d}\n", scope);
+    } else {
+        log_line("系统", "作用域已切换为 %d(引擎未运行,启动后生效)", scope);
+        printf("{\"status\": \"deferred\", \"scope\": %d}\n", scope);
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// --dev / --quic / --autostart on|off（自启只修改下次开机策略）
+static int cmd_toggle(const char *key, bool on) {
+    if (!write_conf_value(FILE_STATE_CONF, key, on ? "true" : "false")) {
+        fprintf(stderr, "配置写入失败: %s\n", key);
+        return 1;
+    }
+    if (strcmp(key, "autostart") == 0) {
+        // Only persist boot policy: do not start/stop/reload the running engine.
+        printf("{\"autostart\": %s}\n", on ? "true" : "false");
+    } else if (strcmp(key, "dev_mode") == 0) {
+        // 写/删 dev_mode_enabled 标志文件
+        if (on) {
+            FILE *f = fopen(FILE_DEV_MODE_ENABLED, "w");
+            if (f) { fputs("1", f); fclose(f); }
+        } else {
+            unlink(FILE_DEV_MODE_ENABLED);
+        }
+        log_line("系统", "%s DNS 流量日志", on ? "已开启" : "已关闭");
+        printf("{\"dev_mode\": \"done\"}\n");
+    } else {
+        // QUIC 切换需要重建 iptables → 通知守护进程热重载
+        int pid = read_daemon_pid();
+        if (pid > 0) kill(pid, SIGHUP);
+        log_line("系统", "%s QUIC/UDP 443 阻断", on ? "已开启" : "已关闭");
+        printf("{\"block_quic\": %s}\n", on ? "true" : "false");
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// --apps-apply:应用名单落地(WebUI 保存名单文件后调用)
+// 流程:读名单(scope 决定读哪个文件)→ 包名解析 uid(优先 packages.list,
+// 兜底 cmd package list packages -U)→ 写 uid 缓存 → 通知守护进程热重载
+// 输出:{"status": "applied"} / {"status": "not_running"}
+static int cmd_apps_apply() {
+    if (!ensure_dirs()) {
+        printf("{\"status\": \"error_storage\"}\n");
+        return 1;
+    }
+    int scope = 0;
+    {
+        std::string s = read_conf_value(FILE_STATE_CONF, "scope");
+        scope = (s == "1") ? SCOPE_PER_APP : SCOPE_GLOBAL;
+    }
+    const char *list_path = (scope == SCOPE_PER_APP) ? FILE_APP_INTERCEPT : FILE_APP_WHITELIST;
+
+    // 1. 读取包名名单
+    std::vector<std::string> pkgs;
+    std::unordered_set<std::string> unique_pkgs;
+    {
+        std::string content;
+        if (read_file(list_path, content)) {
+            std::istringstream lines(content);
+            std::string line;
+            while (std::getline(lines, line)) {
+                size_t b = line.find_first_not_of(" \t\r");
+                if (b != std::string::npos) {
+                    size_t e = line.find_last_not_of(" \t\r");
+                    line = line.substr(b, e - b + 1);
+                    if (!line.empty() && line[0] != '#' &&
+                        valid_package_name(line) && unique_pkgs.insert(line).second)
+                        pkgs.push_back(line);
+                }
+            }
+        }
+    }
+
+    // 2. 构建 包名→uid 映射
+    //    优先:/data/system/packages.list(每行 "pkg uid debugFlag dataDir seinfo",免子进程)
+    //    兜底:cmd package list packages -U(输出 "package:<pkg> uid:<n>")
+    std::string uid_map;   // 结果:每行 "<uid> <包名>"
+    {
+        std::unordered_map<std::string, long> pkg2uid;
+        std::string pl;
+        if (read_file("/data/system/packages.list", pl)) {
+            // 快速路径:直接解析 packages.list
+            std::istringstream ss(pl);
+            std::string line;
+            while (std::getline(ss, line)) {
+                std::istringstream row(line);
+                std::string pkg;
+                long uid = -1;
+                if (row >> pkg >> uid && valid_package_name(pkg) && uid > 0)
+                    pkg2uid[pkg] = uid;
+            }
+        } else {
+            // 兜底链:cmd package → pm list
+            for (const char *cmd : {"cmd package list packages -U 2>/dev/null",
+                                    "pm list packages -U 2>/dev/null"}) {
+                FILE *f = popen(cmd, "r");
+                if (!f) continue;
+                char line[512];
+                while (fgets(line, sizeof(line), f)) {
+                    std::string row(line);
+                    if (row.compare(0, 8, "package:") != 0) continue;
+                    const size_t marker = row.find(" uid:", 8);
+                    if (marker == std::string::npos) continue;
+                    std::string pkg = row.substr(8, marker - 8);
+                    char *end = nullptr;
+                    long uid = strtol(row.c_str() + marker + 5, &end, 10);
+                    if (valid_package_name(pkg) && end != row.c_str() + marker + 5 &&
+                        uid > 0)
+                        pkg2uid[pkg] = uid;
+                }
+                pclose(f);
+                if (!pkg2uid.empty()) break;
+            }
+        }
+        // 解析名单中每个包的 uid
+        for (auto &pkg : pkgs) {
+            long uid = -1;
+            auto found = pkg2uid.find(pkg);
+            if (found != pkg2uid.end()) uid = found->second;
+            if (uid > 0) {
+                char row[512];
+                snprintf(row, sizeof(row), "%ld %s\n", uid, pkg.c_str());
+                uid_map += row;
+                log_line("应用", "%s 已解析 UID: %ld", pkg.c_str(), uid);
+            } else {
+                log_line("应用", "未安装或无法解析,跳过: %s", pkg.c_str());
+            }
+        }
+    }
+    // 3. 写 uid 缓存(scope=1 拦截名单用独立文件)
+    std::string uid_cache_path = (scope == SCOPE_PER_APP)
+        ? DATA_FILE("app_intercept_uids.conf")
+        : DATA_FILE("app_uids.conf");
+    if (!write_file_atomic(uid_cache_path.c_str(), uid_map)) {
+        log_line("应用", "UID 缓存写入失败: %s", uid_cache_path.c_str());
+        printf("{\"status\": \"error_storage\"}\n");
+        return 1;
+    }
+    if (pkgs.empty()) {
+        log_line("应用", "按应用拦截列表为空,当前没有应用被%s",
+                 scope == SCOPE_PER_APP ? "拦截" : "放行");
+    }
+
+    // 4. 通知守护进程热重载(重读 uid 缓存并同步 selector 链)
+    // 运行中 applied+scope;未运行 deferred+scope(下次启动生效)
+    int pid = find_daemon_pid();
+    if (pid > 0) {
+        kill(pid, SIGHUP);
+        printf("{\"status\": \"applied\", \"scope\": %d}\n", scope);
+    } else {
+        printf("{\"status\": \"deferred\", \"scope\": %d}\n", scope);
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// --update:拉取规则源(支持 gzip)→ 逐行归类 → 原子落盘 → 热重载
+// 失败输出:{"status": "error_download"}
+static int cmd_update(const std::string &test_url = "") {
+    if (!ensure_dirs()) {
+        printf("{\"status\": \"error_storage\"}\n");
+        return 1;
+    }
+    ExclusiveFileLock update_lock(UPDATE_LOCK_FILE);
+    if (!update_lock.ok()) {
+        log_line("更新", "已有规则更新正在运行");
+        printf("{\"status\": \"busy\"}\n");
+        return 2;
+    }
+    std::string sources;
+    if (test_url.empty() && !read_file(FILE_UPDATE_SOURCES, sources)) {
+        log_line("更新", "未找到规则源配置 %s", FILE_UPDATE_SOURCES);
+        printf("{\"status\": \"error_download\"}\n");
+        return 1;
+    }
+    // Test jobs share the download/validation path and resource bounds but
+    // return before staging, publishing, statistics writes or daemon signals.
+    std::vector<std::string> urls;
+    if (!test_url.empty()) urls.push_back(test_url);
+    else {
+        std::vector<RuleSource> entries;
+        std::string error;
+        if (!parse_rule_sources(sources, entries, error)) {
+            log_line("更新", "来源配置错误: %s", error.c_str());
+            return 1;
+        }
+        retain_builtin_source(entries);
+        for (const auto &entry : entries) if (entry.enabled) urls.push_back(entry.url);
+    }
+    if (urls.empty()) {
+        write_file_atomic(FILE_SOURCE_STATS, serialize_source_reports(
+            {}, "no_enabled_sources", now_epoch()));
+        log_line("更新", "规则源为空");
+        printf("{\"status\": \"error_download\"}\n");
+        return 1;
+    }
+
+    std::string hosts_rules;      // 归类后的 Hosts 行
+    std::string adguard_rules;    // 归类后的 AdGuard 行
+    size_t aggregate_content_bytes = 0;
+    size_t aggregate_source_lines = 0;
+    std::vector<SourceUpdateReport> source_reports;
+    PublishedSourceStats published;
+    const char *update_job = getenv("ADK_NFQ_UPDATE_JOB");
+    auto record_source_report = [&](SourceUpdateReport &report) {
+        report.checked_at = now_epoch();
+        source_reports.push_back(report);
+    };
+
+    auto save_source_reports = [&](const char *publish_status) {
+        std::string report = serialize_source_reports(
+            source_reports, publish_status, now_epoch(), published,
+            update_job ? update_job : "");
+        if (!write_file_atomic(FILE_SOURCE_STATS, report))
+            log_line("更新", "来源统计写入失败: %s", FILE_SOURCE_STATS);
+    };
+
+    for (auto &url : urls) {
+        SourceUpdateReport report;
+        report.url = url;
+        SourceFormat format = recipe_source_format(url);
+        report.format = is_builtin_source(url) ? "hagezi-pro-minus-fake" : source_format_name(format);
+        RuleStreamLimits source_limits;
+        source_limits.output_bytes = MAX_RULE_DECOMPRESSED_BYTES - aggregate_content_bytes;
+        source_limits.lines = MAX_RULE_LINES - aggregate_source_lines;
+        SourceValidationResult validation;
+        if (is_builtin_source(url)) {
+            validation = fetch_hagezi_source(DATA_DIR, source_limits, download_file, report.downloaded_bytes);
+        } else {
+            log_line("更新", "拉取: %s", url.c_str());
+            std::string part = std::string(DATA_DIR) + "/download.part";
+            std::string err = download_file(url, part);
+            if (!err.empty()) {
+                log_line("更新", "下载失败: %s (%s)", url.c_str(), err.c_str());
+                report.status = "download_error";
+                report.reason = err;
+                record_source_report(report);
+                continue;
+            }
+            struct stat downloaded {};
+            if (stat(part.c_str(), &downloaded) == 0 && downloaded.st_size > 0)
+                report.downloaded_bytes = static_cast<size_t>(downloaded.st_size);
+            // Same bounded plain/gzip stream path for all ordinary sources.
+            validation = validate_rule_source_file(part.c_str(), source_limits, format);
+            unlink(part.c_str());
+        }
+        report.stats = validation.stats;
+        report.reason = validation.reason;
+        if (!validation.accepted) {
+            report.status = "content_rejected";
+            log_line("更新", "来源内容拒绝: %s (%s,有效率 %.2f%%)",
+                     url.c_str(), validation.reason.c_str(),
+                     validation.stats.valid_ratio_ppm / 10000.0);
+            record_source_report(report);
+            continue;
+        }
+        size_t aggregate_bytes = hosts_rules.size() + adguard_rules.size();
+        size_t source_bytes = validation.hosts_rules.size() +
+                              validation.adguard_rules.size();
+        if (source_bytes > MAX_RULE_DECOMPRESSED_BYTES - aggregate_bytes ||
+            validation.stats.total_lines > MAX_RULE_LINES - aggregate_source_lines) {
+            report.status = "content_rejected";
+            report.reason = "aggregate_resource_limit";
+            log_line("更新", "来源累计资源上限,跳过: %s", url.c_str());
+            record_source_report(report);
+            continue;
+        }
+        report.status = "accepted";
+        hosts_rules += validation.hosts_rules;
+        adguard_rules += validation.adguard_rules;
+        aggregate_content_bytes += validation.stats.bytes;
+        aggregate_source_lines += validation.stats.total_lines;
+        log_line("更新", "来源接受:Hosts %zu / AdGuard %zu / 拒绝 %zu / 有效率 %.2f%%",
+                 validation.stats.accepted_hosts,
+                 validation.stats.accepted_adguard,
+                 validation.stats.rejected_unsupported +
+                     validation.stats.rejected_too_long,
+                 validation.stats.valid_ratio_ppm / 10000.0);
+        record_source_report(report);
+    }
+
+    if (!test_url.empty()) {
+        bool accepted = !source_reports.empty() && source_reports[0].status == "accepted";
+        log_line("测试", "%s；仅测试下载和解析，未替换规则或启动引擎",
+                 accepted ? "来源测试通过" : "来源测试失败");
+        return accepted ? 0 : 1;
+    }
+
+    // 全部源失败 → error_download
+    if (hosts_rules.empty() && adguard_rules.empty()) {
+        save_source_reports("no_acceptable_sources");
+        log_line("更新", "规则同步失败:所有源均不可用");
+        printf("{\"status\": \"error_download\"}\n");
+        return 1;
+    }
+
+    // 两个 gzip 先进入不可见 staging,用真实规则加载器校验后只切换一次指针。
+    deduplicate_rule_text(hosts_rules);
+    deduplicate_rule_text(adguard_rules);
+    std::string gz_hosts, gz_adguard;
+    // A source set may legitimately contain only one category (the default
+    // sources are AdGuard-only). Keep both generated files nonempty text with
+    // a comment header; do not relax empty/corrupt upstream stream validation.
+    if (!gz_compress_string("# AD_Killer_By_NFQUEUE generated Hosts rules\n" + hosts_rules, gz_hosts) ||
+        !gz_compress_string("# AD_Killer_By_NFQUEUE generated AdGuard rules\n" + adguard_rules, gz_adguard)) {
+        save_source_reports("publish_failed");
+        log_line("更新", "规则 staging 压缩失败,保留旧规则");
+        printf("{\"status\": \"error_download\"}\n");
+        return 1;
+    }
+    long long generation_clock = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::string generation = std::to_string(generation_clock) + "-" +
+                             std::to_string((long long)getpid());
+    StagedRuleBundle staged;
+    std::string stage_error;
+    if (!stage_rule_bundle(DATA_DIR, generation, gz_hosts, gz_adguard,
+                           staged, &stage_error)) {
+        save_source_reports("publish_failed");
+        log_line("更新", "规则 staging 失败: %s,保留旧规则", stage_error.c_str());
+        printf("{\"status\": \"error_download\"}\n");
+        return 1;
+    }
+
+    RuleDB candidate;
+    int staged_hosts = 0, staged_adguard = 0;
+    bool hosts_valid = load_rule_file_checked(
+        staged.hosts_path.c_str(), false, candidate, &staged_hosts, true);
+    bool adguard_valid = load_rule_file_checked(
+        staged.adguard_path.c_str(), true, candidate, &staged_adguard, true);
+    if (!hosts_valid || !adguard_valid || staged_hosts + staged_adguard <= 0 ||
+        candidate.black.size() + candidate.white.size() == 0) {
+        discard_staged_rule_bundle(staged);
+        save_source_reports("publish_failed");
+        log_line("更新", "staging 规则无法被引擎加载(Hosts 校验=%d 行=%d / AdGuard 校验=%d 行=%d),保留旧规则",
+                 hosts_valid, staged_hosts, adguard_valid, staged_adguard);
+        printf("{\"status\": \"error_download\"}\n");
+        return 1;
+    }
+    if (!commit_rule_bundle(FILE_RULESET_CURRENT, staged, &stage_error)) {
+        discard_staged_rule_bundle(staged);
+        save_source_reports("publish_failed");
+        log_line("更新", "规则指针提交失败: %s,保留旧规则", stage_error.c_str());
+        printf("{\"status\": \"error_download\"}\n");
+        return 1;
+    }
+    log_line("更新", "规则 generation %s 已原子发布(引擎可加载 %d/%d 行)",
+             generation.c_str(), staged_hosts, staged_adguard);
+    published = {generation, candidate.black.size(), candidate.white.size()};
+    size_t accepted_sources = 0, accepted_lines = 0, filtered_lines = 0;
+    for (const auto &report : source_reports) {
+        if (report.status == "accepted") {
+            accepted_sources++;
+            accepted_lines += report.stats.accepted_hosts + report.stats.accepted_adguard;
+        }
+        filtered_lines += report.stats.rejected_unsupported + report.stats.rejected_too_long;
+    }
+    size_t unique = published.unique_black + published.unique_white;
+    log_line("更新", "来源 %zu/%zu 成功；过滤 %zu 行；接受 %zu 行，去重 %zu 行，来源唯一规则 %zu 条(含白名单 %zu)",
+             accepted_sources, urls.size(), filtered_lines, accepted_lines,
+             accepted_lines >= unique ? accepted_lines - unique : 0, unique, published.unique_white);
+    if (accepted_sources != urls.size())
+        log_line("更新", "注意：部分来源失败，本次仅发布成功来源；请检查上方失败原因");
+    save_source_reports("published");
+    // Synchronization is allowed while the engine is paused. Refresh the
+    // current-mode/custom-rule counters without starting an NFQUEUE listener.
+    candidate = RuleDB{};
+    load_all_rules(candidate);
+    if (candidate.load_valid) save_rule_stats(candidate);
+    else log_line("更新", "规则已发布，但当前模式计数刷新失败: %s", candidate.load_error.c_str());
+    // 运行中热重载
+    int pid = read_daemon_pid();
+    if (pid > 0) kill(pid, SIGHUP);
+    return 0;
+}
+
+static std::string update_job_path(const std::string &job_id, const char *suffix) {
+    return std::string(DIR_UPDATE_JOBS) + "/update-" + job_id + suffix;
+}
+
+// 由后端创建唯一任务并脱离 WebUI exec 会话。状态和日志均按 job_id 隔离。
+static int cmd_update_start(const std::string &test_url = "") {
+    std::string error;
+    if (!test_url.empty() && !is_builtin_source(test_url) && !validate_download_url(test_url, &error)) {
+        fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    if (!ensure_dirs()) {
+        printf("{\"status\": \"error_storage\"}\n");
+        return 1;
+    }
+    prune_update_jobs(DIR_UPDATE_JOBS, UPDATE_JOB_KEEP_COUNT);
+    long long clock = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::string job_id = std::to_string(clock) + "-" +
+                         std::to_string((long long)getpid());
+    std::string state_path = update_job_path(job_id, ".state");
+    std::string log_path = update_job_path(job_id, ".log");
+
+    int gate[2];
+    if (pipe(gate) != 0) {
+        printf("{\"status\": \"error\"}\n");
+        return 1;
+    }
+    pid_t child = fork();
+    if (child < 0) {
+        close(gate[0]);
+        close(gate[1]);
+        printf("{\"status\": \"error\"}\n");
+        return 1;
+    }
+    if (child == 0) {
+        close(gate[1]);
+        char start = 0;
+        ssize_t received;
+        do {
+            received = read(gate[0], &start, 1);
+        } while (received < 0 && errno == EINTR);
+        close(gate[0]);
+        if (received != 1 || start != '1') _exit(1);
+
+        setsid();
+        int null_fd = open("/dev/null", O_RDWR | O_CLOEXEC);
+        if (null_fd >= 0) {
+            dup2(null_fd, STDIN_FILENO);
+            dup2(null_fd, STDOUT_FILENO);
+            dup2(null_fd, STDERR_FILENO);
+            if (null_fd > STDERR_FILENO) close(null_fd);
+        }
+        configure_process_log(log_path.c_str(), UPDATE_LOG_MAX_BYTES, 0);
+        if (setenv("ADK_NFQ_UPDATE_JOB", job_id.c_str(), 1) != 0) _exit(1);
+        auto isolated = isolate_daemon_cgroups();
+        if (!isolated.ok) {
+            log_line("错误", "后台来源任务无法脱离调用方冻结组：%s", isolated.error.c_str());
+            write_file_atomic(state_path.c_str(), finished_update_job_state(1));
+            _exit(1);
+        }
+        int result = cmd_update(test_url);
+        write_file_atomic(state_path.c_str(), finished_update_job_state(result));
+        _exit(result);
+    }
+
+    close(gate[0]);
+    bool state_ready = write_file_atomic(
+        state_path.c_str(), running_update_job_state(static_cast<int>(child)));
+    char start = state_ready ? '1' : '0';
+    ssize_t ignored = write(gate[1], &start, 1);
+    (void)ignored;
+    close(gate[1]);
+    if (!state_ready) {
+        kill(child, SIGKILL);
+        waitpid(child, nullptr, 0);
+        printf("{\"status\": \"error\"}\n");
+        return 1;
+    }
+    printf("{\"status\": \"started\", \"job_id\": \"%s\"}\n",
+           job_id.c_str());
+    return 0;
+}
+
+static int cmd_update_status(const std::string &job_id) {
+    if (!valid_update_job_id(job_id)) {
+        printf("{\"status\": \"invalid_job\"}\n");
+        return 1;
+    }
+    std::string raw;
+    if (!read_file(update_job_path(job_id, ".state").c_str(), raw)) {
+        printf("{\"status\": \"not_found\", \"job_id\": \"%s\"}\n",
+               job_id.c_str());
+        return 1;
+    }
+    UpdateJobState state;
+    if (!parse_update_job_state(raw, state)) {
+        printf("{\"status\": \"invalid_state\", \"job_id\": \"%s\"}\n",
+               job_id.c_str());
+        return 1;
+    }
+    if (state.status == "running") {
+        if (kill(state.pid, 0) != 0 && errno == ESRCH) {
+            printf("{\"status\": \"interrupted\", \"job_id\": \"%s\", "
+                   "\"exit_code\": 255}\n", job_id.c_str());
+        } else {
+            printf("{\"status\": \"running\", \"job_id\": \"%s\", "
+                   "\"exit_code\": null}\n", job_id.c_str());
+        }
+        return 0;
+    }
+    printf("{\"status\": \"%s\", \"job_id\": \"%s\", \"exit_code\": %d}\n",
+           state.status.c_str(), job_id.c_str(), state.exit_code);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// --status:WebUI 状态 JSON
+static int cmd_status() {
+    int pid = read_daemon_pid();
+    bool frozen = daemon_cgroup_frozen(pid);
+    bool running = pid > 0 && !frozen;
+    if (pid <= 0) {
+        // 异常退出残留规则 → 顺手清理
+        if (iptables_any_left()) iptables_remove_all();
+    }
+
+    // 配置读取
+    EngineConfig engine_cfg = load_engine_config();
+    IptablesConfig iptables_cfg;
+    iptables_cfg.block_quic = engine_cfg.block_quic;
+    iptables_cfg.scope = engine_cfg.scope;
+    iptables_cfg.bypass_uids = engine_cfg.bypass_uids;
+    iptables_cfg.intercept_uids = engine_cfg.intercept_uids;
+    bool ipt_active = pid > 0 ? iptables_chain_active(iptables_cfg) : false;
+
+    std::string enabled = read_conf_value(FILE_STATE_CONF, "enabled");
+    std::string manual = read_conf_value(FILE_STATE_CONF, "manual_stop");
+    std::string autostart = read_conf_value(FILE_STATE_CONF, "autostart");
+    std::string metrics = current_metrics_json();
+    long black = 0, white = 0, updated = 0;
+    {
+        std::string b = read_conf_value(FILE_RULE_STATS, "black");
+        std::string w = read_conf_value(FILE_RULE_STATS, "white");
+        std::string u = read_conf_value(FILE_RULE_STATS, "updated_at");
+        black = b.empty() ? 0 : atol(b.c_str());
+        white = w.empty() ? 0 : atol(w.c_str());
+        updated = u.empty() ? 0 : atol(u.c_str());
+    }
+    printf("{\"running\": %s, \"iptables_active\": %s, \"mode\": %d, \"scope\": %d, "
+           "\"dev_mode\": %s, \"block_quic\": %s, \"enabled\": %s, \"manual_stop\": %s, \"autostart\": %s, "
+           "\"rules_black\": %ld, \"rules_white\": %ld, \"rules_updated_at\": %ld, "
+           "\"ports\": \"53,80,443\", \"quic\": %s, \"table\": \"mangle\", "
+           "\"metrics\": %s, \"state_file\": \"state.conf\", %s}\n",
+           running ? "true" : "false",
+           ipt_active ? "true" : "false",
+           engine_cfg.mode, engine_cfg.scope,
+           engine_cfg.dev_mode ? "true" : "false",
+           engine_cfg.block_quic ? "true" : "false",
+           (enabled == "false" || enabled == "0") ? "false" : "true",
+           (manual == "true" || manual == "1") ? "true" : "false",
+           (autostart == "true" || autostart == "1") ? "true" : "false",
+           black, white, updated,
+           engine_cfg.block_quic ? "true" : "false", metrics.c_str(), engine_diagnostics_json(frozen).c_str());
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// --status-fast:快速状态(跳过 iptables 校验,直接读配置与 runtime.state)
+// WebUI 高频轮询用,避免每次 popen iptables 的开销
+static int cmd_status_fast() {
+    int pid = find_daemon_pid();
+    bool frozen = daemon_cgroup_frozen(pid);
+    bool running = pid > 0 && !frozen;
+    int mode = MODE_HOSTS_ADGUARD;
+    {
+        std::string m = read_conf_value(FILE_STATE_CONF, "mode");
+        if (m.empty()) m = read_conf_value(FILE_ADBLOCK_MODE, "mode");
+        int parsed = 0;
+        if (parse_integer_arg(m.c_str(), parsed) && valid_mode(parsed)) mode = parsed;
+    }
+    int scope = read_conf_value(FILE_STATE_CONF, "scope") == "1"
+        ? SCOPE_PER_APP : SCOPE_GLOBAL;
+    std::string dev = read_conf_value(FILE_STATE_CONF, "dev_mode");
+    std::string quic = read_conf_value(FILE_STATE_CONF, "block_quic");
+    std::string enabled = read_conf_value(FILE_STATE_CONF, "enabled");
+    std::string manual = read_conf_value(FILE_STATE_CONF, "manual_stop");
+    std::string autostart = read_conf_value(FILE_STATE_CONF, "autostart");
+    std::string metrics = current_metrics_json();
+    long black = 0, white = 0, updated = 0;
+    {
+        std::string b = read_conf_value(FILE_RULE_STATS, "black");
+        std::string w = read_conf_value(FILE_RULE_STATS, "white");
+        std::string u = read_conf_value(FILE_RULE_STATS, "updated_at");
+        black = b.empty() ? 0 : atol(b.c_str());
+        white = w.empty() ? 0 : atol(w.c_str());
+        updated = u.empty() ? 0 : atol(u.c_str());
+    }
+    bool dev_on = (dev == "true" || dev == "1");
+    bool quic_on = (quic == "true" || quic == "1");
+    // 快速模式:iptables_active 以运行状态近似(不执行 iptables 命令)
+    printf("{\"running\": %s, \"iptables_active\": %s, \"mode\": %d, \"scope\": %d, "
+           "\"dev_mode\": %s, \"block_quic\": %s, \"enabled\": %s, \"manual_stop\": %s, \"autostart\": %s, "
+           "\"rules_black\": %ld, \"rules_white\": %ld, \"rules_updated_at\": %ld, "
+           "\"ports\": \"53,80,443\", \"quic\": %s, \"table\": \"mangle\", "
+           "\"metrics\": %s, \"state_file\": \"state.conf\", %s}\n",
+           running ? "true" : "false",
+           pid > 0 ? "true" : "false",
+           mode, scope,
+           dev_on ? "true" : "false",
+           quic_on ? "true" : "false",
+           (enabled == "false" || enabled == "0") ? "false" : "true",
+           (manual == "true" || manual == "1") ? "true" : "false",
+           (autostart == "true" || autostart == "1") ? "true" : "false",
+           black, white, updated,
+           quic_on ? "true" : "false", metrics.c_str(), engine_diagnostics_json(frozen).c_str());
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// --version-status:版本 JSON
+static int cmd_version_status() {
+    printf("{\"module\": \"%s\", \"version\": \"%s\", \"versionCode\": %d}\n",
+           MODULE_ID, MODULE_VERSION, MODULE_VERSION_CODE);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Source management only changes subscriptions, never active rules or boot state.
+static int cmd_sources(bool save) {
+    if (!ensure_dirs()) return 1;
+    std::string text, error;
+    if (save) {
+        char buffer[4096];
+        size_t n = 0;
+        while ((n = fread(buffer, 1, sizeof(buffer), stdin)) != 0) {
+            text.append(buffer, n);
+            if (text.size() > MAX_SOURCE_CONFIG_BYTES) {
+                fprintf(stderr, "来源配置过大\n");
+                return 1;
+            }
+        }
+        if (ferror(stdin)) return 1;
+    } else if (!read_file(FILE_UPDATE_SOURCES, text)) {
+        fprintf(stderr, "无法读取来源列表\n");
+        return 1;
+    }
+    std::vector<RuleSource> entries;
+    if (!parse_rule_sources(text, entries, error, save)) {
+        fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    if (save) {
+        ExclusiveFileLock lock(UPDATE_LOCK_FILE);
+        if (!lock.ok()) {
+            fprintf(stderr, "规则同步或来源测试正在运行，请结束后保存\n");
+            return 2;
+        }
+        std::string previous_text;
+        std::vector<RuleSource> previous;
+        if (read_file(FILE_UPDATE_SOURCES, previous_text) &&
+            !parse_rule_sources(previous_text, previous, error)) {
+            fprintf(stderr, "现有来源配置无法读取：%s\n", error.c_str());
+            return 1;
+        }
+        retain_builtin_source(entries, previous);
+        if (!write_file_atomic(FILE_UPDATE_SOURCES, serialize_rule_sources(entries))) return 1;
+    } else retain_builtin_source(entries);
+    printf("{\"status\":\"ok\",\"sources\":[");
+    for (size_t i = 0; i < entries.size(); i++) {
+        if (i) printf(",");
+        const bool builtin = is_builtin_source(entries[i].url);
+        printf("{\"url\":%s,\"enabled\":%s,\"locked\":%s,\"name\":%s",
+               source_json_string(entries[i].url).c_str(), entries[i].enabled ? "true" : "false",
+               builtin ? "true" : "false", source_json_string(builtin ? HAGEZI_SOURCE_NAME : "").c_str());
+        if (builtin)
+            printf(",\"kind\":\"hagezi-pro-minus-fake\",\"dependencies\":[%s,%s]",
+                   source_json_string(HAGEZI_PRO_URL).c_str(), source_json_string(HAGEZI_FAKE_URL).c_str());
+        printf("}");
+    }
+    printf("]}\n");
+    return 0;
+}
+
+// A read-only, bounded preview. Builtin recipes show both raw dependencies,
+// explicitly not the post-difference rule set. No config/history/job writes.
+static int cmd_source_preview(const std::string &url, size_t characters) {
+    std::vector<std::string> urls;
+    if (is_builtin_source(url)) urls = {HAGEZI_PRO_URL, HAGEZI_FAKE_URL};
+    else {
+        std::string error;
+        if (!validate_download_url(url, &error)) {
+            printf("{\"status\":\"error\",\"message\":%s}\n", source_json_string(error).c_str());
+            return 1;
+        }
+        urls.push_back(url);
+    }
+    std::string entries;
+    bool success = true;
+    for (const auto &source : urls) {
+        SourcePreview preview = preview_source(source, characters);
+        if (!preview.error.empty()) success = false;
+        if (!entries.empty()) entries += ',';
+        entries += "{\"url\":" + source_json_string(source) + ",\"text\":" + source_json_string(preview.text) +
+            ",\"error\":" + source_json_string(preview.error) + ",\"characters\":" + std::to_string(preview.characters) +
+            ",\"truncated\":" + (preview.truncated ? "true" : "false") + "}";
+    }
+    net_curl_shutdown();
+    printf("{\"status\":\"%s\",\"previews\":[%s]}\n", success ? "ok" : "error", entries.c_str());
+    return success ? 0 : 1;
+}
+
+// 用法说明
+static void usage() {
+    fprintf(stderr,
+            "AD_Killer_By_NFQUEUE %s - NFQUEUE 全局去广告引擎\n"
+            "用法:\n"
+            "  AD_Killer_By_NFQUEUE --install          安装初始化\n"
+            "  AD_Killer_By_NFQUEUE --start            启动引擎(守护进程)\n"
+            "  AD_Killer_By_NFQUEUE --stop             停止引擎并清理规则\n"
+            "  AD_Killer_By_NFQUEUE --reload           热重载规则\n"
+            "  AD_Killer_By_NFQUEUE --update           拉取规则源更新\n"
+            "  AD_Killer_By_NFQUEUE --update-start     创建后台更新 job\n"
+            "  AD_Killer_By_NFQUEUE --update-status ID 查询更新 job 状态\n"
+            "  AD_Killer_By_NFQUEUE --sources-list     读取启用/停用来源 JSON\n"
+            "  AD_Killer_By_NFQUEUE --sources-save     从 stdin 校验并原子保存来源\n"
+            "  AD_Killer_By_NFQUEUE --source-test URL  后台测试单源，不发布规则\n"
+            "  AD_Killer_By_NFQUEUE --source-preview URL [字符数]  只读预览（默认500，可选100–5000）\n"
+            "  AD_Killer_By_NFQUEUE --merge-snapshot INPUT OUTPUT  隔离合并固定快照，不访问运行数据\n"
+            "  AD_Killer_By_NFQUEUE --mode 1|2         规则强度(1=仅Hosts 2=Hosts+AdGuard)\n"
+            "  AD_Killer_By_NFQUEUE --scope 0|1        作用域(0=全局 1=仅名单内应用)\n"
+            "  AD_Killer_By_NFQUEUE --dev on|off       DNS 查询日志\n"
+            "  AD_Killer_By_NFQUEUE --quic on|off      阻止 QUIC\n"
+            "  AD_Killer_By_NFQUEUE --autostart on|off 开机自启(默认关闭，不改变当前运行状态)\n"
+            "  AD_Killer_By_NFQUEUE --apps-apply       应用名单生效\n"
+            "  AD_Killer_By_NFQUEUE --status           状态 JSON\n"
+            "  AD_Killer_By_NFQUEUE --version-status   版本 JSON\n",
+            MODULE_VERSION);
+}
+
+// ---------------------------------------------------------------------------
+// 入口:子命令分派
+int main(int argc, char **argv) {
+    if (argc < 2) { usage(); return 1; }
+    std::string arg = argv[1];
+
+    if (arg == "--merge-snapshot") {
+        if (argc != 4) { usage(); return 1; }
+        return merge_rule_snapshot(argv[2], argv[3]);
+    }
+
+    if (arg == "--install")        return cmd_install();
+    if (arg == "--start")          return cmd_start();
+    if (arg == "--stop")           return cmd_stop();
+    if (arg == "--daemon")         return cmd_daemon();
+    if (arg == "--reload")         return cmd_reload();
+    if (arg == "--update")         return cmd_update();
+    if (arg == "--update-start")   return cmd_update_start();
+    if (arg == "--source-preview") {
+        int characters = SOURCE_PREVIEW_DEFAULT;
+        if ((argc != 3 && argc != 4) || (argc == 4 && (!parse_integer_arg(argv[3], characters) ||
+            characters < static_cast<int>(SOURCE_PREVIEW_MIN) || characters > static_cast<int>(SOURCE_PREVIEW_MAX)))) {
+            fprintf(stderr, "用法: AD_Killer_By_NFQUEUE --source-preview URL [100–5000]\n"); return 1;
+        }
+        return cmd_source_preview(argv[2], static_cast<size_t>(characters));
+    }
+    if (arg == "--sources-list")   return cmd_sources(false);
+    if (arg == "--sources-save")   return cmd_sources(true);
+    if (arg == "--source-test") {
+        if (argc != 3 || !argv[2][0]) { usage(); return 1; }
+        return cmd_update_start(argv[2]);
+    }
+    if (arg == "--update-status") {
+        if (argc < 3) {
+            fprintf(stderr, "参数错误\n用法: AD_Killer_By_NFQUEUE --update-status JOB_ID\n");
+            return 1;
+        }
+        return cmd_update_status(argv[2]);
+    }
+    if (arg == "--status")         return cmd_status();
+    if (arg == "--status-fast")    return cmd_status_fast();
+    if (arg == "--version-status") return cmd_version_status();
+    if (arg == "--mode") {
+        if (argc < 3) { usage(); return 1; }
+        int mode = 0;
+        if (!parse_integer_arg(argv[2], mode)) {
+            fprintf(stderr, "参数错误\n用法: AD_Killer_By_NFQUEUE --mode 1|2\n");
+            return 1;
+        }
+        return cmd_mode(mode);
+    }
+    if (arg == "--scope") {
+        if (argc < 3) { usage(); return 1; }
+        int scope = 0;
+        if (!parse_integer_arg(argv[2], scope)) {
+            fprintf(stderr, "参数错误\n用法: AD_Killer_By_NFQUEUE --scope 0|1\n");
+            return 1;
+        }
+        return cmd_scope(scope);
+    }
+    if (arg == "--dev" || arg == "--quic" || arg == "--autostart") {
+        if (argc < 3) { usage(); return 1; }
+        const bool valid_on = strcmp(argv[2], "on") == 0 ||
+                              strcmp(argv[2], "1") == 0;
+        const bool valid_off = strcmp(argv[2], "off") == 0 ||
+                               strcmp(argv[2], "0") == 0;
+        if (!valid_on && !valid_off) {
+            fprintf(stderr, "参数错误\n用法: AD_Killer_By_NFQUEUE %s on|off\n", argv[1]);
+            return 1;
+        }
+        bool on = valid_on;
+        return cmd_toggle(arg == "--autostart" ? "autostart" :
+                          arg == "--dev" ? "dev_mode" : "block_quic", on);
+    }
+    if (arg == "--apps-apply")     return cmd_apps_apply();
+    usage();
+    return 1;
+}

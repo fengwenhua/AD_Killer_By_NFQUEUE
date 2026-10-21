@@ -1,0 +1,25 @@
+# input	accepted	kind	domain
+||example.com^	1	black_suffix	example.com
+@@||allow.example.com^	1	white_suffix	allow.example.com
+example.com	1	black_exact	example.com
+@@allow.example.com	1	white_exact	allow.example.com
+*.tracker.example.com	1	black_suffix	tracker.example.com
+@@*.safe.example.com	1	white_suffix	safe.example.com
+|https://example.com/path	0	-	-
+example.com/path/ad.js	0	-	-
+||example.com^$third-party	0	-	-
+@@||example.com^$domain=site.example	0	-	-
+/advert\\d+/	0	-	-
+||exa*mple.com^	0	-	-
+example.com:443	0	-	-
+foo_bar.example.com	0	-	-
+-foo.example.com	0	-	-
+foo-.example.com	0	-	-
+0.0.0.0 example.com	0	-	-
+##.advert	0	-	-
+[Adblock Plus 2.0]	0	-	-
+||adservice.google.	0	-	-
+||adserver1.	0	-	-
+@@||advertising.civitai.	0	-	-
+||example.com.^	0	-	-
+example.com.	0	-	-

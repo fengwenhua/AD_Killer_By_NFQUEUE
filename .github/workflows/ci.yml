@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked frontend dependencies
+        run: npm --prefix frontend ci --include=dev --no-audit --no-fund
+      - name: Install host dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang curl openssl iptables conntrack kmod shellcheck zlib1g-dev
+      - name: Shell syntax and static analysis
+        run: |
+          bash -n build.sh
+          for script in module/*.sh tests/*.sh; do sh -n "$script"; done
+          shellcheck -e SC2086,SC2154 build.sh module/*.sh tests/*.sh
+      - name: Strict host tests
+        run: STRICT=1 make test
+      - name: Real HTTP/TLS download integration
+        run: CXX=clang++ make test-download-integration
+      - name: Real rule publishing and asynchronous update jobs
+        run: sudo env CXX=clang++ make test-update-integration
+      - name: ASan and UBSan suite
+        run: make test-sanitize
+      - name: Parser fuzz smoke
+        run: FUZZ_CXX=clang++ FUZZ_RUNS=1000 make fuzz-smoke
+      - name: Real kernel NFQUEUE IPv4/IPv6 integration
+        run: CXX=clang++ make test-nfqueue-integration
+      - name: Real engine routing and protocol integration
+        run: sudo env CXX=clang++ make test-engine-integration
+      - name: Real engine legacy iptables integration
+        run: sudo env CXX=clang++ IPTABLES_BACKEND=legacy make test-engine-integration
+      - name: Real manager freezer and daemon isolation regression
+        run: sudo env CXX=clang++ make test-cgroup-integration
+
+  webui-layout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build and test Vue frontend
+        run: |
+          npm --prefix frontend ci --include=dev --no-audit --no-fund
+          npm --prefix frontend test
+          npm --prefix frontend run build
+          python3 tests/test_webui_contract.py module/webroot/index.html
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install browser test dependencies
+        run: |
+          python -m pip install playwright==1.62.0
+          python -m playwright install --with-deps chromium
+      - name: Phone, foldable and tablet layout and interaction regression
+        run: python tests/test_webui_layout.py --screenshots dist/webui-preview
+      - name: Bounded viewport and stable navigation stress regression
+        run: |
+          python tests/test_webui_performance.py --verify
+          python tests/test_webui_performance.py --verify --running
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: AD_Killer_By_NFQUEUE-WebUI-preview
+          path: dist/webui-preview
+
+  android-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Android NDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;26.3.11579264"
+      - name: Build arm64 module
+        run: NDK="$ANDROID_HOME/ndk/26.3.11579264" ./build.sh
+      - name: Verify reproducible build
+        run: |
+          first=$(sha256sum dist/AD_Killer_By_NFQUEUE-v*.zip | cut -d' ' -f1)
+          NDK="$ANDROID_HOME/ndk/26.3.11579264" ./build.sh
+          second=$(sha256sum dist/AD_Killer_By_NFQUEUE-v*.zip | cut -d' ' -f1)
+          test "$first" = "$second"
+      - name: Validate module ZIP
+        run: |
+          python3 tests/validate_module_zip.py dist/AD_Killer_By_NFQUEUE-v*.zip
+          python3 tests/verify_checksum.py dist/AD_Killer_By_NFQUEUE-v*.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AD_Killer_By_NFQUEUE-module
+          path: |
+            dist/AD_Killer_By_NFQUEUE-v*.zip
+            dist/AD_Killer_By_NFQUEUE-v*.zip.sha256
