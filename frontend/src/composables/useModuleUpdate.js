@@ -1,19 +1,48 @@
 import { computed, ref } from 'vue';
-import { selectRelease, compareVersions, versionParts } from '../domain/updates.js';
+import { selectRelease, latestReleaseNotes, compareVersions, versionParts } from '../domain/updates.js';
 import { lastJson, validJob as validJobId } from '../domain/rules.js';
 import { useLifetime } from './useLifetime.js';
 import { getStorage } from '../services/storage.js';
 
 const KEY = 'ad-killer-by-nfqueue-module-update';
+const AUTO_KEY = 'ad-killer-by-nfqueue-auto-update-check';
+const PREVIEW_KEY = 'ad-killer-by-nfqueue-update-preview';
 export function useModuleUpdate(api, info, feedback, storage = getStorage(), pollMs = 800) {
-  const life = useLifetime(), preview = ref(false), checking = ref(false), busy = ref(false);
+  const saved = key => { try { return storage?.getItem(key) === 'true'; } catch { return false; } };
+  const save = (key, value) => { try { storage?.setItem(key, String(value)); } catch { /* session-only preference */ } };
+  const life = useLifetime(), preview = ref(saved(PREVIEW_KEY)), autoCheck = ref(saved(AUTO_KEY));
+  const checking = ref(false), busy = ref(false);
+  const notesLoading = ref(false), latestRelease = ref(null), notesError = ref('');
   const release = ref(null), ready = ref(''), reboot = ref(false), confirming = ref(false);
   const message = ref('手动检查 GitHub 正式版；可选择包含预览版。'), kind = ref('');
+  let initialized = false, channelRevision = 0;
   const supported = computed(() => info.verified.value && !info.mismatch.value);
   const available = computed(() => !!release.value && supported.value && compareVersions(release.value.version,info.version.value) > 0);
   const canInstall = computed(() => supported.value && !!ready.value && versionParts(ready.value) && compareVersions(ready.value,info.version.value)>0 && !reboot.value);
   const status = (text, type = '') => { message.value = text; kind.value = type; };
   const remember = task => { try { task ? storage?.setItem(KEY,JSON.stringify(task)) : storage?.removeItem(KEY); } catch { /* unavailable storage */ } };
+  function setPreview(value) {
+    preview.value = value === true; save(PREVIEW_KEY, preview.value); channelRevision++;
+    release.value = null; confirming.value = false;
+    if (!busy.value) status('更新渠道已切换，请重新检查更新。');
+  }
+  function setAutoCheck(value) {
+    autoCheck.value = value === true; save(AUTO_KEY, autoCheck.value);
+    if (autoCheck.value && initialized && !reboot.value) void check();
+  }
+  async function loadReleaseNotes(force = false) {
+    if (notesLoading.value || (latestRelease.value && !force)) return;
+    notesLoading.value = true; notesError.value = '';
+    try {
+      const result = await api.command('--module-release-notes');
+      if (!life.active) return;
+      if (result.code) throw new Error('无法读取 GitHub 发布日志，请检查网络或稍后重试。');
+      const value = latestReleaseNotes(JSON.parse(result.stdout));
+      if (!value) throw new Error('GitHub 暂无可用的发布日志。');
+      latestRelease.value = value;
+    } catch (error) { if (life.active) { latestRelease.value = null; notesError.value = error instanceof SyntaxError ? 'GitHub 发布日志格式无效，请稍后重试。' : error.message; } }
+    finally { notesLoading.value = false; }
+  }
   async function state() {
     const result = await api.command('--module-update-status');
     if (result.code) throw new Error(result.stderr || '无法读取模块更新状态');
@@ -23,18 +52,19 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
   }
   async function check() {
     if (checking.value || busy.value) return;
+    const channel = preview.value, revision = channelRevision;
     checking.value = true; release.value = null; confirming.value = false;
     status('正在检查 GitHub Release…');
     try {
-      const result = await api.command(`--module-update-check ${preview.value ? 'preview' : 'stable'}`);
-      if (!life.active) return;
-      if (result.code) throw new Error('检查失败：GitHub 不可达、请求限流或尚无正式版，请稍后重试或打开发布页。');
-      const selected = selectRelease(JSON.parse(result.stdout),preview.value);
-      if (!selected) throw new Error('未找到包含有效安装包与校验和的版本，请查看发布页。');
+      const result = await api.command(`--module-update-check ${channel ? 'preview' : 'stable'}`);
+      if (!life.active || revision !== channelRevision) return;
+      if (result.code) throw new Error('检查失败：网络不可达、GitHub 请求限流或尚无正式版，请稍后重试。');
+      const selected = selectRelease(JSON.parse(result.stdout),channel);
+      if (!selected) throw new Error('暂未找到包含有效安装包与校验和的版本。');
       release.value = selected;
       if (!supported.value) status('已获取发布信息；请在匹配的已安装模块界面中下载或安装。','warning');
       else status(available.value ? `发现 v${selected.version}${selected.preview ? ' 预览版' : ''}，可下载并校验。` : '当前已是最新版本或比发布版本更新。',available.value ? 'success' : '');
-    } catch (error) { if (life.active) status(error.message,'error'); }
+    } catch (error) { if (life.active && revision === channelRevision) status(error instanceof SyntaxError ? '更新信息格式无效，请稍后重试。' : error.message,'error'); }
     finally { checking.value = false; }
   }
   async function observe(task) {
@@ -99,6 +129,13 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
     } catch (error) { if (life.active) status(error.message,'error'); }
     finally { busy.value = false; }
   }
-  return { preview,checking,busy,release,ready,reboot,confirming,message,kind,supported,available,canInstall,
-    check,download: () => start(false),install: () => start(true),resume };
+  async function initialize() {
+    if (initialized) return;
+    initialized = true;
+    await resume();
+    if (life.active && autoCheck.value && !reboot.value && kind.value !== 'error') await check();
+  }
+  return { preview,autoCheck,checking,busy,release,ready,reboot,confirming,message,kind,supported,available,canInstall,
+    notesLoading,latestRelease,notesError,loadReleaseNotes,setPreview,setAutoCheck,
+    check,download: () => start(false),install: () => start(true),resume,initialize };
 }

@@ -187,18 +187,18 @@ std::string ready_version(const std::string &directory) {
     auto digest = receipt_digest(directory,version);
     return !digest.empty() && verify_package(directory+"/package.zip",digest).empty() ? version : "";
 }
-int release_info(bool preview) {
+static int release_response(bool preview, bool notes) {
     net_curl_init();
     std::string body;
     bool limited = false;
     bool metadata = false;
     std::string error;
-    if (!preview) {
+    if (!preview && !notes) {
         error = download_prefix(std::string(REPO)+"/releases/latest/download/update.json",body,limited,32768);
         metadata = error.empty();
     }
-    if (preview || !error.empty())
-        error = download_prefix(std::string(API)+(preview ? "?per_page=3" : "/latest"),body,limited,32768);
+    if (notes || preview || !error.empty())
+        error = download_prefix(std::string(API)+(notes ? "?per_page=1" : preview ? "?per_page=3" : "/latest"),body,limited,32768);
     if (error.empty() && limited) error = "Release 信息超过 32 KiB，请打开项目发布页查看";
     net_curl_shutdown();
     if (!error.empty()) {
@@ -211,6 +211,8 @@ int release_info(bool preview) {
     else printf("%s\n",body.c_str());
     return 0;
 }
+int release_info(bool preview) { return release_response(preview,false); }
+int release_notes() { return release_response(false,true); }
 int worker(const std::string &version, bool install) {
     if (!newer_version(version,MODULE_VERSION)) { log_line("模块更新","版本不是可用的新版本"); return 1; }
     if (!private_directory(DIRECTORY)) return 1;

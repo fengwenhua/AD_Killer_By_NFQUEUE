@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <string>
 int main(int argc, char **argv) {
+    if (argc == 2 && std::string(argv[1]) == "notes")
+        return module_update::release_notes();
     if (argc == 3 && std::string(argv[1]) == "check")
         return module_update::release_info(std::string(argv[2]) == "preview");
     if (argc != 4 || std::string(argv[1]) != "download") return 2;

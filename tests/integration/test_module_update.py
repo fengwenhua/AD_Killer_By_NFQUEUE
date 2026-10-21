@@ -31,6 +31,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.endswith('update.json'):
             content = json.dumps({'version': 'v1.1'}).encode()
+        elif self.path == '/api?per_page=1':
+            content = json.dumps([{'tag_name': 'v1.1', 'body': 'Notes from GitHub Release'}]).encode()
         elif self.path.endswith('.sha256'):
             content = (('0'*64 if self.server.corrupt else DIGEST)+'  '+NAME+'\n').encode()
         elif self.path.endswith('.zip'):
@@ -78,6 +80,8 @@ def main():
             command('--install')
             before = (DATA/'state.conf').read_bytes()
             assert json.loads(command('--module-update-check', 'stable'))['update']['version'] == 'v1.1'
+            assert json.loads(command('--module-release-notes')) == [{'tag_name': 'v1.1', 'body': 'Notes from GitHub Release'}]
+            command('--module-release-notes', 'unexpected', success=False)
             command('--module-update-download', '1.0', success=False)
             command('--module-update-download', '../bad', success=False)
             job('--module-update-install', success=False)

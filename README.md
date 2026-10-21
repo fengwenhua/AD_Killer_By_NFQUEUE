@@ -34,7 +34,7 @@
 
 运行数据保存在 `/data/adb/AD_Killer_By_NFQUEUE/`。规则源最多支持 64 个普通 HTTP(S) 地址，另提供默认停用的 HaGeZi Pro − Fake 内置来源。
 
-v1.1 支持在“设置 → 关于模块”手动检查更新、后台下载校验并确认安装；默认检查正式版，可选择包含预览版。安装成功后需手动重启。从 v1.0 首次升级需在根管理器中手动安装 v1.1 ZIP。
+在“设置 → 检查更新”中下载校验并确认安装，可选预览版与自动检查；自动检查默认关闭，不自动安装。更新日志读取 GitHub 最新 Release。安装后需手动重启，v1.0 首次升级需在根管理器中手动刷入完整 ZIP。
 
 ## 本地构建
 
@@ -42,7 +42,7 @@ v1.1 支持在“设置 → 关于模块”手动检查更新、后台下载校�
 
 ```bash
 NDK=/path/to/android-ndk ./build.sh
-python3 tests/verify_checksum.py dist/AD_Killer_By_NFQUEUE-v1.1.zip
+python3 tests/verify_checksum.py dist/AD_Killer_By_NFQUEUE-v1.2.zip
 ```
 
 构建产物位于 `dist/`。版本号仅在 [`module/module.prop`](module/module.prop) 中维护。

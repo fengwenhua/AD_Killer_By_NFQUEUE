@@ -2,11 +2,9 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import UiIcon from '../components/UiIcon.vue';
 import ActionButton from '../components/ActionButton.vue';
-import { releaseNotes } from '../domain/module.js';
+import SettingSwitch from '../components/SettingSwitch.vue';
 import { PREVIEW_MIN, PREVIEW_MAX } from '../composables/useUiPreferences.js';
-import { RELEASES_URL } from '../domain/updates.js';
 const props = defineProps({ moduleInfo: Object, preferences: Object, updates: Object });
-const releases = releaseNotes(props.moduleInfo.build);
 const active = ref(''), root = ref(null), heading = ref(null);
 const scrolled = ref(false);
 let scrollPane;
@@ -18,6 +16,7 @@ onMounted(() => {
 onBeforeUnmount(() => scrollPane?.removeEventListener('scroll', trackScroll));
 const entries = [
   { id: 'preview', title: '内容预览', icon: 'rules' },
+  { id: 'updates', title: '检查更新', icon: 'download' },
   { id: 'releases', title: '更新日志', icon: 'sync' },
   { id: 'about', title: '关于模块', icon: 'info' },
 ];
@@ -30,6 +29,7 @@ async function show(id) {
   positions.set(active.value, pane.scrollTop);
   if (id) lastEntry = id;
   active.value = id;
+  if (id === 'releases') void props.updates.loadReleaseNotes();
   const current = ++revision;
   await nextTick();
   if (current !== revision || !root.value) return;
@@ -48,12 +48,15 @@ async function show(id) {
       <h1 ref="heading" tabindex="-1">{{ entries.find(entry => entry.id === active)?.title || '设置' }}</h1>
     </div>
     <div v-show="!active" id="settingsMenu" class="card settings-menu" role="group" aria-label="设置项目">
-      <button v-for="entry in entries" :key="entry.id" type="button" class="settings-entry" :data-settings-entry="entry.id" :aria-controls="'settings-' + entry.id" @click="show(entry.id)">
-        <span class="settings-entry-icon"><UiIcon :name="entry.icon" /></span>
-        <span class="settings-entry-label">{{ entry.title }}</span>
-        <span class="settings-entry-value">{{ entry.id === 'preview' ? preferences.characters + ' 字符' : entry.id === 'releases' ? '最近 ' + releases.length + ' 次' : 'v' + moduleInfo.version }}</span>
-        <UiIcon name="chevron" />
-      </button>
+      <template v-for="entry in entries" :key="entry.id">
+        <SettingSwitch v-if="entry.id === 'updates'" id="autoCheckUpdate" class="settings-auto" label="自动检查更新" help="打开界面时检查，不自动下载或安装" :checked="updates.autoCheck" @change="updates.setAutoCheck" />
+        <button type="button" class="settings-entry" :data-settings-entry="entry.id" :aria-controls="'settings-' + entry.id" @click="show(entry.id)">
+          <span class="settings-entry-icon"><UiIcon :name="entry.icon" /></span>
+          <span class="settings-entry-label">{{ entry.title }}</span>
+          <span class="settings-entry-value">{{ entry.id === 'preview' ? preferences.characters + ' 字符' : entry.id === 'updates' ? (updates.checking ? '检查中…' : updates.available ? '发现新版本' : '手动检查') : entry.id === 'releases' ? '最新发布' : 'v' + moduleInfo.version }}</span>
+          <UiIcon name="chevron" />
+        </button>
+      </template>
     </div>
     <div v-show="!!active" class="settings-detail">
       <section v-show="active === 'preview'" id="settings-preview" class="card preview-settings" aria-labelledby="previewSettingsTitle">
@@ -65,41 +68,45 @@ async function show(id) {
           <p id="previewSettingsStatus" class="sync-note" :data-kind="preferences.error ? 'error' : 'success'" role="status">{{ preferences.error || preferences.message }}</p>
         </form>
       </section>
+      <section v-show="active === 'updates'" id="settings-updates" class="card update-card" aria-labelledby="updateTitle">
+        <div class="section-heading"><h2 id="updateTitle">检查更新</h2><span class="badge">v{{ moduleInfo.version }}</span></div>
+        <p class="subtle update-intro">检查新版本，下载校验后由你确认安装。</p>
+        <SettingSwitch id="updatePreview" label="包含预览版" help="关闭时只检查正式版；预览版可能尚不稳定" :checked="updates.preview" :disabled="updates.busy || updates.checking" @change="updates.setPreview" />
+        <div class="update-status" :data-kind="updates.kind" :aria-busy="updates.checking || updates.busy">
+          <span class="update-status-icon"><UiIcon :name="updates.reboot ? 'info' : updates.available ? 'download' : 'shield'" /></span>
+          <div><b>{{ updates.reboot ? '等待重启' : updates.checking ? '正在检查' : updates.busy ? '正在处理' : updates.available ? '有新版本可用' : '版本检查' }}</b><p id="moduleUpdateStatus" role="status">{{ updates.message }}</p></div>
+        </div>
+        <div class="update-actions">
+          <ActionButton id="getUpdate" icon="sync" variant="primary" :busy="updates.checking" :disabled="updates.busy" @click="updates.check">{{ updates.checking ? '检查中…' : '检查更新' }}</ActionButton>
+          <ActionButton v-if="updates.available && !updates.reboot" id="downloadModuleUpdate" icon="download" :busy="updates.busy && !updates.canInstall" :disabled="updates.busy || updates.checking" @click="updates.download">下载并校验</ActionButton>
+          <ActionButton v-if="updates.canInstall && !updates.confirming" id="installModuleUpdate" icon="download" :busy="updates.busy" :disabled="updates.busy || updates.checking" @click="updates.confirming = true">安装 v{{ updates.ready }}</ActionButton>
+        </div>
+        <div v-if="updates.confirming" class="update-confirm" role="group" aria-label="确认安装模块">
+          <p>将通过根管理器安装 v{{ updates.ready }}，安装完成后需手动重启设备。</p>
+          <div class="update-actions"><ActionButton id="confirmModuleInstall" variant="primary" :busy="updates.busy" @click="updates.install">确认安装</ActionButton><button type="button" class="btn" :disabled="updates.busy" @click="updates.confirming = false">取消</button></div>
+        </div>
+      </section>
       <div v-show="active === 'about'" id="settings-about"><section id="aboutModule" class="card about-card" aria-labelledby="aboutTitle">
         <div class="section-heading"><h2 id="aboutTitle">关于模块</h2><UiIcon name="info" /></div>
-        <div class="about-identity"><span class="about-mark"><UiIcon name="shield" /></span><h3>AD_Killer_By_NFQUEUE</h3></div>
+        <div class="about-identity"><span class="about-mark"><UiIcon name="shield" /></span><div class="about-brand"><h3>AD Killer</h3><span class="brand-subtitle">by NFQUEUE</span></div></div>
         <p class="about-description">系统级域名过滤模块，采用 Linux NFQUEUE 与本地 C++ 引擎。</p>
         <dl class="module-facts">
           <div><dt>模块版本</dt><dd id="aboutVersion">v{{ moduleInfo.version }} <span class="subtle">({{ moduleInfo.versionCode }})</span></dd></div>
-          <div><dt>版本来源</dt><dd id="versionSource">{{ moduleInfo.verified ? '已读取本机模块' : '随包界面版本 · 未核实引擎' }}</dd></div>
-          <div><dt>界面版本</dt><dd>v{{ moduleInfo.build.version }}</dd></div>
-          <div><dt>作者</dt><dd>{{ moduleInfo.build.author }}</dd></div>
+          <div><dt>作者</dt><dd><a href="https://github.com/fengwenhua" target="_blank" rel="noopener noreferrer">fengwenhua <UiIcon name="external" /></a></dd></div>
           <div><dt>数据目录</dt><dd><code>/data/adb/AD_Killer_By_NFQUEUE/</code></dd></div>
         </dl>
         <p v-if="moduleInfo.mismatch" id="versionMismatch" class="sync-note" data-kind="warning" role="status">模块与界面版本不一致，请重新安装匹配的完整模块包。</p>
-        <div class="module-update">
-          <b>模块更新</b>
-          <label class="update-channel"><input id="updatePreview" v-model="updates.preview" type="checkbox" :disabled="updates.busy || updates.checking">包含预览版</label>
-          <p id="moduleUpdateStatus" class="sync-note" :data-kind="updates.kind" role="status">{{ updates.message }}</p>
-          <div class="update-actions">
-            <ActionButton id="getUpdate" icon="sync" :disabled="updates.busy || updates.checking" @click="updates.check">{{ updates.checking ? '检查中…' : '检查更新' }}</ActionButton>
-            <ActionButton v-if="updates.available && !updates.reboot" id="downloadModuleUpdate" icon="download" :disabled="updates.busy || updates.checking" @click="updates.download">下载并校验</ActionButton>
-            <ActionButton v-if="updates.canInstall && !updates.confirming" id="installModuleUpdate" icon="download" :disabled="updates.busy || updates.checking" @click="updates.confirming = true">安装 v{{ updates.ready }}</ActionButton>
-          </div>
-          <div v-if="updates.confirming" class="update-confirm" role="group" aria-label="确认安装模块">
-            <p>将通过根管理器安装 v{{ updates.ready }}，安装完成后需手动重启设备。</p>
-            <div class="update-actions"><button id="confirmModuleInstall" type="button" class="btn primary" :disabled="updates.busy" @click="updates.install">确认安装</button><button type="button" class="btn" @click="updates.confirming = false">取消</button></div>
-          </div>
-          <details v-if="updates.release?.notes"><summary>v{{ updates.release.version }} 发布说明{{ updates.release.preview ? ' · 预览版' : '' }}</summary><pre class="update-notes">{{ updates.release.notes }}</pre></details>
-          <a :href="RELEASES_URL" target="_blank" rel="noopener noreferrer">打开 GitHub 发布页 <UiIcon name="external" /></a>
-        </div>
-        <div class="about-footer"><span>本项目代码 MIT · Vue MIT · GSAP Standard License</span><a href="https://github.com/fengwenhua/AD_Killer_By_NFQUEUE" target="_blank" rel="noopener noreferrer">项目主页 <UiIcon name="external" /></a></div>
+        <p v-else-if="!moduleInfo.verified" id="moduleUnverified" class="sync-note" data-kind="warning">尚未核实已安装模块，暂时显示随包版本。</p>
+        <a class="github-link" href="https://github.com/fengwenhua/AD_Killer_By_NFQUEUE" target="_blank" rel="noopener noreferrer"><span class="github-mark"><UiIcon name="github" /></span><span><b>GitHub</b><small>在GitHub上查看</small></span><UiIcon name="external" /></a>
+        <div class="about-footer">本项目代码 MIT · Vue MIT · GSAP Standard License</div>
       </section></div>
       <div v-show="active === 'releases'" id="settings-releases"><section id="releaseNotes" class="card release-card" aria-labelledby="releaseTitle">
-        <div class="section-heading"><h2 id="releaseTitle">更新日志</h2><span class="badge">随包记录</span></div>
-        <p class="subtle">本地版本记录，不联网检查新版本。</p>
-        <ol class="release-list">
-          <li v-for="release in releases" :key="release.version"><div class="release-heading"><b>v{{ release.version }}</b><span v-if="release.current" class="badge">本界面版本</span></div><h3>{{ release.title }}</h3><ul><li v-for="change in release.changes" :key="change">{{ change }}</li></ul></li>
+        <div class="section-heading"><h2 id="releaseTitle">更新日志</h2><span class="badge">GitHub Release</span></div>
+        <p class="subtle">只显示最新一次发布，包含预览版。</p>
+        <p v-if="updates.notesLoading" class="sync-note" role="status">正在读取 GitHub 发布日志…</p>
+        <div v-else-if="updates.notesError" class="release-error"><p class="sync-note" data-kind="error" role="status">{{ updates.notesError }}</p><ActionButton icon="sync" @click="updates.loadReleaseNotes(true)">重新加载</ActionButton></div>
+        <ol v-if="updates.latestRelease && !updates.notesLoading" class="release-list">
+          <li><div class="release-heading"><b>v{{ updates.latestRelease.version }}</b><span class="badge">{{ updates.latestRelease.preview ? '预览版' : '正式版' }}</span><time v-if="updates.latestRelease.date">{{ updates.latestRelease.date }}</time></div><h3>{{ updates.latestRelease.title }}</h3><pre class="release-body">{{ updates.latestRelease.body || '本次发布未填写更新说明。' }}</pre></li>
         </ol>
       </section></div>
     </div>

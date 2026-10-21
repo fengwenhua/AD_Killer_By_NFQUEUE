@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { effectScope } from 'vue';
-import { parseModuleInfo, releaseNotes } from '../src/domain/module.js';
+import { parseModuleInfo } from '../src/domain/module.js';
 import { useModuleInfo } from '../src/composables/useModuleInfo.js';
 
 const build = { id: 'AD_Killer_By_NFQUEUE', version: '1.0', versionCode: 100, author: 'AD_Killer_By_NFQUEUE contributors' };
@@ -11,10 +11,6 @@ test('version metadata rejects other modules, malformed versions and invalid cod
   const valid = { module: 'AD_Killer_By_NFQUEUE', version: '1.0', versionCode: 100 };
   assert.deepEqual(parseModuleInfo(valid), { version: '1.0', versionCode: 100 });
   for (const bad of [null, { ...valid, module: 'other' }, { ...valid, version: '<img>' }, { ...valid, version: ['1.0'] }, { ...valid, versionCode: '100' }, { ...valid, versionCode: -1 }]) assert.equal(parseModuleInfo(bad), null);
-  assert.equal(releaseNotes(build)[0].version, build.version);
-  assert.equal(releaseNotes(build).length, 1);
-  assert.deepEqual(releaseNotes(build).map(release => release.version), ['1.0']);
-  assert.ok(releaseNotes(build).every(release => release.changes.length));
 });
 
 test('installed version and mismatch are honest; fallback remains available offline and never starts engine', async () => {

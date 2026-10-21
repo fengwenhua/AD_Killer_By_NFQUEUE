@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { effectScope, ref } from 'vue';
-import { compareVersions, parseRelease, selectRelease, RELEASES_URL } from '../src/domain/updates.js';
+import { compareVersions, parseRelease, selectRelease, latestReleaseNotes, RELEASES_URL } from '../src/domain/updates.js';
 import { useModuleUpdate } from '../src/composables/useModuleUpdate.js';
 
 function fixture(version = '1.2', prerelease = false) {
@@ -88,4 +88,74 @@ test('missing persisted job is cleared and recovered package remains explicitly 
   const model=scope.run(()=>useModuleUpdate(api,info(),{log(){}},storage,1));
   try { await model.resume(); assert.equal(values.size,0); assert.equal(model.busy.value,false); assert.match(model.message.value,/记录已不存在/); }
   finally { scope.stop(); }
+});
+
+test('release notes use only the latest published entry, no local history or asset requirement', () => {
+  const newest = {...fixture('1.2',true),name:'Preview',published_at:'2026-10-21T08:00:00Z',assets:[]};
+  const value = latestReleaseNotes([newest,fixture('9.0')]);
+  assert.equal(value.version,'1.2'); assert.equal(value.preview,true);
+  assert.equal(value.title,'Preview'); assert.equal(value.date,'2026-10-21');
+  assert.equal(value.body,newest.body,'external text stays text, not HTML');
+  assert.equal(latestReleaseNotes([{...newest,body:null}]).body,'');
+  for (const bad of [null,[],fixture(),[{...newest,draft:true}],[{...newest,tag_name:null}],[{...newest,html_url:'https://evil.example'}]]) assert.equal(latestReleaseNotes(bad),null);
+});
+
+test('automatic checks are opt-in, persisted, run once on open, and never download/install', async () => {
+  const values=new Map(), commands=[];
+  const storage={getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)};
+  const api={command:async cmd=>{commands.push(cmd); return cmd==='--module-update-status'?ok({version:'',rebootRequired:false}):ok(fixture());}};
+  const scope=effectScope(), model=scope.run(()=>useModuleUpdate(api,info(),{log(){}},storage));
+  try {
+    await model.initialize(); await model.initialize();
+    assert.deepEqual(commands,['--module-update-status']);
+    model.setAutoCheck(true); await Promise.resolve();
+    assert.equal(model.autoCheck.value,true);
+    assert.equal(commands.filter(c=>c.startsWith('--module-update-check')).length,1);
+    model.setPreview(true); assert.equal(model.release.value,null);
+    model.setAutoCheck(false);
+  } finally { scope.stop(); }
+  values.set('ad-killer-by-nfqueue-auto-update-check','true');
+  const other=effectScope(), restored=other.run(()=>useModuleUpdate(api,info(),{log(){}},storage));
+  try {
+    assert.equal(restored.preview.value,true);
+    await restored.initialize(); await restored.initialize();
+    assert.equal(commands.filter(c=>c==='--module-update-check preview').length,1);
+    assert.ok(!commands.some(c=>/--module-update-(download|install)/.test(c)));
+  } finally { other.stop(); }
+});
+
+test('release notes load lazily, cache one result, retry failures and ignore disposed responses', async () => {
+  const scope=effectScope(), commands=[];
+  let result=ok([fixture()]);
+  const model=scope.run(()=>useModuleUpdate({command:async cmd=>{commands.push(cmd);return result;}},info(),{log(){}},null));
+  try {
+    assert.equal(commands.length,0);
+    await model.loadReleaseNotes(); await model.loadReleaseNotes();
+    assert.deepEqual(commands,['--module-release-notes']);
+    assert.equal(model.latestRelease.value.version,'1.2');
+    result={code:1,stdout:'',stderr:'rate limit'};
+    await model.loadReleaseNotes(true); assert.equal(model.latestRelease.value,null); assert.match(model.notesError.value,/无法读取/);
+    result=ok([]); await model.loadReleaseNotes(); assert.match(model.notesError.value,/暂无/);
+    result=ok([{...fixture(),body:''}]); await model.loadReleaseNotes(); assert.equal(model.notesError.value,'');
+    assert.equal(model.latestRelease.value.body,'');
+  } finally { scope.stop(); }
+  let finish;
+  const other=effectScope(), late=other.run(()=>useModuleUpdate({command:()=>new Promise(resolve=>{finish=resolve;})},info(),{log(){}},null));
+  const pending=late.loadReleaseNotes(); assert.equal(late.notesLoading.value,true);
+  other.stop(); finish(ok([fixture()])); await pending; assert.equal(late.latestRelease.value,null);
+});
+
+test('denied preference storage remains usable; overlapping checks and stale channels are guarded', async () => {
+  let finish, count=0;
+  const storage={getItem(){throw Error('denied');},setItem(){throw Error('denied');}};
+  const scope=effectScope(), model=scope.run(()=>useModuleUpdate({command:()=>{count++;return new Promise(resolve=>{finish=resolve;});}},info(),{log(){}},storage));
+  try {
+    assert.equal(model.autoCheck.value,false); model.setAutoCheck(true);
+    assert.equal(model.autoCheck.value,true);
+    const pending=model.check(); assert.equal(model.checking.value,true);
+    await model.check(); assert.equal(count,1);
+    model.setPreview(true); finish(ok(fixture())); await pending;
+    assert.equal(model.checking.value,false); assert.equal(model.release.value,null);
+    assert.match(model.message.value,/渠道已切换/);
+  } finally { scope.stop(); }
 });

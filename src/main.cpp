@@ -1215,6 +1215,7 @@ static void usage() {
             "  AD_Killer_By_NFQUEUE --update-start     创建后台更新 job\n"
             "  AD_Killer_By_NFQUEUE --update-status ID 查询更新 job 状态\n"
             "  AD_Killer_By_NFQUEUE --module-update-check stable|preview 检查模块 Release\n"
+            "  AD_Killer_By_NFQUEUE --module-release-notes 读取 GitHub 最新发布日志\n"
             "  AD_Killer_By_NFQUEUE --module-update-download VERSION 后台下载并校验模块\n"
             "  AD_Killer_By_NFQUEUE --module-update-install VERSION 后台安装已校验模块\n"
             "  AD_Killer_By_NFQUEUE --module-update-status 查询安装包与重启状态\n"
@@ -1251,6 +1252,10 @@ int main(int argc, char **argv) {
         return module_update::release_info(strcmp(argv[2],"preview") == 0);
     }
     if (arg == "--module-update-status") return module_update::status();
+    if (arg == "--module-release-notes") {
+        if (argc != 2) { usage(); return 1; }
+        return module_update::release_notes();
+    }
     if (arg == "--module-update-download" || arg == "--module-update-install") {
         if (geteuid() != 0 || argc != 3 || !module_update::newer_version(argv[2], MODULE_VERSION)) {
             fprintf(stderr,"模块更新需要 root 权限和比当前版本更高的数字版本号\n"); return 1;

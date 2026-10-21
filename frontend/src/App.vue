@@ -35,9 +35,9 @@ const page = ref('home'), mainElement = ref(null), navigationElement = ref(null)
 const { leaving, selected, navigate } = useNavigationMotion(page, mainElement, theme, themeButton);
 const pages = [{ id: 'home', label: '概览', icon: 'home' }, { id: 'apps', label: '应用名单', icon: 'apps' }, { id: 'rules', label: '规则管理', icon: 'rules' }, { id: 'settings', label: '设置', icon: 'settings' }];
 onMounted(async () => {
-  feedback.log('AD_Killer_By_NFQUEUE 控制台已就绪');
+  feedback.log('AD Killer 控制台已就绪');
   await Promise.all([engine.refresh(), custom.load(), sources.load(), moduleInfo.load()]);
-  void moduleUpdate.resume();
+  void moduleUpdate.initialize();
   await apps.load();
   await sync.resume();
   feedback.log(engine.ready ? '已连接引擎接口' : '未连接引擎接口，请在管理器中打开页面', engine.ready ? 'ok' : 'error');
@@ -48,7 +48,7 @@ onMounted(async () => {
   <a class="skip-link" href="#main-content">跳到主要内容</a>
   <header class="appbar">
     <span class="brand-mark"><UiIcon name="shield" /></span>
-    <div class="brand-copy"><b>AD_Killer_By_NFQUEUE<span class="brand-dot">.</span></b></div>
+    <div class="brand-copy"><b>AD Killer</b><span class="brand-subtitle">by NFQUEUE</span></div>
     <button ref="themeButton" class="theme-toggle" type="button" :aria-label="theme === 'dark' ? '切换为浅色主题' : '切换为深色主题'" @click="toggleTheme"><UiIcon :name="theme === 'dark' ? 'sun' : 'moon'" /></button>
   </header>
   <nav ref="navigationElement" class="floating-nav" aria-label="主导航" :style="{ '--tab-index': pages.findIndex(item => item.id === selected) }">

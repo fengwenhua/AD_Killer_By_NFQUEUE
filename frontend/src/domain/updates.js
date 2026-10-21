@@ -1,4 +1,17 @@
 export const RELEASES_URL = 'https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/releases';
+// Notes come from the latest GitHub Release, independently of the installed
+// version and update channel. Never render external HTML or bundled history.
+export function latestReleaseNotes(response) {
+  const value = Array.isArray(response) ? response[0] : null;
+  const version = typeof value?.tag_name === 'string' ? value.tag_name.replace(/^v/, '') : '';
+  if (!value || value.draft !== false || typeof value.prerelease !== 'boolean' ||
+      typeof value.tag_name !== 'string' || !value.tag_name.startsWith('v') || !versionParts(version) ||
+      value.html_url !== `${RELEASES_URL}/tag/v${version}`) return null;
+  return { version, preview: value.prerelease,
+    title: typeof value.name === 'string' ? value.name.slice(0, 200) : `v${version}`,
+    body: typeof value.body === 'string' ? value.body.slice(0, 16000) : '',
+    date: typeof value.published_at === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value.published_at) ? value.published_at.slice(0, 10) : '' };
+}
 export function versionParts(value) {
   return typeof value === 'string' && /^\d{1,6}\.\d{1,6}(?:\.\d{1,6})?$/.test(value)
     ? value.split('.').map(Number).concat([0]).slice(0, 3) : null;

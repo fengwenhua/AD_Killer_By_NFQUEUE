@@ -12,7 +12,7 @@
 // 模块标识
 // ---------------------------------------------------------------------------
 #define MODULE_ID             "AD_Killer_By_NFQUEUE" // 模块唯一 id(KSU 规范:^[a-zA-Z][a-zA-Z0-9._-]+$)
-#define MODULE_DISPLAY_NAME   "AD_Killer_By_NFQUEUE"
+#define MODULE_DISPLAY_NAME   "AD Killer"
 #define DAEMON_ARGV0          "AD_Killer_By_NFQUEUEd"
 #define DAEMON_COMM           "ADK_NFQd" // Linux TASK_COMM_LEN 最多 15 个可见字符
 #ifndef MODULE_VERSION

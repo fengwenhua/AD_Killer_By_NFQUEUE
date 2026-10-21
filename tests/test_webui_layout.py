@@ -33,6 +33,8 @@ window.previewContentDelay = 0;
 window.previewVersion = __VERSION_FIXTURE__;
 window.previewModuleReady = "";
 window.previewModuleReboot = false;
+window.previewModuleCheckDelay = 0;
+window.previewReleaseNotesFails = false;
 window.previewEngineState = "stopped";
 window.previewStartFails = true;
 window.previewStartDelay = 0;
@@ -54,6 +56,10 @@ window.ksu = {
     let text = "", errno = 0;
     if(command.includes(" --version-status")) text = JSON.stringify(previewVersion);
     else if(command.includes(" --module-update-status")) text=JSON.stringify({version:previewModuleReady,rebootRequired:previewModuleReboot});
+    else if(command.includes(" --module-release-notes")) {
+      errno=previewReleaseNotesFails?1:0;
+      text=JSON.stringify([{tag_name:"v9.0",draft:false,prerelease:true,name:"最新发布说明",published_at:"2026-10-21T08:00:00Z",html_url:"https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/releases/tag/v9.0",body:"来自 GitHub Release 的更新日志\n\n- 新版改进\n- 安全显示 <img src=x onerror=alert(1)>"}]);
+    }
     else if(command.includes(" --module-update-check")) {
       const version="9.0", name="AD_Killer_By_NFQUEUE-v9.0.zip", base="https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/releases";
       text=JSON.stringify({tag_name:"v"+version,draft:false,prerelease:false,html_url:base+"/tag/v"+version,body:"测试发布说明 <img src=x onerror=alert(1)>",assets:[{name,size:500,browser_download_url:base+"/download/v"+version+"/"+name},{name:name+".sha256",browser_download_url:base+"/download/v"+version+"/"+name+".sha256"}]});
@@ -103,7 +109,7 @@ window.ksu = {
         "[12:00:00] [更新] 规则 generation 999-111 已原子发布\n")));
       else if(command.includes("update-777-888.log")) text=btoa(unescape(encodeURIComponent("来源接受:Hosts 0 / AdGuard 12 / 拒绝 2\n来源测试通过；仅测试下载和解析，未替换规则或启动引擎")));
     }
-    setTimeout(()=>window[callback](errno,text,""),command.includes(" --sources-save")?previewSaveDelay:command.includes(' --source-preview')?previewContentDelay:command.endsWith(' --start')?previewStartDelay:0);
+    setTimeout(()=>window[callback](errno,text,""),command.includes(" --sources-save")?previewSaveDelay:command.includes(' --source-preview')?previewContentDelay:command.includes(' --module-update-check')?previewModuleCheckDelay:command.endsWith(' --start')?previewStartDelay:0);
   }
 };
 '''
@@ -427,15 +433,16 @@ def motion_and_settings_regression(browser, errors, screenshots):
         expect(page.locator('#settingsMenu')).to_be_visible()
         page.locator('[data-settings-entry="about"]').click()
         expect(page.locator('#aboutVersion')).to_contain_text(VERSION_FIXTURE['version'])
-        expect(page.locator('#versionSource')).to_have_text('已读取本机模块')
-        assert page.locator('#releaseNotes .release-list > li').count() == 1
+        assert page.locator('#versionSource').count() == 0
+        page.locator('#settingsBack').click()
+        page.locator('[data-settings-entry="updates"]').click()
         expect(page.locator('#getUpdate')).to_be_enabled()
         before = page.evaluate('previewCommands.length')
         page.locator('#getUpdate').click()
         expect(page.locator('#moduleUpdateStatus')).to_contain_text('发现 v9.0')
         assert page.evaluate('previewCommands.length') > before
         expect(page.locator('#downloadModuleUpdate')).to_be_enabled()
-        assert page.locator('.module-update img').count() == 0
+        assert page.locator('#settings-updates img').count() == 0
         page.locator('#settingsBack').click()
         assert not any(url.startswith(('http:', 'https:')) for url in requests)
         assert not page.evaluate("previewCommands.some(c=>/ --(?:start|stop|daemon|reload|update-start|sources-save|apps-apply)(?: |$)/.test(c))")
@@ -602,7 +609,7 @@ def settings_and_status_regression(browser, errors, screenshots):
             expect(page.locator('#settingsMenu')).to_be_visible()
             page.wait_for_function("!document.querySelector('main').classList.contains('sliding')")
             assert halo.evaluate('e=>getComputedStyle(e).animationPlayState') == 'paused'
-            assert page.locator('.settings-entry:visible').count() == 3
+            assert page.locator('.settings-entry:visible').count() == 4
             assert not page.locator('#previewCharacters').is_visible()
             assert not page.locator('#aboutModule').is_visible()
             assert not page.locator('#releaseNotes').is_visible()
@@ -624,9 +631,8 @@ def settings_and_status_regression(browser, errors, screenshots):
             expect(page.locator('[data-settings-entry="preview"]')).to_contain_text('850 字符')
             page.locator('[data-settings-entry="releases"]').click()
             expect(page.locator('#releaseNotes')).to_be_visible()
-            assert page.locator('.release-list > li').count() == 1
-            assert page.locator('.release-heading > b').all_text_contents() == [
-                'v' + VERSION_FIXTURE['version']]
+            expect(page.locator('.release-list > li')).to_have_count(1)
+            assert page.locator('.release-heading > b').all_text_contents() == ['v9.0']
             page.locator('#settings').evaluate('e=>e.scrollTop=130')
             saved = page.locator('#settings').evaluate('e=>e.scrollTop')
             page.locator('nav [data-page="apps"]').click()
@@ -672,27 +678,59 @@ def version_fallback_regression(browser, errors):
         expect(page.locator('#moduleVersion')).to_contain_text('v' + (VERSION_FIXTURE['version'] if kind == 'offline' else '1.0.0'))
         page.locator('nav [data-page="settings"]').click()
         page.locator('[data-settings-entry="about"]').click()
-        expect(page.locator('#getUpdate')).to_be_enabled()
         assert page.locator('#downloadModuleUpdate').count() == 0
         if kind == 'offline':
-            expect(page.locator('#versionSource')).to_contain_text('未核实引擎')
+            expect(page.locator('#moduleUnverified')).to_contain_text('尚未核实')
         else:
             expect(page.locator('#versionMismatch')).to_be_visible()
+        page.locator('#settingsBack').click()
+        page.locator('[data-settings-entry="updates"]').click()
+        expect(page.locator('#getUpdate')).to_be_enabled()
         page.close()
 
 
-def module_update_regression(browser, errors):
+def module_update_regression(browser, errors, screenshots=None):
     for width in (320, 393):
         page = browser.new_page(viewport={'width': width, 'height': 852}, reduced_motion='reduce')
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.add_init_script(mock_script())
         page.goto((ROOT / 'module/webroot/index.html').as_uri())
-        expect(page.locator('#versionSource')).to_have_text('已读取本机模块')
+        expect(page.locator('#moduleVersion')).to_contain_text('v' + VERSION_FIXTURE['version'])
         page.locator('nav [data-page="settings"]').click()
         page.locator('[data-settings-entry="about"]').click()
+        assert page.locator('.about-identity h3').inner_text() == 'AD Killer'
+        assert page.locator('#aboutModule').get_by_text('版本来源',exact=True).count() == 0
+        assert page.locator('#aboutModule').get_by_text('界面版本',exact=True).count() == 0
+        author=page.locator('.module-facts a')
+        assert author.get_attribute('href') == 'https://github.com/fengwenhua'
+        assert author.inner_text().strip() == 'fengwenhua'
+        github=page.locator('.github-link')
+        assert github.get_attribute('href') == 'https://github.com/fengwenhua/AD_Killer_By_NFQUEUE'
+        expect(github).to_contain_text('在GitHub上查看')
+        assert github.bounding_box()['height'] >= 76
+        if screenshots:
+            page.screenshot(path=str(screenshots / f'about-v12-{width}.png'))
+        page.locator('#settingsBack').click()
+        assert page.locator('#autoCheckUpdate').is_checked() is False
+        assert page.locator('#settingsMenu').evaluate("e=>Array.from(e.children).map(c=>c.classList.contains('settings-auto')?'auto':c.dataset.settingsEntry).join(',')") == 'preview,auto,updates,releases,about'
+        page.locator('[data-settings-entry="updates"]').click()
         assert not page.evaluate("previewCommands.some(c=>c.includes('--module-update-check'))")
+        switch=page.locator('#updatePreview')
+        assert switch.bounding_box()['width'] == 48
+        assert switch.bounding_box()['height'] == 44
+        switch.check()
+        assert switch.evaluate("e=>getComputedStyle(e,'::after').transform") == 'matrix(1, 0, 0, 1, 18, 0)'
+        assert page.locator('#settings-updates details, #settings-updates a').count() == 0
+        if screenshots:
+            page.screenshot(path=str(screenshots / f'updates-v12-{width}.png'))
+        page.evaluate('previewModuleCheckDelay=700')
         page.locator('#getUpdate').click()
+        expect(page.locator('#getUpdate')).to_have_attribute('aria-busy','true')
+        assert page.locator('#getUpdate').is_disabled()
+        assert 'loading' in page.locator('#getUpdate').get_attribute('class')
+        expect(page.locator('#getUpdate')).to_contain_text('检查中')
         expect(page.locator('#downloadModuleUpdate')).to_be_visible()
+        expect(page.locator('#getUpdate')).to_have_attribute('aria-busy','false')
         assert not page.evaluate("previewCommands.some(c=>c.includes('--module-update-download'))")
         page.locator('#downloadModuleUpdate').click()
         expect(page.locator('#installModuleUpdate')).to_be_visible()
@@ -703,8 +741,41 @@ def module_update_regression(browser, errors):
         page.locator('#confirmModuleInstall').click()
         expect(page.locator('#moduleUpdateStatus')).to_contain_text('安装成功')
         assert page.locator('#installModuleUpdate').count() == 0
+        page.locator('#settingsBack').click()
+        page.evaluate('previewReleaseNotesFails=true')
+        page.locator('[data-settings-entry="releases"]').click()
+        expect(page.locator('.release-error')).to_be_visible()
+        assert page.locator('.release-list > li').count() == 0
+        page.evaluate('previewReleaseNotesFails=false')
+        page.locator('.release-error button').click()
+        expect(page.locator('.release-heading > b')).to_have_text('v9.0')
+        expect(page.locator('.release-body')).to_contain_text('来自 GitHub Release')
+        assert page.locator('.release-list > li').count() == 1
+        assert page.locator('.release-body img').count() == 0
+        if screenshots:
+            page.screenshot(path=str(screenshots / f'release-notes-v12-{width}.png'))
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
         page.close()
+
+    page = browser.new_page(viewport={'width': 393, 'height': 852}, reduced_motion='reduce')
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.add_init_script(mock_script())
+    page.goto((ROOT / 'module/webroot/index.html').as_uri())
+    expect(page.locator('#moduleVersion')).to_contain_text('v' + VERSION_FIXTURE['version'])
+    page.locator('nav [data-page="settings"]').click()
+    page.locator('#autoCheckUpdate').check()
+    page.wait_for_function("previewCommands.some(c=>c.includes('--module-update-check stable'))")
+    page.reload()
+    page.wait_for_function("previewCommands.some(c=>c.includes('--module-update-check stable'))")
+    assert page.evaluate("previewCommands.filter(c=>c.includes('--module-update-check')).length") == 1
+    assert not page.evaluate("previewCommands.some(c=>/--module-update-(download|install)/.test(c))")
+    page.locator('nav [data-page="settings"]').click()
+    expect(page.locator('#autoCheckUpdate')).to_be_checked()
+    page.locator('#autoCheckUpdate').uncheck()
+    page.reload()
+    expect(page.locator('#appList')).to_have_attribute('aria-busy','false')
+    assert not page.evaluate("previewCommands.some(c=>c.includes('--module-update-check'))")
+    page.close()
 
 
 def lazy_sources_and_denied_settings_regression(browser, errors):
@@ -1122,7 +1193,7 @@ def main():
                         page.locator("#source-4").check()
                         assert source_order() == saved_order and page.locator("#saveSources").is_disabled()
                     page.close()
-            module_update_regression(browser, errors)
+            module_update_regression(browser, errors, args.screenshots)
             adaptive_regression(browser, args.screenshots, errors)
             assert not errors, errors
             print("Vue WebUI 52 viewport/theme combinations, offline loading, fold/rotate draft preservation and functional regressions passed")

@@ -14,6 +14,7 @@ std::string download(const std::string &version, const std::string &directory,
                      const Fetch &fetch, const Prefix &prefix);
 std::string ready_version(const std::string &directory);
 int release_info(bool preview);
+int release_notes();
 int worker(const std::string &version, bool install);
 int status();
 }
