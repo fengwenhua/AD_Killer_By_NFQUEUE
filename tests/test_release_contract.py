@@ -28,6 +28,19 @@ def main() -> None:
         "github.ref == 'refs/heads/main'", "contents: write",
         "gh release create", "--prerelease",
     ), "gated prerelease workflow")
+    # These maintained action lines declare runs.using: node24 themselves;
+    # setup-node's node-version only controls the project build runtime.
+    for action, minimum in (
+        ("checkout", 6), ("setup-node", 6), ("setup-python", 6),
+        ("upload-artifact", 6), ("download-artifact", 7),
+    ):
+        refs = re.findall(rf"uses:\s*actions/{action}@([^\s#]+)", workflow)
+        assert refs, f"workflow must exercise actions/{action}"
+        for ref in refs:
+            version = re.fullmatch(r"v(\d+)(?:\.\d+)*", ref)
+            assert version and int(version[1]) >= minimum, (
+                f"actions/{action}@{ref} must use the reviewed Node.js 24+ action line"
+            )
 
     compatibility = (ROOT / "docs/兼容性与协议限制.md").read_text(encoding="utf-8")
     require_all(compatibility, (
