@@ -15,6 +15,23 @@
 - 防断网设计：队列冲突拒绝启动，并使用 fail-open、queue-bypass 和链尾兜底。
 - 可视化管理：WebUI 支持状态、规则源、应用范围、日志和单源测试。
 
+## 界面预览
+
+手机尺寸截图，使用演示数据。
+
+<table>
+  <tr><th>概览</th><th>应用名单</th></tr>
+  <tr>
+    <td><img src="docs/screenshots/overview.png" width="280" alt="手机界面：概览，展示守护状态与本地规则库"></td>
+    <td><img src="docs/screenshots/apps.png" width="280" alt="手机界面：应用名单，展示应用放行选择"></td>
+  </tr>
+  <tr><th>规则管理</th><th>设置</th></tr>
+  <tr>
+    <td><img src="docs/screenshots/rules.png" width="280" alt="手机界面：规则管理，展示开源规则来源"></td>
+    <td><img src="docs/screenshots/settings.png" width="280" alt="手机界面：设置，展示检查更新、更新日志等入口"></td>
+  </tr>
+</table>
+
 ## 环境要求
 
 - Android 12（API 31）及以上。
