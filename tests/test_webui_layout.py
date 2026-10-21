@@ -708,9 +708,17 @@ def module_update_regression(browser, errors, screenshots=None):
         assert page.locator('.about-identity h3').inner_text() == 'AD Killer'
         assert page.locator('#aboutModule').get_by_text('版本来源',exact=True).count() == 0
         assert page.locator('#aboutModule').get_by_text('界面版本',exact=True).count() == 0
-        author=page.locator('.module-facts a')
+        author=page.locator('.module-facts a[href="https://github.com/fengwenhua"]')
         assert author.get_attribute('href') == 'https://github.com/fengwenhua'
         assert author.inner_text().strip() == 'fengwenhua'
+        facts=page.locator('.module-facts > div')
+        assert facts.locator('dt').all_text_contents() == ['模块版本', '作者', '致谢', '数据目录']
+        thanks=facts.filter(has=page.locator('dt', has_text='致谢')).get_by_role('link')
+        assert thanks.inner_text().strip() == '感谢 YH_Hosts'
+        assert thanks.get_attribute('href') == 'https://yhyun.asia/'
+        assert thanks.get_attribute('target') == '_blank'
+        assert set(thanks.get_attribute('rel').split()) >= {'noopener', 'noreferrer'}
+        assert thanks.bounding_box()['height'] >= 44
         github=page.locator('.github-link')
         assert github.get_attribute('href') == 'https://github.com/fengwenhua/AD_Killer_By_NFQUEUE'
         expect(github).to_contain_text('在GitHub上查看')
@@ -953,7 +961,28 @@ ADAPTIVE_VIEWPORTS = (
 
 def adaptive_regression(browser, screenshots, errors):
     """Exercise the compiled artifact offline, with no app internals exported."""
+    def compact_header(page, name, theme):
+        assert page.locator('.appbar').bounding_box()['height'] <= 60, (name, theme, 'oversized header')
+        brand=page.locator('.brand-copy')
+        assert brand.locator('b').inner_text() == 'AD Killer'
+        assert brand.locator('.brand-subtitle').inner_text() == 'by NFQUEUE'
+        assert brand.evaluate('e=>e.scrollWidth <= e.clientWidth'), (name, theme, 'brand overflow')
+        title_y=brand.locator('b').bounding_box()['y']
+        subtitle_y=brand.locator('.brand-subtitle').bounding_box()['y']
+        assert title_y <= subtitle_y < title_y + 10, (name, theme, 'brand must stay on one row')
+        button=page.locator('.theme-toggle').bounding_box()
+        assert button['height'] >= 44 and button['width'] >= 44
+
     for theme in ('light', 'dark'):
+        # Check the header even below the full-page 320px regression baseline;
+        # other page controls may legitimately wrap at this exceptional width.
+        page=browser.new_page(viewport={'width': 280, 'height': 653}, color_scheme=theme)
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.add_init_script(mock_script())
+        page.goto((ROOT / 'module/webroot/index.html').as_uri())
+        expect(page.locator('.brand-copy b')).to_be_visible()
+        compact_header(page, 'minimum-header', theme)
+        page.close()
         for name, width, height in ADAPTIVE_VIEWPORTS:
             page = browser.new_page(viewport={'width': width, 'height': height},
                                     color_scheme=theme, reduced_motion='reduce')
@@ -963,6 +992,7 @@ def adaptive_regression(browser, screenshots, errors):
             page.add_init_script(mock_script())
             page.goto((ROOT / 'module/webroot/index.html').as_uri())
             page.wait_for_function("document.querySelector('#ruleTotal')?.textContent === '186,757'")
+            compact_header(page, name, theme)
             for selector in ('#ruleTotal', '#startLabel', '#stopLabel'):
                 assert page.locator(selector).evaluate('e=>e.getBoundingClientRect().height <= parseFloat(getComputedStyle(e).lineHeight) + 1'), (name, selector, 'text wrapped')
             for tab in ('home', 'apps', 'rules', 'settings'):
@@ -1042,6 +1072,25 @@ def adaptive_regression(browser, screenshots, errors):
     page.close()
 
 
+def quic_setting_regression(browser, errors):
+    # Both fresh-install ON and an existing user's OFF must reflect the native
+    # configuration; the UI must never opt users back in on mount/refresh.
+    for enabled in (True, False):
+        page=browser.new_page(viewport={'width': 320, 'height': 740}, reduced_motion='reduce')
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.add_init_script(mock_script() + f'\npreviewSettings.block_quic={json.dumps(enabled)};')
+        page.goto((ROOT / 'module/webroot/index.html').as_uri())
+        expect(page.locator('#quic')).to_be_checked(checked=enabled)
+        assert not page.evaluate("previewCommands.some(c=>c.includes(' --quic '))")
+        page.locator('#quic').set_checked(not enabled)
+        expect(page.locator('#quic')).to_be_checked(checked=not enabled)
+        page.wait_for_function('expected=>previewSettings.block_quic===expected', arg=not enabled)
+        page.locator('nav [data-page="settings"]').click()
+        page.locator('nav [data-page="home"]').click()
+        expect(page.locator('#quic')).to_be_checked(checked=not enabled)
+        page.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--browser-path")
@@ -1055,6 +1104,7 @@ def main():
         errors = []
         try:
             fixture_regression(browser, errors)
+            quic_setting_regression(browser, errors)
             preview_regression(browser, errors, args.screenshots)
             source_editor_dialog_regression(browser, errors, args.screenshots)
             motion_and_settings_regression(browser, errors, args.screenshots)
@@ -1263,7 +1313,7 @@ def main():
             update_failure_feedback_regression(browser, errors, args.screenshots)
             adaptive_regression(browser, args.screenshots, errors)
             assert not errors, errors
-            print("Vue WebUI 52 viewport/theme combinations, offline loading, fold/rotate draft preservation and functional regressions passed")
+            print("Vue WebUI phone/fold/tablet viewport/theme combinations, offline loading, compact header, QUIC preferences, fold/rotate drafts and functional regressions passed")
         finally:
             browser.close()
 

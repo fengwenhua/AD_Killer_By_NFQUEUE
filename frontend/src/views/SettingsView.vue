@@ -103,6 +103,7 @@ async function show(id) {
         <dl class="module-facts">
           <div><dt>模块版本</dt><dd id="aboutVersion">v{{ moduleInfo.version }} <span class="subtle">({{ moduleInfo.versionCode }})</span></dd></div>
           <div><dt>作者</dt><dd><a href="https://github.com/fengwenhua" target="_blank" rel="noopener noreferrer">fengwenhua <UiIcon name="external" /></a></dd></div>
+          <div><dt>致谢</dt><dd><a href="https://yhyun.asia/" target="_blank" rel="noopener noreferrer">感谢 YH_Hosts <UiIcon name="external" /></a></dd></div>
           <div><dt>数据目录</dt><dd><code>/data/adb/AD_Killer_By_NFQUEUE/</code></dd></div>
         </dl>
         <p v-if="moduleInfo.mismatch" id="versionMismatch" class="sync-note" data-kind="warning" role="status">模块与界面版本不一致，请重新安装匹配的完整模块包。</p>

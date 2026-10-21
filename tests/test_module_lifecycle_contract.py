@@ -27,6 +27,7 @@ def main() -> None:
     assert '"$i" -ge 180 ] && exit 0' in service, "incomplete boot must skip startup"
     assert '"autostart=false\\n"' in main_source, "installation must default to no autostart"
     assert '"enabled=false\\n"' in main_source, "first installation must be paused"
+    assert '"block_quic=true\\n"' in main_source, "first installation must block QUIC by default"
     assert "--autostart" in main_source
     manual_start = main_source.split("static int cmd_start()", 1)[1].split(
         "static int cmd_daemon()", 1

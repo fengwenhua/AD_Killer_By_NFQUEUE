@@ -37,10 +37,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 .sr-only, .skip-link:not(:focus) { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .skip-link:focus { position: fixed; z-index: 20; top: 8px; left: 8px; background: var(--surface); color: var(--text); padding: 12px; }
 .wrap, .appbar { width: 100%; max-width: 1360px; margin-inline: auto; padding-inline: var(--gutter); }
-.appbar { display: flex; flex: none; align-items: center; gap: 12px; padding-block: 25px 28px; }
-.brand-mark { display: grid; place-items: center; width: 44px; height: 44px; flex: none; background: var(--main); color: var(--on-main); border-radius: 16px; box-shadow: 0 5px 14px #5748c720; }
-.brand-copy { flex: 1; min-width: 0; }
-.brand-copy b { display: block; font-size: 22px; letter-spacing: -.8px; line-height: 1.2; }
+.appbar { display: flex; flex: none; align-items: center; gap: 10px; padding-block: 8px; }
+.brand-mark { display: grid; place-items: center; width: 32px; height: 32px; flex: none; background: var(--main); color: var(--on-main); border-radius: 11px; box-shadow: 0 5px 14px #5748c720; }
+.brand-copy { display: flex; flex: 1; min-width: 0; align-items: baseline; flex-wrap: wrap; column-gap: 7px; }
+.brand-copy b { font-size: 18px; letter-spacing: -.5px; line-height: 1.4; white-space: nowrap; }
+.brand-copy .brand-subtitle { font-size: 10px; letter-spacing: 0; white-space: nowrap; }
 .brand-subtitle { display: block; color: var(--muted); font-size: 11px; line-height: 1.6; letter-spacing: .8px; }
 .icon { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .theme-toggle { width: 44px; height: 44px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); color: var(--text); display: grid; place-items: center; flex: none; box-shadow: var(--shadow); }
@@ -229,7 +230,6 @@ nav button.active .icon { stroke-width: 2; }
   .console-card { grid-column: 1/-1; }
 }
 @media (max-height: 600px) and (orientation: landscape) {
-  .appbar { padding-block: 14px; }
   .hero-top { margin-bottom: 16px; }
 }
 

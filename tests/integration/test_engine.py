@@ -180,6 +180,7 @@ def main() -> None:
         command(BINARY, "--install")
         status = json.loads(command(BINARY, "--status-fast").splitlines()[-1])
         assert not status["autostart"] and not status["enabled"]
+        assert status["block_quic"], "fresh installation must enable QUIC rejection"
         command(BINARY, "--autostart", "on")
         assert not (DATA / "daemon.pid").exists(), "boot setting started an engine"
         command(BINARY, "--autostart", "off")
@@ -212,6 +213,9 @@ def main() -> None:
             for port in (53, 80, 443):
                 tcp_inspection(family, port, "safe.example.org", True)
                 tcp_inspection(family, port, "ads.example.com", False)
+            # The installation default must attach working IPv4/IPv6 rejection
+            # routes without requiring an explicit --quic on first.
+            quic_rejection(family)
 
         command(BINARY, "--quic", "on")
         wait_for(lambda: json.loads(command(BINARY, "--status").splitlines()[-1])["iptables_active"],

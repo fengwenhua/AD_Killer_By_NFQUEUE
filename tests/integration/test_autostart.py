@@ -29,6 +29,17 @@ def main():
         conf = DATA / "state.conf"
         first = status()
         assert not first["autostart"] and not first["enabled"] and first["manual_stop"]
+        assert first["block_quic"], "fresh installation must block QUIC by default"
+        for argument, expected in (("off", False), ("on", True), ("off", False)):
+            assert json.loads(command("--quic", argument))["block_quic"] is expected
+            saved = conf.read_text()
+            command("--install")
+            assert conf.read_text() == saved, "reinstall overwrote user QUIC policy"
+            snapshot = status()
+            assert snapshot["block_quic"] is expected and not snapshot["running"]
+            assert not snapshot["enabled"] and snapshot["manual_stop"]
+            assert not (DATA / "runtime.state").exists()
+            assert not (DATA / "daemon.pid").exists()
         for argument, expected in (("on", True), ("1", True), ("off", False), ("0", False)):
             result = json.loads(command("--autostart", argument))
             assert result["autostart"] is expected
@@ -51,7 +62,7 @@ def main():
         assert not status()["autostart"]
         conf.write_text(conf.read_text() + "autostart=garbage\n")
         assert not status()["autostart"]
-        print("autostart CLI defaults, persistence, old-config and no-engine-side-effect tests passed")
+        print("autostart/QUIC defaults, persistence, old-config and no-engine-side-effect tests passed")
     finally:
         if DATA.exists():
             shutil.rmtree(DATA)

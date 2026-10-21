@@ -143,7 +143,7 @@ static int cmd_install() {
                           "mode=2\n"
                           "scope=0\n"
                           "dev_mode=false\n"
-                          "block_quic=false\n"
+                          "block_quic=true\n"
                           "autostart=false\n"
                           "enabled=false\n"
                           "manual_stop=true\n"
