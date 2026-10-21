@@ -79,6 +79,8 @@ cat "$ADK_DATADIR/daemon.pid"
 
 正常守护进程的参数包含 `AD_Killer_By_NFQUEUEd --daemon`；`/proc/PID/comm` 的短名是 `ADK_NFQd`。不同 `ps` 实现显示名称可能不同。如果 `ps` 不支持这些列，可用 `ps -A`，再通过 `/proc` 核实。
 
+一次性或并行 ADB 查询命令自身也可能在参数中包含模块路径。匹配到 `sh`、`su`、`grep` 等检查命令时，需要核对完整参数和实际执行文件，不能仅凭字符串匹配就认定是模块残留。
+
 读取 PID 文件后先做格式检查，再核对实际进程身份：
 
 ```sh
@@ -248,6 +250,7 @@ ls -ld /data/adb/modules/AD_Killer_By_NFQUEUE
 ls -ld /data/adb/modules_update/AD_Killer_By_NFQUEUE
 ls -ld "$ADK_DATADIR"
 ls -l "$ADK_DATADIR/daemon.pid"
+ls -l /data/adb/.AD_Killer_By_NFQUEUE.install.lock
 ```
 
 目录和 PID 文件不存在时，`ls` 报 `No such file or directory` 是相应检查的预期结果，不是整套检查失败。但权限错误不能当成不存在。若进程还在，即使 `readlink /proc/PID/exe` 显示 `(deleted)`，仍属于活跃进程残留，不能只根据模块目录已删除判断完成。
@@ -273,6 +276,7 @@ done
 | IPv4 / IPv6 mangle 表 | 两次完整查询成功，均无 `ADK_NFQ_` 链及引用；系统和其他模块的规则保留 |
 | 已安装目录 / 待更新目录 | 两个模块专属目录均不存在；标记卸载但未重启阶段单独记录 |
 | `daemon.pid` | 正常卸载钩子会删除；残留文件可能是旧记录，需与真实进程区分 |
+| `/data/adb/.AD_Killer_By_NFQUEUE.install.lock` | 安装初始化创建的模块专属空锁文件，当前卸载钩子不删除；文件存在不代表锁仍被持有，要求彻底清理时需单独核实 |
 | `/data/adb/AD_Killer_By_NFQUEUE/` | **当前卸载脚本刻意保留，方便重装复用规则，不属于运行残留** |
 | 日志、规则快照、更新任务记录和下载包 | 可能随数据目录保留；记录体积与隐私影响，不当成活跃进程 |
 | `runtime.state` / `metrics.conf` 等 | 保留数据里的历史快照可以仍显示旧状态；不作为卸载后存活证据 |
@@ -280,6 +284,8 @@ done
 | 网络 | 用户检查常用网页和应用的新连接；涉及 IPv6、VPN、代理时分别说明验证范围 |
 
 `/proc/net/netfilter/nfnetlink_queue` 文件本身仍存在、内核 NFQUEUE 支持仍加载，都不等于本模块残留。正常观察不应尝试卸载内核模块，也不要清空 conntrack；已有连接标记可能暂留至连接结束，缺少本模块规则时不能单独据此判定仍在拦截。
+
+检查安装锁时，可用 `stat -c '%F %s %i' /data/adb/.AD_Killer_By_NFQUEUE.install.lock` 获取类型、大小和 inode，再结合 `/proc/locks` 中的设备号与 inode 核实是否仍有活跃锁。不要把空文件当成活跃安装，也不要在安装或升级进行中删除锁文件。仅在用户明确要求彻底清理且确认未使用后，单独删除这个精确路径，不动共享父目录。
 
 **发现进程或路由残留时先报告证据，再另行确认清理方案。** 本文不提供一键杀进程、清空防火墙或删除数据的命令。若用户要求“彻底删除所有数据”，需额外确认备份与删除范围；管理器卸载不等于数据擦除。
 
