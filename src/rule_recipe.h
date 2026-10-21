@@ -34,3 +34,16 @@ inline std::string default_rule_sources_text() {
     text += std::string("# disabled: ") + HAGEZI_SOURCE_ID + "\n";
     return text;
 }
+
+// Replace only this exact early two-source template. Any user edit, including
+// comments or enablement changes, must be preserved byte-for-byte.
+inline std::string superseded_default_rule_sources_text() {
+    return "# 每行一个规则源 URL,支持 Hosts / AdGuard / gzip(.gz)\n"
+           "# 以下为默认源,可自行增删\n"
+           "https://anti-ad.net/easylist.txt\n"
+           "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt\n";
+}
+
+inline bool should_refresh_default_rule_sources(const std::string &configured) {
+    return configured == superseded_default_rule_sources_text();
+}

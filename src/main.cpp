@@ -170,6 +170,10 @@ static int cmd_install() {
         }
         if (!file_exists(FILE_UPDATE_SOURCES))
             return write_file_atomic(FILE_UPDATE_SOURCES, default_rule_sources_text());
+        std::string configured;
+        if (!read_file(FILE_UPDATE_SOURCES, configured)) return false;
+        if (should_refresh_default_rule_sources(configured))
+            return write_file_atomic(FILE_UPDATE_SOURCES, default_rule_sources_text());
         return true;
     }();
     ok = sources_ok && ok;

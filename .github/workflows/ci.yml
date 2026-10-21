@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -115,3 +116,37 @@ jobs:
           path: |
             dist/AD_Killer_By_NFQUEUE-v*.zip
             dist/AD_Killer_By_NFQUEUE-v*.zip.sha256
+
+  prerelease:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [host-tests, webui-layout, android-build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: AD_Killer_By_NFQUEUE-module
+          path: release
+      - name: Publish versioned prerelease after all checks pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^version=v//p' module/module.prop)
+          tag="v${version}"
+          test -n "$version"
+          test -f "release/AD_Killer_By_NFQUEUE-${tag}.zip"
+          test -f "release/AD_Killer_By_NFQUEUE-${tag}.zip.sha256"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; leaving it unchanged."
+            exit 0
+          fi
+          gh release create "$tag" \
+            "release/AD_Killer_By_NFQUEUE-${tag}.zip" \
+            "release/AD_Killer_By_NFQUEUE-${tag}.zip.sha256" \
+            --target "$GITHUB_SHA" \
+            --title "$tag Preview" \
+            --notes "Automated preview built from commit $GITHUB_SHA after the complete CI suite passed. Review it before marking it as the latest stable release." \
+            --prerelease

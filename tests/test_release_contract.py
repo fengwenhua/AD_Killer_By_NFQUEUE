@@ -22,6 +22,13 @@ def main() -> None:
     require_all(license_text, ("MIT License", "Copyright", "THE SOFTWARE IS PROVIDED"),
                 "LICENSE")
 
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    require_all(workflow, (
+        "needs: [host-tests, webui-layout, android-build]",
+        "github.ref == 'refs/heads/main'", "contents: write",
+        "gh release create", "--prerelease",
+    ), "gated prerelease workflow")
+
     compatibility = (ROOT / "docs/兼容性与协议限制.md").read_text(encoding="utf-8")
     require_all(compatibility, (
         "arm64-v8a", "API 31", "NFQUEUE", "DoH", "DoT", "ECH", "QUIC",

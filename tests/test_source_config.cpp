@@ -9,6 +9,14 @@ int main() {
     assert(default_rule_recipe().size() == 13);
     assert(parse_rule_sources(default_rule_sources_text(), entries, error, true));
     assert(entries.size() == 14 && entries.back().url == HAGEZI_SOURCE_ID && !entries.back().enabled);
+    assert(superseded_default_rule_sources_text() ==
+           "# 每行一个规则源 URL,支持 Hosts / AdGuard / gzip(.gz)\n"
+           "# 以下为默认源,可自行增删\n"
+           "https://anti-ad.net/easylist.txt\n"
+           "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt\n");
+    assert(should_refresh_default_rule_sources(superseded_default_rule_sources_text()));
+    assert(!should_refresh_default_rule_sources(default_rule_sources_text()));
+    assert(!should_refresh_default_rule_sources("# custom\nhttps://example.org/user\n"));
     for (const auto &source : default_rule_recipe()) {
         assert(std::string(source.url).find("hagezi") == std::string::npos);
         assert(recipe_source_format(source.url) != SourceFormat::AUTO);

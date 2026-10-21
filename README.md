@@ -46,6 +46,7 @@ python3 tests/verify_checksum.py dist/AD_Killer_By_NFQUEUE-v1.0.zip
 ```
 
 构建产物位于 `dist/`。版本号仅在 [`module/module.prop`](module/module.prop) 中维护。
+`main` 分支的完整 CI 全部通过后会自动发布对应版本的 prerelease，经人工验证后再在 GitHub 转为正式版。
 
 ## 测试
 
