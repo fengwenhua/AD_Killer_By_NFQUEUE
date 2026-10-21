@@ -16,8 +16,14 @@ def command(*args):
     return subprocess.check_output([BINARY, *args], text=True)
 
 
+def command_json(*args):
+    # CLI commands may print timestamped log lines before their final JSON
+    # response, just as --status-fast and the WebUI's lastJson parser expect.
+    return json.loads(command(*args).splitlines()[-1])
+
+
 def status():
-    return json.loads(command("--status-fast").splitlines()[-1])
+    return command_json("--status-fast")
 
 
 def main():
@@ -31,7 +37,7 @@ def main():
         assert not first["autostart"] and not first["enabled"] and first["manual_stop"]
         assert first["block_quic"], "fresh installation must block QUIC by default"
         for argument, expected in (("off", False), ("on", True), ("off", False)):
-            assert json.loads(command("--quic", argument))["block_quic"] is expected
+            assert command_json("--quic", argument)["block_quic"] is expected
             saved = conf.read_text()
             command("--install")
             assert conf.read_text() == saved, "reinstall overwrote user QUIC policy"
@@ -41,7 +47,7 @@ def main():
             assert not (DATA / "runtime.state").exists()
             assert not (DATA / "daemon.pid").exists()
         for argument, expected in (("on", True), ("1", True), ("off", False), ("0", False)):
-            result = json.loads(command("--autostart", argument))
+            result = command_json("--autostart", argument)
             assert result["autostart"] is expected
             snapshot = status()
             assert snapshot["autostart"] is expected and not snapshot["running"]
