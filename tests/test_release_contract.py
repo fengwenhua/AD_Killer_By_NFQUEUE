@@ -28,6 +28,13 @@ def main() -> None:
         "github.ref == 'refs/heads/main'", "contents: write",
         "gh release create", "--prerelease",
     ), "gated prerelease workflow")
+    require_all(workflow, (
+        "RELEASE_CHANNEL=preview", "tests/test_release_channels.py",
+        "tests/test_webui_update_channels.py", "name: AD_Killer_By_NFQUEUE-module-preview",
+    ), "separate stable/preview build gates")
+    assert workflow.count("name: AD_Killer_By_NFQUEUE-module-preview") == 2, (
+        "automatic prerelease must download the marked preview artifact"
+    )
     # These maintained action lines declare runs.using: node24 themselves;
     # setup-node's node-version only controls the project build runtime.
     for action, minimum in (

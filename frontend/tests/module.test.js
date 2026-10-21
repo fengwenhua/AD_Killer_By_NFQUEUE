@@ -9,7 +9,10 @@ const ok = value => ({ code: 0, stdout: JSON.stringify(value), stderr: '' });
 
 test('version metadata rejects other modules, malformed versions and invalid codes', () => {
   const valid = { module: 'AD_Killer_By_NFQUEUE', version: '1.0', versionCode: 100 };
-  assert.deepEqual(parseModuleInfo(valid), { version: '1.0', versionCode: 100 });
+  assert.deepEqual(parseModuleInfo(valid), { version: '1.0', versionCode: 100, releaseChannel: 'unknown' });
+  assert.equal(parseModuleInfo({...valid,releaseChannel:'preview'}).releaseChannel,'preview');
+  assert.equal(parseModuleInfo({...valid,releaseChannel:'stable'}).releaseChannel,'stable');
+  assert.equal(parseModuleInfo({...valid,releaseChannel:'other'}),null);
   for (const bad of [null, { ...valid, module: 'other' }, { ...valid, version: '<img>' }, { ...valid, version: ['1.0'] }, { ...valid, versionCode: '100' }, { ...valid, versionCode: -1 }]) assert.equal(parseModuleInfo(bad), null);
 });
 

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { effectScope, ref } from 'vue';
-import { compareVersions, parseRelease, selectRelease, latestReleaseNotes, RELEASES_URL } from '../src/domain/updates.js';
+import { compareVersions, parseRelease, selectRelease, latestReleaseNotes, RELEASES_URL, upgradeAllowed } from '../src/domain/updates.js';
 import { useModuleUpdate } from '../src/composables/useModuleUpdate.js';
 
 function fixture(version = '1.2', prerelease = false) {
@@ -12,6 +12,70 @@ function fixture(version = '1.2', prerelease = false) {
 }
 const ok = value => ({code:0,stdout:JSON.stringify(value),stderr:''});
 const info = () => ({verified:ref(true),mismatch:ref(false),version:ref('1.1')});
+
+test('same-version preview upgrades to stable, never in reverse or downwards; unknown stays honest', () => {
+  for (const channel of ['stable','preview','unknown']) {
+    assert.equal(upgradeAllowed({version:'1.2.2',preview:false},'1.2.2',channel),channel==='preview');
+    assert.equal(upgradeAllowed({version:'1.2.2',preview:true},'1.2.2',channel),false);
+    assert.equal(upgradeAllowed({version:'1.2.2',preview:false},'1.2.1',channel),true);
+    assert.equal(upgradeAllowed({version:'1.2.1',preview:false},'1.2.2',channel),false);
+  }
+  for (const releases of [[fixture('1.2.2',true),fixture('1.2.2')],[fixture('1.2.2'),fixture('1.2.2',true)]])
+    assert.equal(selectRelease(releases,true).preview,false);
+  const metadata={module:'AD_Killer_By_NFQUEUE',version:'v1.2.2',versionCode:12200,releaseChannel:'preview',sha256:'a'.repeat(64),
+    zipUrl:`${RELEASES_URL}/download/v1.2.2/AD_Killer_By_NFQUEUE-v1.2.2.zip`,changelog:`${RELEASES_URL}/download/v1.2.2/changelog.md`};
+  assert.equal(selectRelease({update:metadata},false),null);
+  assert.equal(selectRelease({update:metadata},true).preview,true);
+});
+
+test('same-version stable download, explicit install and reboot resume retain channel', async () => {
+  const module={...info(),version:ref('1.2.2'),releaseChannel:ref('preview')};
+  const scope=effectScope(), commands=[], values=new Map();
+  const storage={getItem:key=>values.get(key),setItem:(key,value)=>values.set(key,value),removeItem:key=>values.delete(key)};
+  let ready='', reboot=false;
+  const api={command:async command=>{
+    commands.push(command);
+    if(command.startsWith('--module-update-check')) return ok(fixture('1.2.2'));
+    if(command==='--module-update-status') return ok({version:ready,channel:'stable',rebootRequired:reboot});
+    if(command.startsWith('--module-update-download')) {ready='1.2.2';return ok({status:'started',job_id:'123-456'});}
+    if(command.startsWith('--module-update-install')) {reboot=true;return ok({status:'started',job_id:'124-456'});}
+    return ok({status:'success',exit_code:0});
+  },readJob:async()=>''};
+  const model=scope.run(()=>useModuleUpdate(api,module,{log(){}},storage,1));
+  try {
+    await model.check(); assert.equal(model.available.value,true); assert.match(model.message.value,/预览版升级正式版/);
+    await model.download(); assert.equal(model.canInstall.value,true); assert.equal(model.readyChannel.value,'stable');
+    await model.install(); assert.equal(model.reboot.value,true); assert.equal(model.canInstall.value,false);
+    assert.ok(commands.includes('--module-update-download 1.2.2'));
+    assert.ok(commands.includes('--module-update-install 1.2.2'));
+    await model.resume(); assert.match(model.message.value,/重启/);
+    module.releaseChannel.value='stable'; reboot=false;
+    await model.resume(); assert.equal(model.canInstall.value,false);
+    await model.check(); assert.equal(model.available.value,false); assert.match(model.message.value,/正式版/);
+    module.releaseChannel.value='unknown';
+    await model.check(); assert.equal(model.available.value,false); assert.equal(model.kind.value,'warning');
+    assert.match(model.message.value,/未记录发布渠道/);
+  } finally {scope.stop();}
+});
+
+test('preview download preserves selected channel and unknown cached channel cannot install', async () => {
+  const scope=effectScope(), commands=[];
+  let ready='', channel='preview';
+  const api={command:async command=>{
+    commands.push(command);
+    if(command.startsWith('--module-update-check')) return ok(fixture('1.2.2',true));
+    if(command==='--module-update-status') return ok({version:ready,channel,rebootRequired:false});
+    if(command.startsWith('--module-update-download')) {ready='1.2.2';return ok({status:'started',job_id:'123-456'});}
+    return ok({status:'success',exit_code:0});
+  },readJob:async()=>''};
+  const model=scope.run(()=>useModuleUpdate(api,info(),{log(){}},null,1));
+  try {
+    model.setPreview(true); await model.check(); await model.download();
+    assert.ok(commands.includes('--module-update-download 1.2.2 preview'));
+    assert.equal(model.canInstall.value,true);
+    channel='unknown'; await model.resume(); assert.equal(model.canInstall.value,false); assert.match(model.message.value,/重新检查并下载/);
+  } finally {scope.stop();}
+});
 
 test('release policy validates exact repository assets, bounds, draft/preview and numeric versions', () => {
   assert.equal(compareVersions('1.10','1.9'),1);

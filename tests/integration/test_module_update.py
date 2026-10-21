@@ -19,7 +19,7 @@ MANAGER = Path('/data/adb/ksud')
 NAME = 'AD_Killer_By_NFQUEUE-v1.1.zip'
 buffer = io.BytesIO()
 with zipfile.ZipFile(buffer, 'w') as archive:
-    archive.writestr('module.prop', 'id=AD_Killer_By_NFQUEUE\nversion=v1.1\nversionCode=110\n')
+    archive.writestr('module.prop', 'id=AD_Killer_By_NFQUEUE\nversion=v1.1\nversionCode=110\nreleaseChannel=stable\n')
 PACKAGE = buffer.getvalue()
 DIGEST = hashlib.sha256(PACKAGE).hexdigest()
 
@@ -59,19 +59,21 @@ def main():
     base = f'http://127.0.0.1:{server.server_port}'
     with tempfile.TemporaryDirectory(prefix='adk_module_update_cli_') as temporary:
         binary = Path(temporary)/'AD_Killer_By_NFQUEUE'
-        subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-O1', '-pthread', '-Wall', '-Wextra', '-Werror',
-                        '-DMODULE_VERSION="1.0"', '-DMODULE_VERSION_CODE=100',
+        def build(target, version, code, channel):
+            subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-O1', '-pthread', '-Wall', '-Wextra', '-Werror',
+                        f'-DMODULE_VERSION="{version}"', f'-DMODULE_VERSION_CODE={code}', f'-DMODULE_RELEASE_CHANNEL="{channel}"',
                         '-DADK_NFQ_TEST_CURL_LIBRARY="libcurl.so.4"', '-DADK_NFQ_TEST_CURL_PROGRAM="/usr/bin/curl"',
                         f'-DADK_NFQ_TEST_RELEASE_REPO="{base}"', f'-DADK_NFQ_TEST_RELEASE_API="{base}/api"',
-                        '-I'+str(ROOT/'src'), *map(str, sorted((ROOT/'src').glob('*.cpp'))), '-ldl', '-lz', '-o', str(binary)], check=True)
+                        '-I'+str(ROOT/'src'), *map(str, sorted((ROOT/'src').glob('*.cpp'))), '-ldl', '-lz', '-o', str(target)], check=True)
+        build(binary, '1.0', 100, 'stable')
 
         def command(*args, success=True):
             result = subprocess.run([str(binary), *args], capture_output=True, text=True, timeout=25)
             assert (result.returncode == 0) == success, (args, result.stdout, result.stderr)
             return result.stdout
 
-        def job(action, success=True):
-            data = json.loads(command(action, '1.1'))
+        def job(action, success=True, channel=None):
+            data = json.loads(command(action, '1.1', *([channel] if channel else [])))
             assert data['status'] == 'started'
             for _ in range(200):
                 state = json.loads(command('--update-status', data['job_id']))
@@ -100,6 +102,9 @@ def main():
             server.api_status = 200
             command('--module-update-download', '1.0', success=False)
             command('--module-update-download', '../bad', success=False)
+            command('--module-update-download', '1.1', 'invalid', success=False)
+            # A release flag must never let a stable ZIP masquerade as preview.
+            job('--module-update-download', success=False, channel='preview')
             job('--module-update-install', success=False)
             job('--module-update-download')
             state = json.loads(command('--module-update-status'))
@@ -131,7 +136,21 @@ def main():
                 path.unlink()
             assert (DATA/'state.conf').read_bytes() == before
             assert not (DATA/'daemon.pid').exists()
-            print('real module-update CLI/jobs, download, tamper rejection, fake manager argv and reboot state passed')
+            # Same number: only an identified preview build may install stable.
+            preview_binary = Path(temporary)/'AD_Killer_By_NFQUEUE-preview'
+            build(preview_binary, '1.1', 109, 'preview')
+            binary = preview_binary
+            assert json.loads(command('--version-status'))['releaseChannel'] == 'preview'
+            command('--module-update-download', '1.1', 'preview', success=False)
+            command('--module-update-download', '1.0', success=False)
+            job('--module-update-download')
+            same = json.loads(command('--module-update-status'))
+            assert same['version'] == '1.1' and same['channel'] == 'stable' and not same['rebootRequired']
+            MANAGER.write_text('#!/bin/sh\nexit 0\n')
+            MANAGER.chmod(0o700)
+            job('--module-update-install')
+            assert json.loads(command('--module-update-status'))['rebootRequired'], 'same-version stable installation must wait for reboot'
+            print('real module-update CLI/jobs, channel identity, same-version promotion, tamper rejection, manager argv and reboot state passed')
         finally:
             MANAGER.unlink(missing_ok=True)
             Path('/data/adb/apd').unlink(missing_ok=True)

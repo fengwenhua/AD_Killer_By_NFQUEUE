@@ -5,6 +5,7 @@
 #include "exclusive_file_lock.h"
 #include "source_config.h"
 #include "sha256.h"
+#include "module_package.h"
 
 #include <array>
 #include <cerrno>
@@ -50,14 +51,18 @@ bool private_directory(const std::string &path) {
     return lstat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode) &&
            st.st_uid == geteuid() && chmod(path.c_str(), 0700) == 0;
 }
-std::string receipt_digest(const std::string &directory, std::string &version) {
+std::string receipt_digest(const std::string &directory, std::string &version, std::string &channel) {
     std::string receipt;
     if (!read_file((directory+"/ready").c_str(), receipt) || receipt.size() > 128) return "";
     size_t separator = receipt.find('\n');
     if (separator == std::string::npos) return "";
     version = receipt.substr(0, separator);
-    auto digest = receipt.substr(separator+1);
-    if (!digest.empty() && digest.back() == '\n') digest.pop_back();
+    size_t end = receipt.find('\n', separator+1);
+    if (end == std::string::npos) return "";
+    auto digest = receipt.substr(separator+1, end-separator-1);
+    auto tail = receipt.substr(end+1);
+    channel = tail == "stable\n" ? "stable" : tail == "preview\n" ? "preview" : "unknown";
+    if (!tail.empty() && channel == "unknown") return "";
     return valid_version(version) && valid_digest(digest) ? digest : "";
 }
 std::string install_package(const std::string &path) {
@@ -127,6 +132,14 @@ bool newer_version(const std::string &candidate, const std::string &installed) {
     return valid_version(candidate) && valid_version(installed) &&
            version_parts(candidate) > version_parts(installed);
 }
+bool upgrade_allowed(const std::string &candidate, const std::string &installed,
+                     const std::string &installed_channel, const std::string &candidate_channel) {
+    if (candidate_channel != "stable" && candidate_channel != "preview") return false;
+    if (!valid_version(candidate) || !valid_version(installed)) return false;
+    const auto order = version_parts(candidate);
+    const auto current = version_parts(installed);
+    return order > current || (order == current && installed_channel == "preview" && candidate_channel == "stable");
+}
 std::string package_name(const std::string &version) {
     return valid_version(version) ? "AD_Killer_By_NFQUEUE-v"+version+".zip" : "";
 }
@@ -161,7 +174,7 @@ std::string verify_package(const std::string &path, const std::string &digest) {
     close(fd);
     return hash.finish()==digest ? "" : "SHA-256 校验失败，禁止安装";
 }
-std::string download(const std::string &version, const std::string &directory, const Fetch &fetch, const Prefix &prefix) {
+std::string download(const std::string &version, const std::string &directory, const Fetch &fetch, const Prefix &prefix, bool preview) {
     if (!valid_version(version)) return "版本号非法";
     if (!private_directory(directory)) return "无法创建私有模块更新目录";
     const std::string package = directory+"/package.zip", staged = directory+"/candidate.zip";
@@ -178,14 +191,19 @@ std::string download(const std::string &version, const std::string &directory, c
     if (error.empty()) error = verify_package(staged,checksum.substr(0,64));
     if (error.empty() && rename(staged.c_str(),package.c_str()) != 0) error = "保存安装包失败";
     unlink(staged.c_str());
-    if (error.empty() && !write_file_atomic((directory+"/ready").c_str(),version+"\n"+checksum.substr(0,64)+"\n"))
+    if (error.empty() && !write_file_atomic((directory+"/ready").c_str(),version+"\n"+checksum.substr(0,64)+"\n"+(preview ? "preview\n" : "stable\n")))
         error = "保存安装包校验记录失败";
     return error;
 }
 std::string ready_version(const std::string &directory) {
-    std::string version;
-    auto digest = receipt_digest(directory,version);
+    std::string version, channel;
+    auto digest = receipt_digest(directory,version,channel);
     return !digest.empty() && verify_package(directory+"/package.zip",digest).empty() ? version : "";
+}
+std::string ready_channel(const std::string &directory) {
+    std::string version, channel;
+    auto digest = receipt_digest(directory,version,channel);
+    return !digest.empty() && verify_package(directory+"/package.zip",digest).empty() ? channel : "unknown";
 }
 static int release_response(bool preview, bool notes) {
     net_curl_init();
@@ -223,32 +241,40 @@ static int release_response(bool preview, bool notes) {
 }
 int release_info(bool preview) { return release_response(preview,false); }
 int release_notes() { return release_response(false,true); }
-int worker(const std::string &version, bool install) {
-    if (!newer_version(version,MODULE_VERSION)) { log_line("模块更新","版本不是可用的新版本"); return 1; }
+int worker(const std::string &version, bool install, bool preview) {
+    const std::string channel = preview ? "preview" : "stable";
+    if (!upgrade_allowed(version,MODULE_VERSION,MODULE_RELEASE_CHANNEL,channel)) { log_line("模块更新","版本或发布渠道不是可用的升级"); return 1; }
     if (!private_directory(DIRECTORY)) return 1;
     ExclusiveFileLock lock(DATA_DIR "/.module-update.lock");
     if (!lock.ok()) { log_line("模块更新","已有下载或安装正在运行"); return 1; }
     std::string error;
     if (install) {
         if (ready_version(DIRECTORY) != version) error = "安装包未下载或校验失败，请重新下载";
-        else error = install_package(std::string(DIRECTORY)+"/package.zip");
+        else if (ready_channel(DIRECTORY) != channel) error = "安装包渠道未核实或与请求不一致，请重新下载";
+        else {
+            error = validate_module_identity(std::string(DIRECTORY)+"/package.zip",version,channel,MODULE_VERSION_CODE);
+            if (error.empty()) error = install_package(std::string(DIRECTORY)+"/package.zip");
+        }
         if (error.empty() && !write_file_atomic((std::string(DIRECTORY)+"/installed").c_str(),version))
             error = "安装已返回成功，但无法记录重启状态，请检查管理器";
     } else {
         unlink((std::string(DIRECTORY)+"/installed").c_str());
         net_curl_init();
-        error = download(version,DIRECTORY,download_file,download_prefix);
+        error = download(version,DIRECTORY,download_file,download_prefix,preview);
         net_curl_shutdown();
+        if (error.empty()) error = validate_module_identity(std::string(DIRECTORY)+"/package.zip",version,channel,MODULE_VERSION_CODE);
+        if (!error.empty()) unlink((std::string(DIRECTORY)+"/ready").c_str());
     }
     log_line("模块更新","%s",error.empty() ? (install ? "安装成功，请手动重启设备生效" : "下载完成，SHA-256 校验通过") : error.c_str());
     return error.empty() ? 0 : 1;
 }
 int status() {
     std::string ready = ready_version(DIRECTORY), installed;
+    std::string channel = ready_channel(DIRECTORY);
     read_file((std::string(DIRECTORY)+"/installed").c_str(),installed);
-    printf("{\"version\":%s,\"path\":%s,\"rebootRequired\":%s}\n",
-           source_json_string(ready).c_str(),source_json_string(ready.empty() ? "" : std::string(DIRECTORY)+"/package.zip").c_str(),
-           !ready.empty() && ready==installed && newer_version(ready,MODULE_VERSION) ? "true" : "false");
+    printf("{\"version\":%s,\"channel\":%s,\"path\":%s,\"rebootRequired\":%s}\n",
+           source_json_string(ready).c_str(),source_json_string(channel).c_str(),source_json_string(ready.empty() ? "" : std::string(DIRECTORY)+"/package.zip").c_str(),
+           !ready.empty() && ready==installed && upgrade_allowed(ready,MODULE_VERSION,MODULE_RELEASE_CHANNEL,channel) ? "true" : "false");
     return 0;
 }
 }

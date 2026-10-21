@@ -67,6 +67,7 @@ jobs:
           npm --prefix frontend test
           npm --prefix frontend run build
           python3 tests/test_webui_contract.py module/webroot/index.html
+          RELEASE_CHANNEL=preview npm --prefix frontend run build -- --outDir ../dist/webui-channel-preview
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
@@ -76,6 +77,8 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Phone, foldable and tablet layout and interaction regression
         run: python tests/test_webui_layout.py --screenshots dist/webui-preview
+      - name: Same-version preview to stable browser upgrade regression
+        run: python tests/test_webui_update_channels.py
       - name: Bounded viewport and stable navigation stress regression
         run: |
           python tests/test_webui_performance.py --verify
@@ -118,6 +121,21 @@ jobs:
             dist/AD_Killer_By_NFQUEUE-v*.zip.sha256
             dist/update.json
             dist/changelog.md
+      - name: Build separately marked preview package
+        run: RELEASE_CHANNEL=preview NDK="$ANDROID_HOME/ndk/26.3.11579264" ./build.sh
+      - name: Validate preview package and channel separation
+        run: |
+          python3 tests/validate_module_zip.py dist/preview/AD_Killer_By_NFQUEUE-v*.zip
+          python3 tests/verify_checksum.py dist/preview/AD_Killer_By_NFQUEUE-v*.zip
+          python3 tests/test_release_channels.py dist
+      - uses: actions/upload-artifact@v6
+        with:
+          name: AD_Killer_By_NFQUEUE-module-preview
+          path: |
+            dist/preview/AD_Killer_By_NFQUEUE-v*.zip
+            dist/preview/AD_Killer_By_NFQUEUE-v*.zip.sha256
+            dist/preview/update.json
+            dist/preview/changelog.md
 
   prerelease:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -130,7 +148,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v7
         with:
-          name: AD_Killer_By_NFQUEUE-module
+          name: AD_Killer_By_NFQUEUE-module-preview
           path: release
       - name: Publish versioned prerelease after all checks pass
         env:

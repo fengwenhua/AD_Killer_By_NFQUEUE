@@ -206,6 +206,10 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" \
     -o "$BUILD_DIR/test_module_update"
 "$BUILD_DIR/test_module_update"
 
+${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" \
+    "$ROOT/tests/test_module_package.cpp" -lz -o "$BUILD_DIR/test_module_package"
+"$BUILD_DIR/test_module_package"
+
 ${CXX:-c++} $COMPILE_FLAGS \
     -I"$ROOT/src" \
     "$ROOT/tests/test_rule_bundle.cpp" \

@@ -14,6 +14,8 @@ def generate(package: Path, notes: Path):
     with zipfile.ZipFile(package) as archive:
         props = dict(line.split('=', 1) for line in archive.read('module.prop').decode().splitlines() if '=' in line)
     version = props['version'].removeprefix('v')
+    if props.get('releaseChannel', 'stable') not in ('stable', 'preview'):
+        raise ValueError('invalid release channel')
     if props['id'] != 'AD_Killer_By_NFQUEUE' or not re.fullmatch(r'\d{1,6}\.\d{1,6}(?:\.\d{1,6})?', version):
         raise ValueError('invalid module identity or version')
     name = f'AD_Killer_By_NFQUEUE-v{version}.zip'
@@ -24,6 +26,7 @@ def generate(package: Path, notes: Path):
         raise ValueError('package checksum mismatch')
     url = f'{REPO}/releases/download/v{version}/'
     metadata = {'version': f'v{version}', 'versionCode': int(props['versionCode']),
+                'releaseChannel': props.get('releaseChannel', 'stable'),
                 'zipUrl': url+name, 'changelog': url+'changelog.md',
                 'sha256': digest, 'module': props['id'],
                 'notes': notes.read_text(encoding='utf-8')[:8000]}

@@ -6,7 +6,10 @@ import { readFileSync } from 'node:fs';
 const properties = Object.fromEntries(readFileSync(new URL('../module/module.prop', import.meta.url), 'utf8')
   .split(/\r?\n/).filter(line => line.includes('=')).map(line => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
 const moduleInfo = { id: properties.id, name: properties.name, author: properties.author,
-  version: properties.version.replace(/^v/, ''), versionCode: Number(properties.versionCode) };
+  version: properties.version.replace(/^v/, ''), versionCode: Number(properties.versionCode),
+  releaseChannel: process.env.RELEASE_CHANNEL || properties.releaseChannel || 'stable' };
+if (!['stable', 'preview'].includes(moduleInfo.releaseChannel)) throw new Error('Invalid release channel');
+if (moduleInfo.releaseChannel === 'preview') moduleInfo.versionCode--;
 if (!/^\d+\.\d+(?:\.\d+)?$/.test(moduleInfo.version) || !Number.isSafeInteger(moduleInfo.versionCode) || moduleInfo.versionCode < 1) throw new Error('Invalid module.prop version');
 const gsapPackage = JSON.parse(readFileSync(new URL('./node_modules/gsap/package.json', import.meta.url), 'utf8'));
 const gsapNotice = readFileSync(new URL('./node_modules/gsap/gsap-core.js', import.meta.url), 'utf8').match(/\/\*![\s\S]*?\*\//)?.[0];

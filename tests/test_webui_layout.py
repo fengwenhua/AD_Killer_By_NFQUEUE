@@ -9,7 +9,7 @@ from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
 PROPERTIES = dict(line.split('=', 1) for line in (ROOT / 'module/module.prop').read_text().splitlines() if '=' in line)
-VERSION_FIXTURE = {'module': PROPERTIES['id'], 'version': PROPERTIES['version'].removeprefix('v'), 'versionCode': int(PROPERTIES['versionCode'])}
+VERSION_FIXTURE = {'module': PROPERTIES['id'], 'version': PROPERTIES['version'].removeprefix('v'), 'versionCode': int(PROPERTIES['versionCode']), 'releaseChannel': PROPERTIES.get('releaseChannel', 'stable')}
 
 
 def luminance(color):

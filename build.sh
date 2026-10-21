@@ -19,11 +19,18 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 VERSION_RAW="$(sed -n 's/^version=//p' "$HERE/module/module.prop")"
 VERSION="${VERSION_RAW#v}"
 VERSION_CODE="$(sed -n 's/^versionCode=//p' "$HERE/module/module.prop")"
+RELEASE_CHANNEL="${RELEASE_CHANNEL:-stable}"
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] ||
-   [[ ! "$VERSION_CODE" =~ ^[0-9]+$ ]]; then
+   [[ ! "$VERSION_CODE" =~ ^[0-9]+$ ]] || [ "$VERSION_CODE" -lt 2 ]; then
   echo "❌ module.prop 的 version/versionCode 非法"
   exit 1
 fi
+case "$RELEASE_CHANNEL" in
+  stable) ;;
+  preview) VERSION_CODE=$((VERSION_CODE - 1)) ;;
+  *) echo "invalid RELEASE_CHANNEL (stable|preview)"; exit 1 ;;
+esac
+export RELEASE_CHANNEL
 
 NDK="${NDK:-$HOME/Library/Android/sdk/ndk/26.3.11579264}"
 if [ ! -d "$NDK" ]; then
@@ -61,6 +68,7 @@ if [ -z "$CXX" ]; then
 fi
 
 DIST="$HERE/dist"
+[ "$RELEASE_CHANNEL" = preview ] && DIST="$DIST/preview"
 BIN="$DIST/AD_Killer_By_NFQUEUE"
 mkdir -p "$DIST"
 
@@ -74,6 +82,7 @@ python3 "$HERE/tests/test_webui_contract.py" "$HERE/module/webroot/index.html"
 echo "[2/4] 编译 AD_Killer_By_NFQUEUE (arm64-v8a)..."
 $CXX -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -fvisibility=hidden \
   -DMODULE_VERSION="\"$VERSION\"" -DMODULE_VERSION_CODE="$VERSION_CODE" \
+  -DMODULE_RELEASE_CHANNEL="\"$RELEASE_CHANNEL\"" \
   -Wl,--gc-sections -ffunction-sections -fdata-sections \
   -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 \
   -static-libstdc++ \
@@ -105,6 +114,7 @@ rm -rf "$PKG"
 mkdir -p "$PKG/webroot"
 cp "$BIN" "$PKG/AD_Killer_By_NFQUEUE"
 cp "$HERE/module/module.prop" "$PKG/"
+python3 "$HERE/scripts/package_channel.py" "$PKG/module.prop" "$RELEASE_CHANNEL" "$VERSION_CODE"
 cp "$HERE/module/service.sh" "$HERE/module/customize.sh" "$HERE/module/uninstall.sh" "$PKG/"
 cp "$HERE/module/webroot/index.html" "$PKG/webroot/"
 cp "$HERE/LICENSE" "$PKG/"

@@ -7,14 +7,17 @@ using Fetch = std::function<std::string(const std::string &, const std::string &
 using Prefix = std::function<std::string(const std::string &, std::string &, bool &, size_t)>;
 bool valid_version(const std::string &version);
 bool newer_version(const std::string &candidate, const std::string &installed);
+bool upgrade_allowed(const std::string &candidate, const std::string &installed,
+                     const std::string &installed_channel, const std::string &candidate_channel);
 std::string package_name(const std::string &version);
 std::string asset_url(const std::string &version);
 std::string verify_package(const std::string &path, const std::string &digest);
 std::string download(const std::string &version, const std::string &directory,
-                     const Fetch &fetch, const Prefix &prefix);
+                     const Fetch &fetch, const Prefix &prefix, bool preview = false);
 std::string ready_version(const std::string &directory);
+std::string ready_channel(const std::string &directory);
 int release_info(bool preview);
 int release_notes();
-int worker(const std::string &version, bool install);
+int worker(const std::string &version, bool install, bool preview = false);
 int status();
 }

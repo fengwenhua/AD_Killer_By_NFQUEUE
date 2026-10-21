@@ -101,7 +101,7 @@ async function show(id) {
         <div class="about-identity"><span class="about-mark"><UiIcon name="shield" /></span><div class="about-brand"><h3>AD Killer</h3><span class="brand-subtitle">by NFQUEUE</span></div></div>
         <p class="about-description">系统级域名过滤模块，采用 Linux NFQUEUE 与本地 C++ 引擎。</p>
         <dl class="module-facts">
-          <div><dt>模块版本</dt><dd id="aboutVersion">v{{ moduleInfo.version }} <span class="subtle">({{ moduleInfo.versionCode }})</span></dd></div>
+          <div><dt>模块版本</dt><dd id="aboutVersion">v{{ moduleInfo.version }} <span class="subtle">{{ moduleInfo.releaseChannel === 'preview' ? '预览版' : moduleInfo.releaseChannel === 'stable' ? '正式版' : '渠道未知' }}</span></dd></div>
           <div><dt>作者</dt><dd><a href="https://github.com/fengwenhua" target="_blank" rel="noopener noreferrer">fengwenhua <UiIcon name="external" /></a></dd></div>
           <div><dt>致谢</dt><dd><a href="https://yhyun.asia/" target="_blank" rel="noopener noreferrer">感谢 YH_Hosts <UiIcon name="external" /></a></dd></div>
           <div><dt>数据目录</dt><dd><code>/data/adb/AD_Killer_By_NFQUEUE/</code></dd></div>

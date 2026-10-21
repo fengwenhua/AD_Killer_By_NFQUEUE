@@ -13,6 +13,7 @@ from package_module import FILES, create_module_zip, write_checksum  # noqa: E40
 from verify_checksum import verify_checksum  # noqa: E402
 from validate_android_elf import validate_android_elf  # noqa: E402
 from release_metadata import generate  # noqa: E402
+from package_channel import stamp  # noqa: E402
 
 
 def test_android_elf() -> None:
@@ -54,6 +55,7 @@ def main() -> None:
     version = properties["version"].removeprefix("v")
     assert version.count(".") in (1, 2)
     assert properties["versionCode"].isdigit()
+    assert properties["releaseChannel"] == "stable"
 
     common = (ROOT / "src/common.h").read_text(encoding="utf-8")
     build = (ROOT / "build.sh").read_text(encoding="utf-8")
@@ -64,6 +66,14 @@ def main() -> None:
         base = Path(directory)
         package = base / "module"
         package.mkdir()
+        staged = base / "channel.prop"
+        staged.write_text(module_prop)
+        stamp(staged, "preview", str(int(properties["versionCode"]) - 1))
+        preview_props = dict(line.split("=", 1) for line in staged.read_text().splitlines() if "=" in line)
+        assert preview_props["releaseChannel"] == "preview"
+        assert int(preview_props["versionCode"]) + 1 == int(properties["versionCode"])
+        assert preview_props["version"] == properties["version"]
+        assert (ROOT / "module/module.prop").read_text() == module_prop
         for name, _ in FILES:
             path = package / name
             path.parent.mkdir(parents=True, exist_ok=True)

@@ -21,6 +21,9 @@
 #ifndef MODULE_VERSION_CODE
 #define MODULE_VERSION_CODE   0
 #endif
+#ifndef MODULE_RELEASE_CHANNEL
+#define MODULE_RELEASE_CHANNEL "unknown"
+#endif
 
 // ---------------------------------------------------------------------------
 // 路径布局

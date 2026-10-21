@@ -906,7 +906,7 @@ static std::string update_job_path(const std::string &job_id, const char *suffix
 }
 
 // 由后端创建唯一任务并脱离 WebUI exec 会话。状态和日志均按 job_id 隔离。
-static int cmd_update_start(const std::string &test_url = "", const std::string &module_version = "", bool install_module = false) {
+static int cmd_update_start(const std::string &test_url = "", const std::string &module_version = "", bool install_module = false, bool module_preview = false) {
     std::string error;
     if (!test_url.empty() && !is_builtin_source(test_url) && !validate_download_url(test_url, &error)) {
         fprintf(stderr, "%s\n", error.c_str());
@@ -962,7 +962,7 @@ static int cmd_update_start(const std::string &test_url = "", const std::string 
             write_file_atomic(state_path.c_str(), finished_update_job_state(1));
             _exit(1);
         }
-        int result = module_version.empty() ? cmd_update(test_url) : module_update::worker(module_version, install_module);
+        int result = module_version.empty() ? cmd_update(test_url) : module_update::worker(module_version, install_module, module_preview);
         write_file_atomic(state_path.c_str(), finished_update_job_state(result));
         _exit(result);
     }
@@ -1123,8 +1123,8 @@ static int cmd_status_fast() {
 // ---------------------------------------------------------------------------
 // --version-status:版本 JSON
 static int cmd_version_status() {
-    printf("{\"module\": \"%s\", \"version\": \"%s\", \"versionCode\": %d}\n",
-           MODULE_ID, MODULE_VERSION, MODULE_VERSION_CODE);
+    printf("{\"module\": \"%s\", \"version\": \"%s\", \"versionCode\": %d, \"releaseChannel\": \"%s\"}\n",
+           MODULE_ID, MODULE_VERSION, MODULE_VERSION_CODE, MODULE_RELEASE_CHANNEL);
     return 0;
 }
 
@@ -1227,8 +1227,8 @@ static void usage() {
             "  AD_Killer_By_NFQUEUE --update-status ID 查询更新 job 状态\n"
             "  AD_Killer_By_NFQUEUE --module-update-check stable|preview 检查模块 Release\n"
             "  AD_Killer_By_NFQUEUE --module-release-notes 读取 GitHub 最新发布日志\n"
-            "  AD_Killer_By_NFQUEUE --module-update-download VERSION 后台下载并校验模块\n"
-            "  AD_Killer_By_NFQUEUE --module-update-install VERSION 后台安装已校验模块\n"
+            "  AD_Killer_By_NFQUEUE --module-update-download VERSION [stable|preview] 后台下载并校验模块\n"
+            "  AD_Killer_By_NFQUEUE --module-update-install VERSION [stable|preview] 后台安装已校验模块\n"
             "  AD_Killer_By_NFQUEUE --module-update-status 查询安装包与重启状态\n"
             "  AD_Killer_By_NFQUEUE --sources-list     读取启用/停用来源 JSON\n"
             "  AD_Killer_By_NFQUEUE --sources-save     从 stdin 校验并原子保存来源\n"
@@ -1268,10 +1268,12 @@ int main(int argc, char **argv) {
         return module_update::release_notes();
     }
     if (arg == "--module-update-download" || arg == "--module-update-install") {
-        if (geteuid() != 0 || argc != 3 || !module_update::newer_version(argv[2], MODULE_VERSION)) {
-            fprintf(stderr,"模块更新需要 root 权限和比当前版本更高的数字版本号\n"); return 1;
+        if (geteuid() != 0 || (argc != 3 && argc != 4) ||
+            (argc == 4 && strcmp(argv[3],"stable") != 0 && strcmp(argv[3],"preview") != 0) ||
+            !module_update::upgrade_allowed(argv[2], MODULE_VERSION, MODULE_RELEASE_CHANNEL, argc == 4 ? argv[3] : "stable")) {
+            fprintf(stderr,"模块更新需要 root 权限及更新版本，或同版本的预览版升级正式版\n"); return 1;
         }
-        return cmd_update_start("",argv[2],arg == "--module-update-install");
+        return cmd_update_start("",argv[2],arg == "--module-update-install",argc == 4 && strcmp(argv[3],"preview") == 0);
     }
     if (arg == "--start")          return cmd_start();
     if (arg == "--stop")           return cmd_stop();

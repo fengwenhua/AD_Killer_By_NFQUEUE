@@ -25,6 +25,14 @@ int main() {
     assert(module_update::newer_version("1.10","1.9"));
     assert(!module_update::newer_version("1.0.0","1.0"));
     assert(!module_update::newer_version("1.0","1.1"));
+    for (const auto &installed : {"stable", "preview", "unknown"}) {
+        assert(module_update::upgrade_allowed("1.2.2","1.2.1",installed,"stable"));
+        assert(module_update::upgrade_allowed("1.2.2","1.2.1",installed,"preview"));
+        assert(!module_update::upgrade_allowed("1.2.1","1.2.2",installed,"stable"));
+        assert(!module_update::upgrade_allowed("1.2.2","1.2.2",installed,"preview"));
+        assert(module_update::upgrade_allowed("1.2.2","1.2.2",installed,"stable") == (std::string(installed)=="preview"));
+    }
+    assert(!module_update::upgrade_allowed("1.2","1.1","preview","unknown"));
     assert(module_update::asset_url("../bad").empty());
     char pattern[] = "/tmp/adk_module_update.XXXXXX";
     char *created = mkdtemp(pattern); assert(created);
@@ -44,6 +52,14 @@ int main() {
     };
     assert(module_update::download("1.2",directory,fetch,prefix).empty());
     assert(module_update::ready_version(directory) == "1.2");
+    assert(module_update::ready_channel(directory) == "stable");
+    assert(module_update::download("1.2",directory,fetch,prefix,true).empty());
+    assert(module_update::ready_channel(directory) == "preview");
+    put(directory/"ready", "1.2\n"+digest+"\ninvalid\n");
+    assert(module_update::ready_version(directory).empty());
+    put(directory/"ready", "1.2\n"+digest+"\n");
+    assert(module_update::ready_version(directory) == "1.2");
+    assert(module_update::ready_channel(directory) == "unknown");
     put(directory/"package.zip", bytes+"tampered");
     assert(module_update::ready_version(directory).empty());
     for (int fault = 0; fault < 5; ++fault) {

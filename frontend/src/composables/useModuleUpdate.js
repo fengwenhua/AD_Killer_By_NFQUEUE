@@ -1,5 +1,5 @@
 import { computed, ref } from 'vue';
-import { selectRelease, latestReleaseNotes, compareVersions, versionParts } from '../domain/updates.js';
+import { selectRelease, latestReleaseNotes, compareVersions, versionParts, upgradeAllowed } from '../domain/updates.js';
 import { lastJson, validJob as validJobId } from '../domain/rules.js';
 import { useLifetime } from './useLifetime.js';
 import { getStorage } from '../services/storage.js';
@@ -14,12 +14,15 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
   const life = useLifetime(), preview = ref(saved(PREVIEW_KEY)), autoCheck = ref(saved(AUTO_KEY));
   const checking = ref(false), busy = ref(false);
   const notesLoading = ref(false), latestRelease = ref(null), notesError = ref('');
-  const release = ref(null), ready = ref(''), reboot = ref(false), confirming = ref(false);
+  const release = ref(null), ready = ref(''), readyChannel = ref('unknown'), reboot = ref(false), confirming = ref(false);
   const message = ref('手动检查 GitHub 正式版；可选择包含预览版。'), kind = ref('');
   let initialized = false, channelRevision = 0;
   const supported = computed(() => info.verified.value && !info.mismatch.value);
-  const available = computed(() => !!release.value && supported.value && compareVersions(release.value.version,info.version.value) > 0);
-  const canInstall = computed(() => supported.value && !!ready.value && versionParts(ready.value) && compareVersions(ready.value,info.version.value)>0 && !reboot.value);
+  const installedChannel = () => info.releaseChannel?.value || 'unknown';
+  const available = computed(() => supported.value && upgradeAllowed(release.value,info.version.value,installedChannel()));
+  const canInstall = computed(() => supported.value && !!ready.value && versionParts(ready.value) &&
+    readyChannel.value !== 'unknown' &&
+    upgradeAllowed({version:ready.value,preview:readyChannel.value==='preview'},info.version.value,installedChannel()) && !reboot.value);
   const status = (text, type = '') => { message.value = text; kind.value = type; };
   const remember = task => { try { task ? storage?.setItem(KEY,JSON.stringify(task)) : storage?.removeItem(KEY); } catch { /* unavailable storage */ } };
   const failure = (result, fallback) => {
@@ -60,7 +63,8 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
     if (result.code) throw new Error(result.stderr || '无法读取模块更新状态');
     const value = lastJson(result.stdout);
     if (!value || typeof value.version !== 'string' || (value.version && !versionParts(value.version))) throw new Error('模块更新状态无效');
-    if (life.active) { ready.value = value.version; reboot.value = value.rebootRequired === true; }
+    if (value.channel !== undefined && !['stable','preview','unknown'].includes(value.channel)) throw new Error('安装包渠道无效，请重新下载');
+    if (life.active) { ready.value = value.version; readyChannel.value = value.channel || 'stable'; reboot.value = value.rebootRequired === true; }
   }
   async function check() {
     if (checking.value || busy.value) return;
@@ -78,7 +82,9 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
       if (!selected) throw new Error('暂未找到包含有效安装包与校验和的版本。');
       release.value = selected;
       if (!supported.value) status('已获取发布信息；请在匹配的已安装模块界面中下载或安装。','warning');
-      else status(available.value ? `发现 v${selected.version}${selected.preview ? ' 预览版' : ''}，可下载并校验。` : '当前已是最新版本或比发布版本更新。',available.value ? 'success' : '');
+      else if (available.value) status(`发现 v${selected.version}${selected.preview ? ' 预览版' : ' 正式版'}${compareVersions(selected.version,info.version.value)===0 ? '（预览版升级正式版）' : ''}，可下载并校验。`,'success');
+      else if (compareVersions(selected.version,info.version.value)===0 && installedChannel()==='unknown') status('版本号相同，但旧包未记录发布渠道，无法确认是否与正式包一致。请手动覆盖安装正式 ZIP，或等待更高版本。','warning');
+      else status(`当前为 v${info.version.value}${installedChannel()==='preview' ? ' 预览版' : installedChannel()==='stable' ? ' 正式版' : ''}，没有可升级版本。`);
     } catch (error) { if (life.active && revision === channelRevision) status(error instanceof SyntaxError ? '更新信息格式无效，请稍后重试。' : error.message,'error'); }
     finally { await finishFeedback(started); checking.value = false; }
   }
@@ -103,6 +109,7 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
         if (value.status !== 'success' || value.exit_code !== 0) throw Object.assign(new Error('模块更新任务失败或中断，请查看诊断日志后重试。'),{terminal:true});
         await state();
         if (task.install ? !reboot.value : ready.value !== task.version) throw Object.assign(new Error('任务结束，但安装包或安装状态未核实，请重新读取状态。'),{terminal:true});
+        if (task.channel && readyChannel.value !== task.channel) throw Object.assign(new Error('下载包渠道与所选发布不一致，请重新下载。'),{terminal:true});
         status(task.install ? '安装成功，请手动重启设备。重启前继续使用当前版本。' : `v${ready.value} 下载完成，SHA-256 校验通过。`,'success');
         return;
       } catch (error) {
@@ -121,11 +128,12 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
     busy.value = true; confirming.value = false;
     status(install ? '正在安装模块，请等待管理器返回结果…' : '正在后台下载并校验安装包…');
     try {
-      const result = await api.command(`--module-update-${install ? 'install' : 'download'} ${version}`);
+      const channel = install ? readyChannel.value : release.value.preview ? 'preview' : 'stable';
+      const result = await api.command(`--module-update-${install ? 'install' : 'download'} ${version}${channel==='preview' ? ' preview' : ''}`);
       if (!life.active) return;
       const value = lastJson(result.stdout);
       if (result.code || value?.status !== 'started' || !validJobId(value.job_id)) throw new Error(result.stderr || '无法创建模块更新任务，请检查当前版本或 root 权限。');
-      const task = { id: value.job_id, version, install };
+      const task = { id: value.job_id, version, install, channel };
       remember(task); await observe(task);
     } catch (error) { if (life.active) status(error.message,'error'); }
     finally { busy.value = false; }
@@ -140,7 +148,8 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
       if (task && validJobId(task.id) && versionParts(task.version) && typeof task.install === 'boolean') {
         status('正在恢复后台模块更新任务…'); await observe(task);
       } else if (reboot.value) status('模块已安装，等待手动重启设备。','success');
-      else if (ready.value) status(`已恢复 v${ready.value} 安装包，SHA-256 校验通过。`,'success');
+      else if (ready.value && readyChannel.value==='unknown') status('旧下载缓存未记录渠道，请重新检查并下载后再安装。','warning');
+      else if (ready.value) status(`已恢复 v${ready.value}${readyChannel.value==='preview' ? ' 预览版' : ' 正式版'}安装包，SHA-256 校验通过。`,'success');
     } catch (error) { if (life.active) status(error.message,'error'); }
     finally { busy.value = false; }
   }
@@ -150,7 +159,7 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
     await resume();
     if (life.active && autoCheck.value && !reboot.value && kind.value !== 'error') await check();
   }
-  return { preview,autoCheck,checking,busy,release,ready,reboot,confirming,message,kind,supported,available,canInstall,
+  return { preview,autoCheck,checking,busy,release,ready,readyChannel,reboot,confirming,message,kind,supported,available,canInstall,
     notesLoading,latestRelease,notesError,loadReleaseNotes,setPreview,setAutoCheck,
     check,download: () => start(false),install: () => start(true),resume,initialize };
 }

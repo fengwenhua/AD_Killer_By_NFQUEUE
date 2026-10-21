@@ -6,5 +6,6 @@ export const BUILD_INFO = typeof __MODULE_INFO__ === 'undefined'
 export function parseModuleInfo(value) {
   if (value?.module !== 'AD_Killer_By_NFQUEUE' || typeof value.version !== 'string' || !/^\d+\.\d+(?:\.\d+)?$/.test(value.version) ||
       !Number.isSafeInteger(value.versionCode) || value.versionCode < 1) return null;
-  return { version: value.version, versionCode: value.versionCode };
+  if (value.releaseChannel !== undefined && !['stable', 'preview', 'unknown'].includes(value.releaseChannel)) return null;
+  return { version: value.version, versionCode: value.versionCode, releaseChannel: value.releaseChannel || 'unknown' };
 }

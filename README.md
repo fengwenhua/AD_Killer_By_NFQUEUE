@@ -59,11 +59,11 @@
 
 ```bash
 NDK=/path/to/android-ndk ./build.sh
-python3 tests/verify_checksum.py dist/AD_Killer_By_NFQUEUE-v1.2.1.zip
+python3 tests/verify_checksum.py dist/AD_Killer_By_NFQUEUE-v1.2.2.zip
 ```
 
 构建产物位于 `dist/`。版本号仅在 [`module/module.prop`](module/module.prop) 中维护。
-`main` 分支的完整 CI 全部通过后会自动发布对应版本的 prerelease，经人工验证后再在 GitHub 转为正式版。
+`main` 分支的完整 CI 全部通过后自动发布预览包；正式发布使用同次 CI 独立构建的正式包，不能只修改 GitHub 的预览标记。
 
 ## 测试
 
