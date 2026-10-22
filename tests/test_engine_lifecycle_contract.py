@@ -74,6 +74,8 @@ def main() -> None:
         assert 'iptables_remove_all()' not in status, 'status must be read-only even after SIGKILL'
     fast = main_source.split('static int cmd_status_fast()', 1)[1].split('// --version-status', 1)[0]
     assert 'iptables_entry_attached()' in fast
+    assert 'pid > 0 && iptables_entry_attached()' in fast, \
+        'a frozen daemon must not hide routes that remain attached'
     firewall = (ROOT / "src/iptables.cpp").read_text(encoding="utf-8")
     assert "-n -S" not in firewall, "numeric listing flags are invalid with list-rules"
 

@@ -1140,7 +1140,9 @@ static int cmd_status_fast() {
     }
     bool dev_on = (dev == "true" || dev == "1");
     bool quic_on = (quic == "true" || quic == "1");
-    const bool attached = running && iptables_entry_attached();
+    // A frozen worker is unhealthy, but its routes can still be installed.
+    // Keep route presence independent from worker health, as --status does.
+    const bool attached = pid > 0 && iptables_entry_attached();
     printf("{\"running\": %s, \"iptables_active\": %s, \"mode\": %d, \"scope\": %d, "
            "\"dev_mode\": %s, \"block_quic\": %s, \"enabled\": %s, \"manual_stop\": %s, \"autostart\": %s, "
            "\"rules_black\": %ld, \"rules_white\": %ld, \"rules_updated_at\": %ld, "
