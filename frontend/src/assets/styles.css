@@ -66,18 +66,19 @@ h2 { font-size: 16px; margin-bottom: 16px; }
 .version-badge { flex: none; border: 1px solid var(--line); background: var(--surface); border-radius: 12px; padding: 7px 10px; font: 600 11px/1.4 ui-monospace, Menlo, monospace; color: var(--main); white-space: nowrap; }
 .eyebrow { font-size: 9px; font-weight: 650; letter-spacing: 1.8px; color: var(--muted); }
 .subtle { color: var(--muted); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
-.hero { background: linear-gradient(125deg, var(--hero), var(--surface)); padding: 26px; position: relative; overflow: hidden; }
+.hero { background: linear-gradient(125deg, var(--hero), var(--surface)); padding: 22px; position: relative; overflow: hidden; }
 .hero[data-state='ok'] { background: linear-gradient(125deg, var(--guard-surface), var(--surface)); border-color: var(--guard-line); }
 .hero[data-state='ok'] .badge { background: var(--guard-badge); }
 .guard-halo { position: absolute; inset: 0; border-radius: 50%; background: var(--ok); opacity: .12; pointer-events: none; animation: guard-breathe 3.6s cubic-bezier(.37, 0, .63, 1) infinite alternate; }
 .page:not([data-active]) .guard-halo { animation-play-state: paused; }
 @keyframes guard-breathe { to { transform: scale(1.18); opacity: .04; } }
-.hero-top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 22px; }
-.hero-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 15px; }
-.hero-heading h2 { min-width: 0; font-size: clamp(23px, 3vw, 29px); letter-spacing: -.8px; line-height: 1.35; margin: 0; }
-.guard-emblem { position: relative; width: 72px; height: 72px; flex: 0 0 72px; display: grid; place-items: center; }
-.guard-core { position: relative; display: grid; place-items: center; width: 56px; height: 56px; border-radius: 50%; background: var(--input); color: var(--muted); }
-.guard-emblem .icon { width: 30px; height: 30px; }
+.hero-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.hero-status-copy { min-width: 0; }
+.hero-status-copy .badge { margin-bottom: 6px; }
+.hero-heading h2 { min-width: 0; font-size: clamp(20px, 2.5vw, 24px); letter-spacing: -.5px; line-height: 1.4; margin: 0; overflow-wrap: anywhere; }
+.guard-emblem { position: relative; width: 56px; height: 56px; flex: 0 0 56px; display: grid; place-items: center; }
+.guard-core { position: relative; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; background: var(--input); color: var(--muted); }
+.guard-emblem .icon { width: 25px; height: 25px; }
 .hero[data-state='ok'] .guard-core { background: var(--ok); color: var(--surface); }
 .hero[data-state='bad'] .guard-core { color: var(--bad); }
 .hero[data-state='warn'] .guard-core { color: var(--warn); }
@@ -90,11 +91,16 @@ h2 { font-size: 16px; margin-bottom: 16px; }
 #stateTitle[data-kind='bad'] { color: var(--bad); }
 #stateTitle[data-kind='warn'] { color: var(--warn); }
 #stateTitle[data-kind='neutral'] { color: var(--muted); }
-#stateDesc { max-width: 42em; min-height: 44px; margin-bottom: 22px; }
-.blocked-summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; padding: 12px 14px; margin-bottom: 18px; border: 1px solid var(--guard-line); background: var(--guard-badge); border-radius: 14px; }
-.blocked-summary > span { font-size: 12px; color: var(--muted); }
-.blocked-summary b { font-size: 28px; line-height: 1.2; color: var(--ok); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.blocked-summary small { flex-basis: 100%; font-size: 10px; color: var(--muted); }
+#stateDesc { max-width: 42em; margin-bottom: 18px; font-size: 12px; }
+.blocked-summary { padding: 16px 0 0; margin-bottom: 20px; border-top: 1px solid var(--guard-line); }
+.blocked-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; font-size: 12px; color: var(--muted); }
+.blocked-period { font-size: 10px; line-height: 1.6; padding: 3px 8px; border-radius: 6px; background: var(--guard-badge); color: var(--ok); }
+.blocked-value { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 5px 0 6px; }
+.blocked-value b { min-width: 0; max-width: 100%; font-size: clamp(34px, 8vw, 42px); line-height: 1.2; letter-spacing: -1px; color: var(--ok); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.blocked-value b.is-long { font-size: clamp(18px, 4.5vw, 26px); letter-spacing: -.5px; }
+.blocked-unit { font-size: 12px; color: var(--muted); }
+.blocked-summary small { display: block; font-size: 11px; line-height: 1.6; color: var(--muted); }
+.blocked-summary small[data-stale='true'] { color: var(--warn); }
 .action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .btn { appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; min-width: 44px; border: 1px solid var(--line); background: var(--input); color: var(--text); border-radius: 15px; padding: 11px 16px; font-size: 14px; font-weight: 600; transition: background .18s, transform .18s; }
 .btn:active { transform: scale(.98); }
@@ -233,10 +239,6 @@ nav button.active .icon { stroke-width: 2; }
   .hero, .sync-card { grid-column: 1; }
   .console-card { grid-column: 1/-1; }
 }
-@media (max-height: 600px) and (orientation: landscape) {
-  .hero-top { margin-bottom: 16px; }
-}
-
 .settings-heading { display: flex; align-items: center; gap: 12px; min-height: 52px; padding-block: 4px; }
 .settings-detail-heading { position: sticky; top: 0; z-index: 1; gap: 10px; min-height: 48px; margin-bottom: 16px; }
 .settings-detail-heading.is-scrolled { background: var(--bg); }
@@ -302,7 +304,9 @@ nav button.active .icon { stroke-width: 2; }
 @media (max-width: 359px) {
   :root { --gutter: 14px; }
   .card { padding: 18px; }
-  .hero { padding: 22px 18px; }
+  .hero { padding: 18px; }
+  .hero .btn { gap: 6px; padding-inline: 8px; }
+  .hero .btn .icon { width: 18px; height: 18px; }
   .rule-section, .console-card { padding: 0; }
   .settings-menu { padding: 0; }
   .rule-section > summary { padding: 18px; gap: 8px; font-size: 14px; }

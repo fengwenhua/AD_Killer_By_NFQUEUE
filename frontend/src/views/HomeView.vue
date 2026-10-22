@@ -11,16 +11,22 @@ defineProps({ engine: Object, sync: Object, apps: Object, feedback: Object, modu
     <div class="page-heading overview-heading"><h1>守护概览</h1><span id="moduleVersion" class="version-badge" :title="moduleInfo.verified ? '已读取本机模块版本' : '随包界面版本，尚未核实引擎版本'">v{{ moduleInfo.version }}<span v-if="!moduleInfo.verified" class="sr-only"> · 界面版本，未核实引擎</span></span></div>
     <div class="home-grid">
       <section class="card hero" :data-state="engine.kind">
-        <div class="hero-top"><span id="stateBadge" class="badge" :class="engine.kind" :data-kind="engine.kind" role="status">{{ engine.badge }}</span></div>
-        <div class="hero-heading"><h2 id="stateTitle" :data-kind="engine.kind">{{ engine.title }}</h2><div class="guard-emblem" aria-hidden="true"><span v-if="engine.running" class="guard-halo" /><span class="guard-core"><UiIcon :name="engine.running ? 'shield' : 'shield-idle'" /></span></div></div>
+        <div class="hero-heading">
+          <div class="hero-status-copy">
+            <span id="stateBadge" class="badge" :class="engine.kind" :data-kind="engine.kind" role="status">{{ engine.badge }}</span>
+            <h2 id="stateTitle" :data-kind="engine.kind">{{ engine.title }}</h2>
+          </div>
+          <div class="guard-emblem" aria-hidden="true"><span v-if="engine.running" class="guard-halo" /><span class="guard-core"><UiIcon :name="engine.running ? 'shield' : 'shield-idle'" /></span></div>
+        </div>
         <p id="stateDesc" class="subtle">{{ engine.description }}</p>
         <div v-if="engine.running" class="blocked-summary" aria-label="本次守护规则命中统计">
-          <span>累计拦截</span><b id="blockedTotal">{{ engine.blockedTotal === null ? '—' : engine.blockedTotal.toLocaleString() }}</b>
-          <small>{{ engine.metricsStale ? '统计暂不可用，保留上次记录' : engine.blockedTotal === null ? '等待统计数据' : '本次守护 · 规则命中次数' }}</small>
+          <div class="blocked-heading"><span>累计拦截</span><span class="blocked-period">本次守护</span></div>
+          <div class="blocked-value"><b id="blockedTotal" :class="{ 'is-long': engine.blockedTotal >= 1000000000 }">{{ engine.blockedTotal === null ? '—' : engine.blockedTotal.toLocaleString() }}</b><span v-if="engine.blockedTotal !== null" class="blocked-unit">次</span></div>
+          <small :data-stale="engine.metricsStale">{{ engine.metricsStale ? '统计暂不可用，保留上次记录' : engine.blockedTotal === null ? '等待统计数据' : '规则命中次数 · 守护重启后重新累计' }}</small>
         </div>
         <div class="action-grid">
-          <ActionButton id="startBtn" variant="primary" icon="play" :busy="engine.action === 'start'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || engine.running" @click="engine.control('start')"><span id="startLabel">{{ engine.action === 'start' ? '启动中…' : '启动守护' }}</span></ActionButton>
-          <ActionButton id="stopBtn" icon="pause" :busy="engine.action === 'stop'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || (!engine.state?.running && !engine.state?.enabled)" @click="engine.control('stop')"><span id="stopLabel">{{ engine.action === 'stop' ? '暂停中…' : '暂停守护' }}</span></ActionButton>
+          <ActionButton id="startBtn" :variant="engine.running ? undefined : 'primary'" icon="play" :busy="engine.action === 'start'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || engine.running" @click="engine.control('start')"><span id="startLabel">{{ engine.action === 'start' ? '启动中…' : '启动守护' }}</span></ActionButton>
+          <ActionButton id="stopBtn" :variant="engine.running ? 'primary' : undefined" icon="pause" :busy="engine.action === 'stop'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || (!engine.state?.running && !engine.state?.enabled)" @click="engine.control('stop')"><span id="stopLabel">{{ engine.action === 'stop' ? '暂停中…' : '暂停守护' }}</span></ActionButton>
         </div>
       </section>
       <section class="card sync-card">

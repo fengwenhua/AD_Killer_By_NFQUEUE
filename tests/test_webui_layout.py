@@ -677,6 +677,53 @@ def settings_and_status_regression(browser, errors, screenshots):
             page.close()
 
 
+def status_card_regression(browser, errors, screenshots=None):
+    """Compact hierarchy, full numeric values and safe actions in both themes."""
+    for width in (280, 320, 393, 744, 1180):
+        for theme in ('light', 'dark'):
+            page = browser.new_page(viewport={'width': width, 'height': 852},
+                                    color_scheme=theme, reduced_motion='reduce')
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.add_init_script(mock_script() + "\npreviewEngineState='running';previewStartFails=false;")
+            page.goto((ROOT / 'module/webroot/index.html').as_uri())
+            expect(page.locator('#blockedTotal')).to_have_text('154')
+            expect(page.locator('#startBtn')).to_be_disabled()
+            expect(page.locator('#stopBtn')).to_be_enabled()
+            assert 'primary' in page.locator('#stopBtn').get_attribute('class').split()
+            assert 'primary' not in page.locator('#startBtn').get_attribute('class').split()
+            assert page.locator('.hero').bounding_box()['height'] < 355, (width, theme)
+            for selector in ('#startLabel', '#stopLabel'):
+                assert page.locator(selector).bounding_box()['height'] < 25, (width, theme, selector)
+            assert page.locator('.guard-emblem').bounding_box()['width'] <= 56
+            if screenshots and width in (320, 393, 1180):
+                page.screenshot(path=str(screenshots / f'status-card-{theme}-{width}.png'))
+            for count in (0, 1234567, 999999999, 1234567890, 9007199254740991, None):
+                page.evaluate('''count=>{
+                    previewMetrics={updated_at:1792610000,block_suffix_hits:count,block_exact_hits:0};
+                }''', count)
+                # Leaving/re-entering the overview starts a fresh read-only poll.
+                page.locator('nav [data-page="apps"]').click()
+                page.locator('nav [data-page="home"]').click()
+                expected = '—' if count is None else f'{count:,}'
+                expect(page.locator('#blockedTotal')).to_have_text(expected)
+                if count is None:
+                    expect(page.locator('.blocked-summary small')).to_have_text('等待统计数据')
+                    expect(page.locator('.blocked-unit')).to_have_count(0)
+                else:
+                    expect(page.locator('.blocked-unit')).to_have_text('次')
+                for selector in ('.hero', '.hero-heading', '.blocked-summary', '.blocked-value', '#blockedTotal'):
+                    assert page.locator(selector).evaluate('e=>e.scrollWidth<=e.clientWidth+1'), (width, theme, count, selector)
+                assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
+            assert not page.evaluate("previewCommands.some(c=>/ --(?:start|stop|daemon|reload|autostart)(?: |$)/.test(c))")
+            page.locator('#stopBtn').click()
+            expect(page.locator('.blocked-summary')).to_have_count(0)
+            expect(page.locator('#stateTitle')).to_have_text('当前未接管网络')
+            assert 'primary' in page.locator('#startBtn').get_attribute('class').split()
+            page.locator('#startBtn').click()
+            expect(page.locator('#stateTitle')).to_have_text('拦截已开启')
+            page.close()
+
+
 def version_fallback_regression(browser, errors):
     # Missing bridge still allows version fallback and local settings; a valid
     # but mismatched binary must not be disguised as the bundled version.
@@ -1114,6 +1161,7 @@ def main():
             motion_and_settings_regression(browser, errors, args.screenshots)
             scroll_and_push_regression(browser, errors)
             settings_and_status_regression(browser, errors, args.screenshots)
+            status_card_regression(browser, errors, args.screenshots)
             version_fallback_regression(browser, errors)
             lazy_sources_and_denied_settings_regression(browser, errors)
             virtual_apps_regression(browser, errors)
