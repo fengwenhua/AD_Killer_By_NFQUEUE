@@ -36,8 +36,12 @@ updateJson=https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/releases/latest/do
 - `ksud module list` 识别到正确 `updateJson`，模块已启用、未待卸载、没有更新等待重启标记。
 - 手机访问原生更新地址返回 HTTP 200，四个标准字段有效；发布前远端也是 `12201`，因此当时没有更高版本可提示。
 - v1.2.3 经[完整 CI](https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/actions/runs/39709528561)通过后[发布为正式 Latest](https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/releases/tag/v1.2.3)。手机从相同原生更新地址读取到 `12301`／stable，HTTP 200，约 1.37 秒；这已高于已装的 `12201`。
-- 原生更新图标与日志弹窗的发布后验收结果待补充；不把上述网络与元数据检查当成完整 UI 验收。
+- 已在 KernelSU 原生模块列表看到 AD Killer 的“更新”按钮及模块页更新提示；无需进入 AD Killer WebUI。
+- 点击该按钮，原生“更新日志”弹窗正常显示“v1.2.3 · 拦截统计与更新缓存”及对应发布说明，提供“取消”和“更新”按钮。点击“取消”后返回模块列表，更新入口仍可用。
+- 取消后仍安装 v1.2.2／`12201`，没有待安装模块目录或更新标记。本次只验收提示、日志与取消流程，未执行手机下载安装或重启。
 - 验收前后模块声明、状态配置、来源及两种应用名单的 SHA-256 均未改变；关闭重开管理器后守护仍运行。本次未自动安装、重启，也未修改用户规则或拦截开关。
+
+原生更新协议门禁提交 `3e10e4a` 的[完整 CI](https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/actions/runs/39710771181)已通过，涵盖实际正式／预览包元数据校验和主机回归。
 
 APatch、Magisk 使用相同标准字段，本轮只有 KernelSU 真机在场；不能据此宣称另外两种管理器也已真机验收。
 
