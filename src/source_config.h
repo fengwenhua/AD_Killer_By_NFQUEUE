@@ -59,7 +59,8 @@ inline bool parse_rule_sources(const std::string &text,
     return true;
 }
 
-// Old/custom URL lists get the immutable built-in row without opting into it.
+// Legacy/custom lists get the immutable row without enabling new downloads.
+// Fresh installs already contain the enabled row from default_rule_sources_text.
 // Omitting it on save cannot delete it or change an existing enabled state.
 inline void retain_builtin_source(std::vector<RuleSource> &entries,
                                   const std::vector<RuleSource> &previous = {}) {

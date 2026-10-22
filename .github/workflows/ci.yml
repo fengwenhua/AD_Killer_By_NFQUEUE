@@ -79,6 +79,8 @@ jobs:
         run: python tests/test_webui_layout.py --screenshots dist/webui-preview
       - name: Same-version preview to stable browser upgrade regression
         run: python tests/test_webui_update_channels.py
+      - name: Mobile counters and persistent update cache regression
+        run: python tests/test_webui_persistent_state.py
       - name: Bounded viewport and stable navigation stress regression
         run: |
           python tests/test_webui_performance.py --verify

@@ -4,6 +4,7 @@ import { lastJson, validJob as validJobId } from '../domain/rules.js';
 import { useLifetime } from './useLifetime.js';
 import { getStorage } from '../services/storage.js';
 import { afterPaint } from '../services/paint.js';
+import { NOTES_CACHE_KEY, CHECK_CACHE_KEY, NOTES_CACHE_TTL, CHECK_CACHE_TTL, readCache, writeCache, dropCache } from '../services/updateCache.js';
 
 const KEY = 'ad-killer-by-nfqueue-module-update';
 const AUTO_KEY = 'ad-killer-by-nfqueue-auto-update-check';
@@ -14,16 +15,35 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
   const life = useLifetime(), preview = ref(saved(PREVIEW_KEY)), autoCheck = ref(saved(AUTO_KEY));
   const checking = ref(false), busy = ref(false);
   const notesLoading = ref(false), latestRelease = ref(null), notesError = ref('');
+  const notesUpdatedAt = ref(0), notesCached = ref(false), checkedAt = ref(0), checkCached = ref(false);
   const release = ref(null), ready = ref(''), readyChannel = ref('unknown'), reboot = ref(false), confirming = ref(false);
   const message = ref('手动检查 GitHub 正式版；可选择包含预览版。'), kind = ref('');
   let initialized = false, channelRevision = 0;
   const supported = computed(() => info.verified.value && !info.mismatch.value);
   const installedChannel = () => info.releaseChannel?.value || 'unknown';
+  const checkKey = channel => `${CHECK_CACHE_KEY}-${channel ? 'preview' : 'stable'}`;
+  const checkContext = () => [info.version.value, info.versionCode?.value ?? '', installedChannel()].join('|');
   const available = computed(() => supported.value && upgradeAllowed(release.value,info.version.value,installedChannel()));
   const canInstall = computed(() => supported.value && !!ready.value && versionParts(ready.value) &&
     readyChannel.value !== 'unknown' &&
     upgradeAllowed({version:ready.value,preview:readyChannel.value==='preview'},info.version.value,installedChannel()) && !reboot.value);
   const status = (text, type = '') => { message.value = text; kind.value = type; };
+  const cachedNotes = readCache(storage,NOTES_CACHE_KEY,NOTES_CACHE_TTL,latestReleaseNotes);
+  if (cachedNotes) { latestRelease.value=cachedNotes.value; notesUpdatedAt.value=cachedNotes.savedAt; notesCached.value=true; }
+  function describeRelease(cached = false) {
+    if (!release.value) return;
+    const selected=release.value, prefix=cached ? '已恢复上次检查：' : '';
+    if (!supported.value) status('已获取发布信息；请在匹配的已安装模块界面中下载或安装。','warning');
+    else if (available.value) status(`${prefix}发现 v${selected.version}${selected.preview ? ' 预览版' : ' 正式版'}${compareVersions(selected.version,info.version.value)===0 ? '（预览版升级正式版）' : ''}，可下载并校验。`,'success');
+    else if (compareVersions(selected.version,info.version.value)===0 && installedChannel()==='unknown') status('版本号相同，但旧包未记录发布渠道，无法确认是否与正式包一致。请手动覆盖安装正式 ZIP，或等待更高版本。','warning');
+    else status(`${prefix}当前为 v${info.version.value}${installedChannel()==='preview' ? ' 预览版' : installedChannel()==='stable' ? ' 正式版' : ''}，没有可升级版本。`);
+  }
+  function restoreCheck() {
+    const cached=readCache(storage,checkKey(preview.value),CHECK_CACHE_TTL,response=>selectRelease(response,preview.value),checkContext());
+    if (!cached) return;
+    release.value=cached.value; checkedAt.value=cached.savedAt; checkCached.value=true;
+    describeRelease(true);
+  }
   const remember = task => { try { task ? storage?.setItem(KEY,JSON.stringify(task)) : storage?.removeItem(KEY); } catch { /* unavailable storage */ } };
   const failure = (result, fallback) => {
     const detail = lastJson(result.stdout)?.message;
@@ -36,14 +56,16 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
   function setPreview(value) {
     preview.value = value === true; save(PREVIEW_KEY, preview.value); channelRevision++;
     release.value = null; confirming.value = false;
+    checkedAt.value=0; checkCached.value=false;
     if (!busy.value) status('更新渠道已切换，请重新检查更新。');
+    if (!busy.value) restoreCheck();
   }
   function setAutoCheck(value) {
     autoCheck.value = value === true; save(AUTO_KEY, autoCheck.value);
     if (autoCheck.value && initialized && !reboot.value) void check();
   }
   async function loadReleaseNotes(force = false) {
-    if (notesLoading.value || (latestRelease.value && !force)) return;
+    if (notesLoading.value || (latestRelease.value && !force && !notesError.value && Date.now()-notesUpdatedAt.value<=NOTES_CACHE_TTL)) return;
     const started = Date.now();
     notesLoading.value = true; notesError.value = '';
     try {
@@ -52,10 +74,12 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
       const result = await api.command('--module-release-notes');
       if (!life.active) return;
       if (result.code) throw new Error(failure(result, '无法读取 GitHub 发布日志，请检查网络或稍后重试。'));
-      const value = latestReleaseNotes(JSON.parse(result.stdout));
+      const response=JSON.parse(result.stdout), value = latestReleaseNotes(response);
       if (!value) throw new Error('GitHub 暂无可用的发布日志。');
       latestRelease.value = value;
-    } catch (error) { if (life.active) { latestRelease.value = null; notesError.value = error instanceof SyntaxError ? 'GitHub 发布日志格式无效，请稍后重试。' : error.message; } }
+      notesUpdatedAt.value=Date.now(); notesCached.value=false;
+      writeCache(storage,NOTES_CACHE_KEY,response);
+    } catch (error) { if (life.active) { notesCached.value=!!latestRelease.value; notesError.value = (error instanceof SyntaxError ? 'GitHub 发布日志格式无效，请稍后重试。' : error.message) + (latestRelease.value ? ' 仍显示上次成功读取的记录。' : ''); } }
     finally { await finishFeedback(started); notesLoading.value = false; }
   }
   async function state() {
@@ -70,7 +94,7 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
     if (checking.value || busy.value) return;
     const channel = preview.value, revision = channelRevision;
     const started = Date.now();
-    checking.value = true; release.value = null; confirming.value = false;
+    checking.value = true; release.value = null; confirming.value = false; checkCached.value=false;
     status('正在检查 GitHub Release…');
     try {
       await paint();
@@ -78,14 +102,12 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
       const result = await api.command(`--module-update-check ${channel ? 'preview' : 'stable'}`);
       if (!life.active || revision !== channelRevision) return;
       if (result.code) throw new Error(failure(result, '检查失败：网络不可达、GitHub 请求限流或尚无正式版，请稍后重试。'));
-      const selected = selectRelease(JSON.parse(result.stdout),channel);
+      const response=JSON.parse(result.stdout), selected = selectRelease(response,channel);
       if (!selected) throw new Error('暂未找到包含有效安装包与校验和的版本。');
       release.value = selected;
-      if (!supported.value) status('已获取发布信息；请在匹配的已安装模块界面中下载或安装。','warning');
-      else if (available.value) status(`发现 v${selected.version}${selected.preview ? ' 预览版' : ' 正式版'}${compareVersions(selected.version,info.version.value)===0 ? '（预览版升级正式版）' : ''}，可下载并校验。`,'success');
-      else if (compareVersions(selected.version,info.version.value)===0 && installedChannel()==='unknown') status('版本号相同，但旧包未记录发布渠道，无法确认是否与正式包一致。请手动覆盖安装正式 ZIP，或等待更高版本。','warning');
-      else status(`当前为 v${info.version.value}${installedChannel()==='preview' ? ' 预览版' : installedChannel()==='stable' ? ' 正式版' : ''}，没有可升级版本。`);
-    } catch (error) { if (life.active && revision === channelRevision) status(error instanceof SyntaxError ? '更新信息格式无效，请稍后重试。' : error.message,'error'); }
+      checkedAt.value=Date.now(); writeCache(storage,checkKey(channel),response,checkContext());
+      describeRelease();
+    } catch (error) { if (life.active && revision === channelRevision) { checkedAt.value=0; dropCache(storage,checkKey(channel)); status(error instanceof SyntaxError ? '更新信息格式无效，请稍后重试。' : error.message,'error'); } }
     finally { await finishFeedback(started); checking.value = false; }
   }
   async function observe(task) {
@@ -124,6 +146,10 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
   }
   async function start(install) {
     if (busy.value || checking.value || !supported.value || (install ? !canInstall.value : !available.value)) return;
+    if (!install && checkCached.value) {
+      await check();
+      if (!life.active || !available.value || kind.value==='error') return;
+    }
     const version = install ? ready.value : release.value.version;
     busy.value = true; confirming.value = false;
     status(install ? '正在安装模块，请等待管理器返回结果…' : '正在后台下载并校验安装包…');
@@ -157,9 +183,10 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
     if (initialized) return;
     initialized = true;
     await resume();
+    if (!reboot.value && kind.value!=='error') restoreCheck();
     if (life.active && autoCheck.value && !reboot.value && kind.value !== 'error') await check();
   }
   return { preview,autoCheck,checking,busy,release,ready,readyChannel,reboot,confirming,message,kind,supported,available,canInstall,
-    notesLoading,latestRelease,notesError,loadReleaseNotes,setPreview,setAutoCheck,
+    notesLoading,latestRelease,notesError,notesUpdatedAt,notesCached,checkedAt,checkCached,loadReleaseNotes,setPreview,setAutoCheck,
     check,download: () => start(false),install: () => start(true),resume,initialize };
 }

@@ -50,7 +50,7 @@ RULE_COUNT=1000000 make benchmark
 - `test_fast_response`：NXDOMAIN 的 ID/问题区/EDNS/压缩指针、TCP RST 序列号、
   双栈 IP/UDP/TCP/ICMP 校验和与大小边界；fuzz 同时覆盖快速响应构造。
 - `test_rules`、`test_rule_stream`、`test_source_validator`：规则语义、流式 gzip、资源上限与快照并发；
-- `test_recipe_parity.py`：13 源共享配方、C++/Python 完整规则内容与计数一致，覆盖
+- `test_recipe_parity.py`：12 个普通源共享配方、C++/Python 完整规则内容与计数一致，覆盖
   显式 Hosts→AdGuard、低比例浏览器列表、gzip、部分失败、非法域名和隔离输出；
 - `test_config_store`、`test_update_job`、`test_rule_bundle`：配置锁、任务状态和原子 generation；
 - `test_data_paths.py`：独立数据路径与共享根目录权限边界；
@@ -120,12 +120,16 @@ HTTP 服务覆盖仅 AdGuard、仅 Hosts、混合来源、暂停时计数更新�
 python3 -m pip install playwright==1.62.0
 python3 -m playwright install chromium
 python3 tests/test_webui_layout.py --screenshots dist/webui-preview
+python3 tests/test_webui_persistent_state.py
 python3 tests/test_webui_performance.py --verify
 ```
 
 可通过 `--browser-path` 指定已有 Chromium。覆盖 320–1024px 共 10 个宽度、
 深浅两主题、导航同级结构、横向溢出、44px 触控、关键颜色对比度及同步结果反馈。
 预览规则数为模拟数据，不是真机同步成功的证明。
+
+`test_webui_persistent_state.py` 验证手机尺寸下的实时拦截计数，以及真正刷新页面后
+更新日志和“有更新”提示的本地缓存恢复；缓存下载前必须重新检查，且不会自动安装。
 
 浏览器测试覆盖四页导航、设置/更新日志、版本显示与离线回退，以及实际
 插值、快速切换后几何归位、运行中 reduced-motion 与草稿保留。静态尺寸断言在

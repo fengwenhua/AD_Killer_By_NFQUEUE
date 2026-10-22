@@ -3,14 +3,14 @@
 ## 使用
 
 “规则 → 开源规则来源”中固定保留一项 **HaGeZi Pro − Fake**。
-默认停用，新装/升级均不会自动加强拦截；普通来源、自定义规则和开机自启策略不变。
+首次安装默认启用。旧安装第一次迁移时启用本组并移除指定 AdRules URL，其他自定义来源内容保留；迁移完成后，后续手动停用本组不会被覆盖。开机自启策略不变，安装时不会自动同步规则。
 支持测试以及启用/停用，不可编辑或删除。启停需保存来源并同步后才改变已发布规则，
 不是停止模块守护，也不是取消一个正在进行的下载任务。
 
 - 唯一标识：`builtin:hagezi-pro-minus-fake`，不是下载 URL。
 - Pro：<https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/pro.txt>
 - Fake：<https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/fake.txt>
-- 不恢复 HaGeZi Light；普通 13 源配方和 Python 默认模式保持原样。
+- 不恢复 HaGeZi Light；普通配方现为 12 源，Python 普通来源比对不含本组。
 - `--sources-list` 返回锁定标识、名称和两份固定依赖；`--sources-save` 仅能修改
   该项的启停状态。遗漏该项时后端恢复原状态，不会因旧页面保存而把它删掉。
   未知 `builtin:` 标识拒绝保存；生产版本不提供运行期地址覆盖接口。
@@ -42,11 +42,11 @@ Fake 唯一数、差集剔除数、最终保留数。相关数量已先完成组
 ## 验证
 
 单元测试覆盖域名归一化、集合差、重复、缺失依赖、资源边界和临时文件清理；
-集成测试覆盖默认停用、启停保存、固定标识保护、整组失败、原子发布和失败保留旧规则。
+集成测试覆盖默认启用、启停保存、固定标识保护、整组失败、原子发布和失败保留旧规则。
 独立 Python 比对完整集合而非只比较数量，浏览器回归覆盖测试、保存、错误反馈与长 URL。
 
 模块不捆绑下载后的上游规则。来源及许可参见[第三方规则与许可](第三方规则与许可.md)。
-电脑的 13 源完整快照参考脚本不自动加入本组；单独比对命令为：
+电脑的普通来源快照参考脚本不自动加入本组；单独比对命令为：
 
 ```sh
 python3 tests/test_hagezi_parity.py /path/to/test_hagezi_source /path/to/pro.txt /path/to/fake.txt

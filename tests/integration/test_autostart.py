@@ -36,6 +36,12 @@ def main():
         first = status()
         assert not first["autostart"] and not first["enabled"] and first["manual_stop"]
         assert first["block_quic"], "fresh installation must block QUIC by default"
+        assert first["dev_mode"], "fresh installation must enable DNS diagnostics by default"
+        assert (DATA/'dev_mode_enabled').read_text() == '1'
+        command('--dev','off')
+        saved = conf.read_text()
+        command('--install')
+        assert not status()['dev_mode'] and conf.read_text()==saved, 'reinstall must preserve a deliberate DNS logging opt-out'
         for argument, expected in (("off", False), ("on", True), ("off", False)):
             assert command_json("--quic", argument)["block_quic"] is expected
             saved = conf.read_text()

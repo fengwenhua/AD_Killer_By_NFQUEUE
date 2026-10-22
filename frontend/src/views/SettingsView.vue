@@ -8,6 +8,7 @@ const props = defineProps({ moduleInfo: Object, preferences: Object, updates: Ob
 const active = ref(''), root = ref(null), heading = ref(null);
 const scrolled = ref(false);
 let scrollPane;
+const cacheTime = value => new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 const trackScroll = () => { scrolled.value = (scrollPane?.scrollTop || 0) > 8; };
 onMounted(() => {
   scrollPane = root.value.closest('.page');
@@ -63,7 +64,7 @@ async function show(id) {
         <button type="button" class="settings-entry" :data-settings-entry="entry.id" :aria-controls="'settings-' + entry.id" @click="show(entry.id)">
           <span class="settings-entry-icon"><UiIcon :name="entry.icon" /></span>
           <span class="settings-entry-label">{{ entry.title }}</span>
-          <span class="settings-entry-value">{{ entry.id === 'preview' ? preferences.characters + ' 字符' : entry.id === 'updates' ? (updates.checking ? '检查中…' : updates.available ? '发现新版本' : '手动检查') : entry.id === 'releases' ? '最新发布' : 'v' + moduleInfo.version }}</span>
+          <span class="settings-entry-value" :data-update="entry.id === 'updates' && updates.available || undefined">{{ entry.id === 'preview' ? preferences.characters + ' 字符' : entry.id === 'updates' ? (updates.checking ? '检查中…' : updates.available ? '有更新' : '手动检查') : entry.id === 'releases' ? '最新发布' : 'v' + moduleInfo.version }}</span>
           <UiIcon name="chevron" />
         </button>
       </template>
@@ -86,6 +87,7 @@ async function show(id) {
           <span class="update-status-icon"><UiIcon :name="updates.reboot ? 'info' : updates.available ? 'download' : 'shield'" /></span>
           <div><b>{{ updates.reboot ? '等待重启' : updates.checking ? '正在检查' : updates.busy ? '正在处理' : updates.available ? '有新版本可用' : '版本检查' }}</b><p id="moduleUpdateStatus" role="status">{{ updates.message }}</p></div>
         </div>
+        <p v-if="updates.checkedAt" class="sync-note update-cache-note">{{ updates.checkCached ? '缓存结果 · ' : '上次检查 · ' }}{{ cacheTime(updates.checkedAt) }}{{ updates.checkCached ? '，下载前会重新核验' : '' }}</p>
         <div class="update-actions">
           <ActionButton id="getUpdate" icon="sync" variant="primary" :busy="updates.checking" :disabled="updates.busy" @click="updates.check">{{ updates.checking ? '检查中…' : '检查更新' }}</ActionButton>
           <ActionButton v-if="updates.available && !updates.reboot" id="downloadModuleUpdate" icon="download" :busy="updates.busy && !updates.canInstall" :disabled="updates.busy || updates.checking" @click="updates.download">下载并校验</ActionButton>
@@ -114,6 +116,7 @@ async function show(id) {
       <div v-show="active === 'releases'" id="settings-releases"><section id="releaseNotes" class="card release-card" aria-labelledby="releaseTitle">
         <div class="section-heading"><h2 id="releaseTitle">更新日志</h2><span class="badge">GitHub Release</span></div>
         <p class="subtle">只显示最新一次发布，包含预览版。</p>
+        <p v-if="updates.notesUpdatedAt" class="sync-note">{{ updates.notesCached ? '已缓存 · ' : '读取于 · ' }}{{ cacheTime(updates.notesUpdatedAt) }}，可手动重新加载。</p>
         <p v-if="updates.notesLoading" class="sync-note" role="status">正在读取 GitHub 发布日志…</p>
         <div v-else-if="updates.notesError" class="release-error"><p class="sync-note" data-kind="error" role="status">{{ updates.notesError }}</p></div>
         <ol v-if="updates.latestRelease && !updates.notesLoading" class="release-list">

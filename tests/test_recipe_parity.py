@@ -65,7 +65,8 @@ def main():
         assert not compare(pyout, cppout)["equal"]
         artifact.write_bytes(original)
         report = (cppout / "source_stats.conf").read_text()
-        assert "accepted_sources=11\n" in report and "rejected_sources=2\n" in report
+        assert f"accepted_sources={len(reference.ADGUARD_SOURCES) - 2}\n" in report
+        assert "rejected_sources=2\n" in report
         assert "publish_status=snapshot_only\n" in report
         # Existing output directories and traversal must not overwrite files.
         sentinel = cppout / "sentinel"
@@ -78,7 +79,7 @@ def main():
                               capture_output=True).returncode != 0
         # No HaGeZi: the dedicated Hosts output is intentionally comment-only.
         assert (cppout / "hosts_rules.txt").read_text() == "# AD_Killer_By_NFQUEUE generated Hosts rules\n"
-    print("13-source native/Python complete-set parity, typed Hosts, gzip, failures, limits and offline isolation passed")
+    print("shared-recipe native/Python complete-set parity, typed Hosts, gzip, failures, limits and offline isolation passed")
 
 
 if __name__ == "__main__":

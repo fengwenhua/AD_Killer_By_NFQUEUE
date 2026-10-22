@@ -41,6 +41,7 @@ window.previewRulesEmpty = false;
 window.previewEngineState = "stopped";
 window.previewStartFails = true;
 window.previewStartDelay = 0;
+window.previewMetrics = {updated_at:1792610000,block_suffix_hits:120,block_exact_hits:34,blocked_retransmits:999,quic_rejects:99};
 window.previewSettings = {mode:2,scope:0,autostart:false,block_quic:false,dev_mode:false};
 window.previewEngineError = "NFQUEUE 队列 0 已被 YH_hosts 占用，请先停用旧模块。";
 window.previewBuiltinSource={url:"builtin:hagezi-pro-minus-fake",enabled:false,locked:true,name:"HaGeZi Pro − Fake",dependencies:[
@@ -75,7 +76,7 @@ window.ksu = {
     else if(command.includes(" --status")) text = JSON.stringify({
       iptables_active:previewEngineState==="running", running:previewEngineState==="running",
       runtime:previewEngineState, last_error:previewEngineState==="error"?previewEngineError:"",
-      enabled:previewEngineState!=="stopped", ...previewSettings});
+      enabled:previewEngineState!=="stopped", metrics:previewMetrics, ...previewSettings});
     else if(command.endsWith(" --start")) {
       if(previewRulesEmpty){errno=1;text=JSON.stringify({status:'error_rules_empty',message:'请先点击“同步开源规则”，同步成功后再启动守护。'});}
       else {previewEngineState=previewStartFails?"error":"running";

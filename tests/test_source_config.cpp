@@ -6,9 +6,10 @@
 int main() {
     std::vector<RuleSource> entries;
     std::string error;
-    assert(default_rule_recipe().size() == 13);
+    assert(default_rule_recipe().size() == 12);
     assert(parse_rule_sources(default_rule_sources_text(), entries, error, true));
-    assert(entries.size() == 14 && entries.back().url == HAGEZI_SOURCE_ID && !entries.back().enabled);
+    assert(entries.size() == 13 && entries.back().url == HAGEZI_SOURCE_ID && entries.back().enabled);
+    assert(default_rule_sources_text().find("https://adrules.top/adrules.txt") == std::string::npos);
     assert(superseded_default_rule_sources_text() ==
            "# 每行一个规则源 URL,支持 Hosts / AdGuard / gzip(.gz)\n"
            "# 以下为默认源,可自行增删\n"
@@ -16,6 +17,15 @@ int main() {
            "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt\n");
     assert(should_refresh_default_rule_sources(superseded_default_rule_sources_text()));
     assert(!should_refresh_default_rule_sources(default_rule_sources_text()));
+    auto legacy=default_rule_sources_text();
+    legacy.replace(0,legacy.find('\n'),"# AD_Killer_By_NFQUEUE: 13 ordinary sources; built-in HaGeZi pair disabled by default");
+    legacy.insert(legacy.find("# CJX"),"# AdRules DNS List\nhttps://adrules.top/adrules.txt\n");
+    legacy.insert(legacy.find(HAGEZI_SOURCE_ID),"# disabled: ");
+    assert(should_refresh_default_rule_sources(legacy));
+    assert(!should_refresh_default_rule_sources("# my preferences\n"+legacy));
+    auto migrated=migrate_source_defaults("# mine\n  https://example.org/user  \n# disabled: https://example.org/off\nhttps://adrules.top/adrules.txt\n# disabled: builtin:hagezi-pro-minus-fake\n");
+    assert(migrated=="# mine\n  https://example.org/user  \n# disabled: https://example.org/off\nbuiltin:hagezi-pro-minus-fake\n");
+    assert(migrate_source_defaults("# disabled: https://adrules.top/adrules.txt\n")==std::string(HAGEZI_SOURCE_ID)+"\n");
     assert(!should_refresh_default_rule_sources("# custom\nhttps://example.org/user\n"));
     for (const auto &source : default_rule_recipe()) {
         assert(std::string(source.url).find("hagezi") == std::string::npos);
@@ -42,6 +52,9 @@ int main() {
     assert(entries.size() == 1 && entries[0].url == HAGEZI_SOURCE_ID && entries[0].enabled);
     entries.clear(); retain_builtin_source(entries);
     assert(entries.size() == 1 && !entries[0].enabled);
+    entries[0].enabled=false; previous=entries;
+    entries.clear(); retain_builtin_source(entries,previous);
+    assert(entries.size()==1 && !entries[0].enabled);
     assert(!parse_rule_sources("builtin:edited-hagezi\n", entries, error, true));
     assert(!parse_rule_sources(std::string(HAGEZI_SOURCE_ID) + "\n" + HAGEZI_SOURCE_ID + "\n", entries, error));
     many.clear();

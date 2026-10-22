@@ -29,6 +29,29 @@ export function useEngine(api, feedback) {
   const badge = computed(() => !ready.value ? '未连接' : ({ ok: '正在守护', bad: '上次启动失败', warn: '启动中', neutral: '已暂停' })[kind.value]);
   const title = computed(() => !ready.value ? '等待连接管理器' : ({ ok: '拦截已开启', bad: '当前未运行，上次启动失败', warn: '正在准备守护', neutral: '当前未接管网络' })[kind.value]);
   const description = computed(() => error.value || (!ready.value ? '请在 KernelSU / APatch 中打开模块 WebUI。' : running.value ? '规则已接管当前网络请求，广告域名将被拦截。' : kind.value === 'bad' ? state.value.last_error || '引擎已退出，请查看运行日志与诊断。' : kind.value === 'warn' ? '正在加载规则、建立队列与路由，请稍候。' : needsRules.value ? '尚无可用规则，请先点击“同步开源规则”，同步成功后再启动守护。' : '本模块未接管网络；其他网络模块的状态请分别检查。'));
+  const blockedTotal = computed(() => {
+    const metrics=state.value?.metrics;
+    if (!metrics || !Number.isSafeInteger(metrics.updated_at) || metrics.updated_at<=0) return null;
+    const values=[metrics.block_suffix_hits,metrics.block_exact_hits];
+    if (!values.every(value=>Number.isSafeInteger(value) && value>=0)) return null;
+    const total=values[0]+values[1];
+    return Number.isSafeInteger(total) ? total : null;
+  });
+  const metricsStale = ref(false);
+  let stateRevision=0, metricsRefresh;
+  async function refreshMetrics() {
+    if (metricsRefresh) return metricsRefresh;
+    const revision=stateRevision;
+    metricsRefresh=(async()=>{
+      const result=await api.command('--status-fast'), next=lastJson(result.stdout);
+      if (!life.active || revision!==stateRevision) return;
+      if (result.code || !next || typeof next.running!=='boolean') { metricsStale.value=true; return; }
+      metricsStale.value=false;
+      if (!next.running) state.value={...state.value,running:false,iptables_active:false,runtime:next.runtime,last_error:next.last_error};
+      else if (running.value) state.value={...state.value,metrics:next.metrics};
+    })();
+    try { return await metricsRefresh; } finally {metricsRefresh=null;}
+  }
   let refreshing;
   async function refresh() {
     if (refreshing) return refreshing;
@@ -37,6 +60,7 @@ export function useEngine(api, feedback) {
       if (!next || !('running' in next)) { feedback.log(result.stderr || '无法读取引擎状态', 'error'); return null; }
       if (!life.active) return null;
       state.value = next;
+      stateRevision++;
       scope.value = Number(next.scope) === 1 ? 1 : 0;
       const stats = keyValues(await api.readFile(PATHS.stats));
       if (life.active) total.value = stats.black !== undefined ? (Number(stats.black) || 0) + (Number(stats.white) || 0)
@@ -89,7 +113,7 @@ export function useEngine(api, feedback) {
       await refresh();
     } finally { setting.value = ''; }
   }
-  watch(() => running.value && !!state.value?.dev_mode, async (enabled, _, onCleanup) => {
+  watch(() => running.value && !!state.value?.dev_mode && !!feedback.consoleOpen?.value, async (enabled, _, onCleanup) => {
     if (!enabled) return;
     let cancelled = false, previous = [];
     onCleanup(() => { cancelled = true; });
@@ -103,5 +127,5 @@ export function useEngine(api, feedback) {
       await life.wait(1000);
     }
   });
-  return { state, total, scope, action, setting, ready, running, kind, badge, title, description, refresh, control, changeSetting };
+  return { state, total, scope, action, setting, ready, running, kind, badge, title, description, blockedTotal, metricsStale, refreshMetrics, refresh, control, changeSetting };
 }

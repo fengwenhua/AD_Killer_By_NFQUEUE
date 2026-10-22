@@ -6,7 +6,6 @@ RULE_SOURCE("EasyList", "https://easylist-downloads.adblockplus.org/easylist.txt
 RULE_SOURCE("EasyList China", "https://easylist-downloads.adblockplus.org/easylistchina.txt", ADGUARD)
 RULE_SOURCE("EasyPrivacy", "https://easylist-downloads.adblockplus.org/easyprivacy.txt", ADGUARD)
 RULE_SOURCE("oisd small", "https://small.oisd.nl/abp", ADGUARD)
-RULE_SOURCE("AdRules DNS List", "https://adrules.top/adrules.txt", ADGUARD)
 RULE_SOURCE("CJX's Annoyance List", "https://raw.githubusercontent.com/cjx82630/cjxlist/master/cjx-annoyance.txt", ADGUARD)
 RULE_SOURCE("乘风广告过滤规则", "https://raw.githubusercontent.com/xinggsf/Adblock-Plus-Rule/master/rule.txt", ADGUARD)
 RULE_SOURCE("anti-AD for AdGuard", "https://anti-ad.net/adguard.txt", ADGUARD)

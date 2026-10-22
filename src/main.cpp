@@ -140,14 +140,18 @@ static int cmd_install() {
     if (!file_exists(FILE_STATE_CONF)) {
         ok = write_file_atomic(FILE_STATE_CONF,
                           "version=2\n"
+                          "source_defaults_version=1\n"
                           "mode=2\n"
                           "scope=0\n"
-                          "dev_mode=false\n"
+                          "dev_mode=true\n"
                           "block_quic=true\n"
                           "autostart=false\n"
                           "enabled=false\n"
                           "manual_stop=true\n"
                           "updated_at=0\n") && ok;
+    }
+    if (read_conf_value(FILE_STATE_CONF, "dev_mode") == "true" && !file_exists(FILE_DEV_MODE_ENABLED)) {
+        ok = write_file_atomic(FILE_DEV_MODE_ENABLED, "1") && ok;
     }
     if (!file_exists(FILE_ADBLOCK_MODE)) {
         ok = write_file_atomic(FILE_ADBLOCK_MODE, "mode=2\n") && ok;
@@ -169,13 +173,16 @@ static int cmd_install() {
             fprintf(stderr, "来源更新正在运行，安装已中止，请等待任务结束\n");
             return false;
         }
-        if (!file_exists(FILE_UPDATE_SOURCES))
-            return write_file_atomic(FILE_UPDATE_SOURCES, default_rule_sources_text());
+        const bool migrate=read_conf_value(FILE_STATE_CONF,"source_defaults_version")!="1";
+        if (!file_exists(FILE_UPDATE_SOURCES)) {
+            if (!write_file_atomic(FILE_UPDATE_SOURCES, default_rule_sources_text())) return false;
+            return !migrate || write_conf_value(FILE_STATE_CONF,"source_defaults_version","1");
+        }
         std::string configured;
         if (!read_file(FILE_UPDATE_SOURCES, configured)) return false;
-        if (should_refresh_default_rule_sources(configured))
-            return write_file_atomic(FILE_UPDATE_SOURCES, default_rule_sources_text());
-        return true;
+        auto updated=should_refresh_default_rule_sources(configured) ? default_rule_sources_text() : migrate ? migrate_source_defaults(configured) : configured;
+        if (updated!=configured && !write_file_atomic(FILE_UPDATE_SOURCES,updated)) return false;
+        return !migrate || write_conf_value(FILE_STATE_CONF,"source_defaults_version","1");
     }();
     ok = sources_ok && ok;
     if (!ok) {

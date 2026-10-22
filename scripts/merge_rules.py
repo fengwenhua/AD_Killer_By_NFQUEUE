@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Reference merger: shared 13-source C++ recipe, all HaGeZi removed.
+"""Reference merger: shared ordinary-source C++ recipe, no HaGeZi pair.
 
 --fresh bypasses cache; --snapshot-dir freezes inputs; --from-snapshot replays
 offline. Android uses the native merger, never this Python runtime.
@@ -37,8 +37,8 @@ def read_recipe():
         name, url, kind = match.groups()
         result.append((json.loads(name), json.loads(url), "",
                        "hosts" if kind == "HOSTS_AS_ADGUARD" else "adguard"))
-    if len(result) != 13 or any("hagezi" in url.lower() for _, url, _, _ in result):
-        raise ValueError("expected 13 sources without HaGeZi")
+    if not 1 <= len(result) <= 64 or len({url for _, url, _, _ in result}) != len(result) or any("hagezi" in url.lower() for _, url, _, _ in result):
+        raise ValueError("expected 1..64 unique ordinary sources without HaGeZi")
     return result
 
 
@@ -214,7 +214,7 @@ def run_reference(inputs, out):
                    accepted_sources=sum(r["status"] == "accepted" for r in reports),
                    source_count=len(reports), sources=reports)
     (out / "merge_report.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
-    (out / "merge_report.txt").write_text("13-source recipe, no HaGeZi\n" + json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
+    (out / "merge_report.txt").write_text(f"{len(reports)}-source recipe, no HaGeZi\n" + json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps({k: v for k, v in summary.items() if k != "sources"}), flush=True)
     return summary
 

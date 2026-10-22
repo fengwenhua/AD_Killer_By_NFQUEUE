@@ -114,9 +114,9 @@ test('manual check, verified download, explicit install, status and background r
     await model.check(); assert.equal(model.available.value,true);
     await model.download(); assert.equal(model.canInstall.value,true); assert.equal(install,false);
     await model.install(); assert.equal(model.reboot.value,true); assert.equal(model.canInstall.value,false);
-    assert.equal(values.size,0);
+    assert.equal(values.has('ad-killer-by-nfqueue-module-update'),false);
     values.set('ad-killer-by-nfqueue-module-update',JSON.stringify({id:'124-456',version:'1.2',install:true}));
-    await model.resume(); assert.equal(values.size,0); assert.match(model.message.value,/重启/);
+    await model.resume(); assert.equal(values.has('ad-killer-by-nfqueue-module-update'),false); assert.match(model.message.value,/重启/);
   } finally { scope.stop(); }
 });
 
@@ -198,7 +198,7 @@ test('release notes load lazily, cache one result, retry failures and ignore dis
     assert.deepEqual(commands,['--module-release-notes']);
     assert.equal(model.latestRelease.value.version,'1.2');
     result={code:1,stdout:'',stderr:'rate limit'};
-    await model.loadReleaseNotes(true); assert.equal(model.latestRelease.value,null); assert.match(model.notesError.value,/无法读取/);
+    await model.loadReleaseNotes(true); assert.equal(model.latestRelease.value.version,'1.2'); assert.match(model.notesError.value,/仍显示上次成功/);
     result=ok([]); await model.loadReleaseNotes(); assert.match(model.notesError.value,/暂无/);
     result=ok([{...fixture(),body:''}]); await model.loadReleaseNotes(); assert.equal(model.notesError.value,'');
     assert.equal(model.latestRelease.value.body,'');

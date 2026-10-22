@@ -60,13 +60,24 @@ def main():
     try:
         command("--install")
         defaults = json.loads(command("--sources-list"))
-        assert len(defaults["sources"]) == 14
+        recipe_count=sum(line.startswith('RULE_SOURCE(') for line in (Path(__file__).resolve().parents[2]/'src/rule_recipe.inc').read_text().splitlines())
+        assert len(defaults["sources"]) == recipe_count + 1
         ordinary = [s for s in defaults["sources"] if not s["locked"]]
         special = [s for s in defaults["sources"] if s["locked"]]
-        assert len(ordinary) == 13 and all(s["enabled"] for s in ordinary)
-        assert len(special) == 1 and special[0]["url"] == HAGEZI and not special[0]["enabled"]
+        assert len(ordinary) == recipe_count and all(s["enabled"] for s in ordinary)
+        assert not any(s['url']=='https://adrules.top/adrules.txt' for s in ordinary)
+        assert len(special) == 1 and special[0]["url"] == HAGEZI and special[0]["enabled"]
         assert len(special[0]["dependencies"]) == 2
         assert all("hagezi" not in s["url"].lower() for s in ordinary)
+        config=DATA/'state.conf'
+        config.write_text(''.join(line for line in config.read_text().splitlines(keepends=True) if not line.startswith('source_defaults_version=')))
+        sources_file=DATA/'update_sources.txt'
+        sources_file.write_text('# mine\nhttps://example.org/user\n# disabled: https://example.org/off\nhttps://adrules.top/adrules.txt\n# disabled: '+HAGEZI+'\n')
+        command('--install')
+        assert sources_file.read_text()=='# mine\nhttps://example.org/user\n# disabled: https://example.org/off\n'+HAGEZI+'\n'
+        sources_file.write_text('# mine\nhttps://example.org/user\n# disabled: '+HAGEZI+'\n')
+        command('--install')
+        assert '# disabled: '+HAGEZI in sources_file.read_text(), 'later manual builtin opt-out must survive reinstall'
         # Exact old defaults upgrade, but edited lists and pause state survive.
         (DATA / "update_sources.txt").write_text(
             "# 每行一个规则源 URL,支持 Hosts / AdGuard / gzip(.gz)\n"
@@ -75,7 +86,7 @@ def main():
             "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt\n")
         before_config = (DATA / "state.conf").read_bytes()
         command("--install")
-        assert len(json.loads(command("--sources-list"))["sources"]) == 14
+        assert len(json.loads(command("--sources-list"))["sources"]) == recipe_count + 1
         assert (DATA / "state.conf").read_bytes() == before_config
         (DATA / "update_sources.txt").write_text("# custom\nhttps://example.org/user\n")
         command("--install")

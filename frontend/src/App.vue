@@ -13,6 +13,7 @@ import { useModuleInfo } from './composables/useModuleInfo.js';
 import { useNavigationMotion } from './composables/useNavigationMotion.js';
 import { useUiPreferences } from './composables/useUiPreferences.js';
 import { useModuleUpdate } from './composables/useModuleUpdate.js';
+import { useLiveMetrics } from './composables/useLiveMetrics.js';
 import SourcePreview from './components/SourcePreview.vue';
 import UiIcon from './components/UiIcon.vue';
 import HomeView from './views/HomeView.vue';
@@ -32,6 +33,7 @@ const { theme, toggle: toggleTheme } = useTheme();
 const moduleInfoRaw = useModuleInfo(api), moduleInfo = reactive(moduleInfoRaw);
 const moduleUpdate = reactive(useModuleUpdate(api,moduleInfoRaw,feedbackRaw));
 const page = ref('home'), mainElement = ref(null), navigationElement = ref(null), themeButton = ref(null);
+useLiveMetrics(engineRaw,page);
 const { leaving, selected, navigate } = useNavigationMotion(page, mainElement, theme, themeButton);
 const pages = [{ id: 'home', label: '概览', icon: 'home' }, { id: 'apps', label: '应用名单', icon: 'apps' }, { id: 'rules', label: '规则管理', icon: 'rules' }, { id: 'settings', label: '设置', icon: 'settings' }];
 onMounted(async () => {
