@@ -35,6 +35,10 @@ def main() -> None:
     assert workflow.count("name: AD_Killer_By_NFQUEUE-module-preview") == 2, (
         "automatic prerelease must download the marked preview artifact"
     )
+    require_all(workflow, (
+        "tests/validate_manager_update.py dist/AD_Killer_By_NFQUEUE-v*.zip",
+        "tests/validate_manager_update.py dist/preview/AD_Killer_By_NFQUEUE-v*.zip",
+    ), "native manager update gates for both channels")
     # These maintained action lines declare runs.using: node24 themselves;
     # setup-node's node-version only controls the project build runtime.
     for action, minimum in (

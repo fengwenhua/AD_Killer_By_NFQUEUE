@@ -241,6 +241,7 @@ python3 "$ROOT/tests/test_engine_lifecycle_contract.py"
 python3 "$ROOT/tests/test_module_lifecycle_contract.py"
 python3 "$ROOT/tests/test_boot_service.py"
 python3 "$ROOT/tests/test_package.py"
+python3 "$ROOT/tests/test_manager_update.py"
 python3 "$ROOT/tests/test_release_contract.py"
 
 if [ "${CHECK_RULE_ARTIFACTS:-0}" = "1" ]; then

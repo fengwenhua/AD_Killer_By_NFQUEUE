@@ -19,7 +19,7 @@ def generate(package: Path, notes: Path):
     if props['id'] != 'AD_Killer_By_NFQUEUE' or not re.fullmatch(r'\d{1,6}\.\d{1,6}(?:\.\d{1,6})?', version):
         raise ValueError('invalid module identity or version')
     name = f'AD_Killer_By_NFQUEUE-v{version}.zip'
-    if package.name != name or not props['versionCode'].isdigit() or int(props['versionCode']) <= 0:
+    if package.name != name or not re.fullmatch(r'[0-9]{1,10}', props['versionCode']) or not 1 <= int(props['versionCode']) <= 2**31 - 1:
         raise ValueError('package name/versionCode mismatch')
     digest = hashlib.sha256(package.read_bytes()).hexdigest()
     if package.with_name(name+'.sha256').read_text() != f'{digest}  {name}\n':

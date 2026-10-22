@@ -53,13 +53,15 @@
 
 在“设置 → 检查更新”中下载校验并确认安装，可选预览版与自动检查；自动检查默认关闭，不自动安装。更新日志读取 GitHub 最新 Release。安装后需手动重启，v1.0 首次升级需在根管理器中手动刷入完整 ZIP。
 
+也可直接在 KernelSU 模块页检查正式版更新，无需打开 WebUI，详见[原生更新说明](docs/KernelSU原生更新.md)。
+
 ## 本地构建
 
 需要 Android NDK r26+、Node.js 22.12+ / 24 LTS、npm 和 Python 3：
 
 ```bash
 NDK=/path/to/android-ndk ./build.sh
-python3 tests/verify_checksum.py dist/AD_Killer_By_NFQUEUE-v1.2.2.zip
+python3 tests/verify_checksum.py dist/AD_Killer_By_NFQUEUE-v1.2.3.zip
 ```
 
 构建产物位于 `dist/`。版本号仅在 [`module/module.prop`](module/module.prop) 中维护。

@@ -69,7 +69,12 @@ RULE_COUNT=1000000 make benchmark
 ```bash
 python3 tests/validate_module_zip.py dist/AD_Killer_By_NFQUEUE-v<版本>.zip
 python3 tests/verify_checksum.py dist/AD_Killer_By_NFQUEUE-v<版本>.zip
+python3 tests/validate_manager_update.py dist/AD_Killer_By_NFQUEUE-v<版本>.zip
 ```
+
+`test_manager_update.py` 离线验证原生管理器标准四字段、严格 int32 版本序号、
+预览转正式、固定发布附件、哈希及日志一致性；构建与 CI 对实际两渠道 ZIP 再执行
+`validate_manager_update.py`。这不是 KernelSU/APatch/Magisk 三端的真机安装证明。
 
 `tests/fuzz/` 中的 harness 分别直接调用 DNS/TLS/HTTP/IP、Hosts/AdGuard 和
 NFQUEUE netlink 解析入口。`FUZZ_CXX` 可指定支持 `-fsanitize=fuzzer` 的 Clang；

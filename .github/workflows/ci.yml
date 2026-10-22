@@ -115,6 +115,7 @@ jobs:
         run: |
           python3 tests/validate_module_zip.py dist/AD_Killer_By_NFQUEUE-v*.zip
           python3 tests/verify_checksum.py dist/AD_Killer_By_NFQUEUE-v*.zip
+          python3 tests/validate_manager_update.py dist/AD_Killer_By_NFQUEUE-v*.zip
       - uses: actions/upload-artifact@v6
         with:
           name: AD_Killer_By_NFQUEUE-module
@@ -129,6 +130,7 @@ jobs:
         run: |
           python3 tests/validate_module_zip.py dist/preview/AD_Killer_By_NFQUEUE-v*.zip
           python3 tests/verify_checksum.py dist/preview/AD_Killer_By_NFQUEUE-v*.zip
+          python3 tests/validate_manager_update.py dist/preview/AD_Killer_By_NFQUEUE-v*.zip
           python3 tests/test_release_channels.py dist
       - uses: actions/upload-artifact@v6
         with:

@@ -125,6 +125,7 @@ ZIP="$DIST/AD_Killer_By_NFQUEUE-v${VERSION}.zip"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-315532800}" \
   python3 "$HERE/scripts/package_module.py" "$PKG" "$ZIP"
 python3 "$HERE/scripts/release_metadata.py" "$ZIP" "$HERE/CHANGELOG.md"
+python3 "$HERE/tests/validate_manager_update.py" "$ZIP"
 
 echo "✅ 完成: $ZIP"
 echo "   校验: $ZIP.sha256"
