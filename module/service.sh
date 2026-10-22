@@ -12,6 +12,12 @@
 # 模块自身目录(KSU 规范:必须用 ${0%/*} 获取,禁止硬编码)
 MODDIR=${0%/*}
 
+# KernelSU soft reboot keeps independent root daemons alive while netd rebuilds
+# OUTPUT. Reconcile an old instance before applying the normal boot policy,
+# including upgrades from packages that had no soft-reboot hook. No preferences
+# are changed; no daemon means this command performs no writes or route cleanup.
+"$MODDIR/AD_Killer_By_NFQUEUE" --prepare-reboot >/dev/null 2>&1 || exit 1
+
 STATE_CONF=/data/adb/AD_Killer_By_NFQUEUE/state.conf
 should_autostart() {
     # Missing, unreadable, malformed or duplicate values all fail closed.
@@ -22,12 +28,17 @@ should_autostart() {
     esac
     boot_enabled=$(sed -n 's/^enabled=//p' "$STATE_CONF" 2>/dev/null) || return 1
     case "$boot_enabled" in
-        true|1) return 0 ;;
+        true|1) ;;
+        *) return 1 ;;
+    esac
+    boot_manual_stop=$(sed -n 's/^manual_stop=//p' "$STATE_CONF" 2>/dev/null) || return 1
+    case "$boot_manual_stop" in
+        ''|false|0) return 0 ;; # Missing legacy key still follows enabled.
         *) return 1 ;;
     esac
 }
 
-# 1. 默认不自启，手动暂停也跨重启保留。不执行引擎或防火墙命令。
+# 1. 默认不自启，手动暂停也跨重启保留。
 should_autostart || exit 0
 
 # 2. 仅在 Android 框架启动完成后接管；超时则跳过本次自启。

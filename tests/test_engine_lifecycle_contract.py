@@ -53,9 +53,14 @@ def main() -> None:
         "if (!dispatched && old <= 0)", 1
     )[0]
     assert recovery.index("iptables_chain_active(routes)") < recovery.index("kill(old, SIGTERM)")
+    assert 'daemon_image_current(old)' in recovery
     assert "is_daemon_pid(old)" in recovery and "STOP_WAIT_MS" in recovery
     assert "SIGKILL" not in recovery and "iptables_remove_all()" not in recovery
     assert '"recovery_stop_timeout"' in recovery
+    prepare = main_source.split('static int cmd_prepare_reboot()', 1)[1].split('static int cmd_start()', 1)[0]
+    assert 'kill(pid, SIGTERM)' in prepare and 'STOP_WAIT_MS' in prepare
+    assert 'write_conf_value(' not in prepare and 'SIGKILL)' not in prepare
+    assert 'iptables_remove_all()' not in prepare
     update = main_source.split("static int cmd_update_start(", 1)[1].split(
         "static int cmd_update_status(", 1
     )[0]
@@ -66,6 +71,9 @@ def main() -> None:
         status = main_source.split(f"static int {name}()", 1)[1].split(end, 1)[0]
         assert "bool running = pid > 0 && !frozen" in status
         assert "engine_diagnostics_json(frozen)" in status
+        assert 'iptables_remove_all()' not in status, 'status must be read-only even after SIGKILL'
+    fast = main_source.split('static int cmd_status_fast()', 1)[1].split('// --version-status', 1)[0]
+    assert 'iptables_entry_attached()' in fast
     firewall = (ROOT / "src/iptables.cpp").read_text(encoding="utf-8")
     assert "-n -S" not in firewall, "numeric listing flags are invalid with list-rules"
 

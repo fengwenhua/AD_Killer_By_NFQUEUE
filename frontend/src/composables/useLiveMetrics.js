@@ -7,7 +7,9 @@ export function useLiveMetrics(engine, activePage, document = globalThis.documen
   const visibility=()=>{visible.value=!document.hidden;};
   document?.addEventListener('visibilitychange',visibility);
   onScopeDispose(()=>document?.removeEventListener('visibilitychange',visibility));
-  watch(()=>engine.running.value && activePage.value==='home' && visible.value, async (enabled,_,cleanup)=>{
+  // Keep watching a live but degraded daemon, so an external/manual recovery
+  // can become visible without reopening the WebUI.
+  watch(()=>(engine.state ? !!engine.state.value?.running : engine.running.value) && activePage.value==='home' && visible.value, async (enabled,_,cleanup)=>{
     if (!enabled) return;
     let cancelled=false, timer, wake;
     cleanup(()=>{cancelled=true;clearTimeout(timer);wake?.();});

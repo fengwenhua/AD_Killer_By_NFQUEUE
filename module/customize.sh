@@ -32,6 +32,7 @@ ui_print "- 正在初始化核心数据路径..."
 ui_print "- 正在赋予底层引擎执行权限..."
 chmod 755 "$MODPATH/AD_Killer_By_NFQUEUE"
 chmod 755 "$MODPATH/service.sh"
+chmod 755 "$MODPATH/emulated-soft-reboot.sh"
 chmod 755 "$MODPATH/uninstall.sh" 2>/dev/null
 
 # 调用 C++ 核心的安装逻辑(目录初始化 + 默认配置)

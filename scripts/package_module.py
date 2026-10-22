@@ -15,6 +15,7 @@ FILES = (
     ("AD_Killer_By_NFQUEUE", 0o755),
     ("module.prop", 0o644),
     ("service.sh", 0o755),
+    ("emulated-soft-reboot.sh", 0o755),
     ("customize.sh", 0o755),
     ("uninstall.sh", 0o755),
     ("webroot/index.html", 0o644),

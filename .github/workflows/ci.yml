@@ -81,6 +81,8 @@ jobs:
         run: python tests/test_webui_update_channels.py
       - name: Mobile counters and persistent update cache regression
         run: python tests/test_webui_persistent_state.py
+      - name: Route loss and stale daemon image regression
+        run: python tests/test_webui_route_recovery.py
       - name: Bounded viewport and stable navigation stress regression
         run: |
           python tests/test_webui_performance.py --verify

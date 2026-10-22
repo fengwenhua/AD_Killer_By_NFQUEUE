@@ -97,6 +97,10 @@ IptablesRulesetSnapshot valid_snapshot(const IptablesConfig &cfg,
 }  // namespace
 
 int main() {
+    expect(!iptables_validate_output_attachment({"-P OUTPUT ACCEPT"}), "missing OUTPUT attachment is unhealthy");
+    expect(iptables_validate_output_attachment({"-P OUTPUT ACCEPT", "-A OUTPUT -j ADK_NFQ_ENTRY", "-A OUTPUT -j connmark_mangle_OUTPUT"}), "one owned attachment with foreign rules is valid");
+    expect(!iptables_validate_output_attachment({"-A OUTPUT -j ADK_NFQ_ENTRY", "-A OUTPUT -j ADK_NFQ_ENTRY"}), "duplicate attachment is unhealthy");
+    expect(!iptables_validate_output_attachment({"-A OUTPUT -j ADK_NFQ_ENTRY", "-A OUTPUT -m owner --uid-owner 1000 -j ADK_NFQ_OUT_A"}), "legacy bypass is unhealthy");
     const std::vector<std::string> android_rules = {
         "-A connmark_mangle_OUTPUT -m connmark --mark 0x0/0xfffff -j CONNMARK "
         "--save-mark --nfmask 0xfffff --ctmask 0xfffff",

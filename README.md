@@ -61,7 +61,7 @@
 
 ```bash
 NDK=/path/to/android-ndk ./build.sh
-python3 tests/verify_checksum.py dist/AD_Killer_By_NFQUEUE-v1.2.3.zip
+python3 tests/verify_checksum.py dist/AD_Killer_By_NFQUEUE-v1.2.4.zip
 ```
 
 构建产物位于 `dist/`。版本号仅在 [`module/module.prop`](module/module.prop) 中维护。
@@ -85,6 +85,7 @@ make test
 - [模块更新](docs/模块更新.md)
 - [根管理器原生更新提示调研](docs/根管理器原生更新提示适配调研.md)
 - [ADB 状态检查与卸载残留排查](docs/ADB状态检查与卸载残留排查.md)
+- [软重启与守护生命周期](docs/软重启与守护生命周期.md)
 - [真机上线审计与验收方案](docs/真机上线审计与验收方案.md)
 - [第三方规则与许可](docs/第三方规则与许可.md)
 

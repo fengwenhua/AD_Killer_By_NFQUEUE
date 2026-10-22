@@ -203,6 +203,8 @@ def main() -> None:
                  "daemon startup")
         assert daemon.poll() is None and state() == "running", "daemon failed startup"
         assert json.loads(command(BINARY, "--status").splitlines()[-1])["iptables_active"]
+        fast=json.loads(command(BINARY, '--status-fast').splitlines()[-1])
+        assert fast['iptables_active'] and fast['daemon_image_current'] and fast['route_check']=='entry'
         command(BINARY, "--autostart", "on")
         command(BINARY, "--autostart", "off")
         assert daemon.poll() is None and state() == "running", "boot setting stopped engine"
@@ -235,6 +237,18 @@ def main() -> None:
         wait_for(lambda: json.loads(command(BINARY, "--status").splitlines()[-1])
                  ["iptables_active"], "global generation restored")
 
+        # KernelSU's pre-soft-reboot lifecycle hook must release this daemon
+        # without treating reboot as a persistent user pause or opting in.
+        before_policy=(DATA/'state.conf').read_bytes()
+        command(BINARY, '--prepare-reboot')
+        assert daemon.wait(timeout=10)==0 and state()=='stopped'
+        assert (DATA/'state.conf').read_bytes()==before_policy
+        for table in TABLES:
+            assert 'ADK_NFQ_' not in firewall(table,'-S')
+        assert not json.loads(command(BINARY,'--status-fast').splitlines()[-1])['running']
+        daemon=subprocess.Popen([BINARY,'--daemon'])
+        wait_for(lambda:state()=='running' or daemon.poll() is not None,'startup after lifecycle stop')
+        assert daemon.poll() is None
         command(BINARY, "--stop")
         assert daemon.wait(timeout=10) == 0
         assert state() == "stopped"
@@ -250,6 +264,12 @@ def main() -> None:
         assert daemon.poll() is None and state() == "running"
         daemon.kill()
         daemon.wait(timeout=10)
+        # A diagnostic read may report a dead listener, but never clean up the
+        # firewall snapshot as a side effect (also needed for forensic tools).
+        before_routes={table:firewall(table,'-S') for table in TABLES}
+        assert not json.loads(command(BINARY,'--status').splitlines()[-1])['running']
+        assert not json.loads(command(BINARY,'--status-fast').splitlines()[-1])['iptables_active']
+        assert before_routes=={table:firewall(table,'-S') for table in TABLES}
         for family in (socket.AF_INET, socket.AF_INET6):
             udp_dns(family, "safe.example.org", True)
             tcp_inspection(family, 80, "safe.example.org", True)
@@ -282,12 +302,22 @@ def main() -> None:
             old_image.unlink()
             assert "(deleted)" in os.readlink(f"/proc/{daemon.pid}/exe")
             try:
+                # The image changed even though the old listener and routes
+                # remain healthy: explicit start must switch to the new image.
+                assert not json.loads(command(BINARY,'--status-fast').splitlines()[-1])['daemon_image_current']
+                old_pid=daemon.pid
+                command(BINARY,'--start')
+                wait_for(lambda:state()=='running' and int((DATA/'daemon.pid').read_text())!=old_pid,
+                         'image-only upgrade handover',timeout=15)
+                assert daemon.wait(timeout=10)==0
                 for affected in (("iptables",), ("ip6tables",), TABLES):
                     previous_pid = int((DATA / "daemon.pid").read_text())
                     for table in affected:
                         firewall(table, "-D", "OUTPUT", "-j", "ADK_NFQ_ENTRY")
                     broken = json.loads(command(BINARY, "--status").splitlines()[-1])
                     assert broken["running"] and not broken["iptables_active"]
+                    quick=json.loads(command(BINARY,'--status-fast').splitlines()[-1])
+                    assert quick['running'] and not quick['iptables_active']
                     reply = json.loads(command(BINARY, "--start").splitlines()[-1])
                     assert reply["status"] == "starting", reply
                     wait_for(lambda: state() == "running" and
@@ -319,6 +349,13 @@ def main() -> None:
                     assert Path(f"/proc/{current_pid}/exe").exists(), "recovery killed an unresponsive daemon"
                     assert firewall("iptables", "-S") == before, "timed-out recovery modified routes"
                     assert len(queue_file.read_text().splitlines()) == 2
+                    policy=(DATA/'state.conf').read_bytes()
+                    lifecycle=subprocess.run([BINARY,'--prepare-reboot'],text=True,capture_output=True,timeout=15)
+                    assert lifecycle.returncode!=0
+                    assert int((DATA/'daemon.pid').read_text())==current_pid
+                    assert Path(f'/proc/{current_pid}/exe').exists(), 'lifecycle cleanup killed an unresponsive instance'
+                    assert (DATA/'state.conf').read_bytes()==policy
+                    assert firewall('iptables','-S')==before
                 finally:
                     os.kill(current_pid, signal.SIGCONT)
                     wait_for(lambda: not Path(f"/proc/{current_pid}/exe").exists(),

@@ -36,7 +36,7 @@ cat /proc/uptime
 排查期间遵守以下边界：
 
 - 不执行 `--start`、`--stop`、`--reload`、更新、安装或卸载命令，不切换配置。
-- **不要用 `--status` 做严格只读取证**：当前实现可能在守护进程不存在时自动清理残留防火墙。用 `--status-fast`，再独立核对进程和防火墙。
+- v1.2.3 及更早版本**不要用 `--status` 做严格只读取证**：这些版本可能在守护进程不存在时自动清理残留防火墙。v1.2.4 起已移除此副作用。跨版本检查仍建议先用 `--status-fast`，再独立核对进程和防火墙。
 - 不清空任何 iptables 表，不按队列号、端口号或过期 PID 杀进程；不要删除共享的 `/data/adb` 或其他模块文件。
 - 不要在日常手机运行 `make test-engine-integration`、`make test-update-integration` 等一次性 Linux 环境测试。
 - 查询失败不等于没有残留。`Permission denied`、命令不支持、锁等待超时均应标记为“未能检查”。不要为了得到“干净”结果而隐藏错误。
@@ -60,13 +60,15 @@ cat "$ADK_DATADIR/engine_error.conf"
 | `running` / `runtime` | 正常启动后应为 `true` / `running`；手动暂停时停止是正常状态 |
 | `frozen` | 应为 `false`，否则有后台冻结风险 |
 | `last_error` / `last_error_code` | 结合日志时间判断；文件为空不代表其他检查可以省略 |
-| `iptables_active` | **快速状态只是按进程状态近似，不证明真实防火墙链完整** |
+| `iptables_active` | v1.2.3 及更早快速状态仅按进程近似；v1.2.4 起快速状态检查双栈 OUTPUT 唯一入口，但仍不证明代际链完整 |
+| `route_check` | v1.2.4 起 `entry` 为入口检查，`full` 为完整双栈布局校验 |
+| `daemon_image_current` | v1.2.4 起，运行中为 `false` 表示仍是不同于当前安装文件的旧映像；不能只看 `--version-status` |
 | `mode` / `scope` | `mode=2` 为 Hosts + AdGuard；`scope=0` 为全局模式，`scope=1` 为应用名单模式 |
 | `dev_mode` | 域名判定日志开关；开启时注意访问记录隐私 |
 | `block_quic` | 是否接管并拒绝 UDP 443；不代表能读取 QUIC 内部域名 |
 | `autostart` | 是否开机自启；`false` 不影响当前已手动启动的引擎 |
 
-`runtime.state`、`metrics.conf` 都是磁盘快照，退出异常时可能保留旧值，不能单独用来证明进程仍在运行。
+`runtime.state`、`metrics.conf` 都是磁盘快照，退出异常时可能保留旧值，不能单独用来证明进程仍在运行。统计时间持续刷新但流量计数不变时，仍需核对真实 OUTPUT 跳转；参见[软重启生命周期](软重启与守护生命周期.md)。
 
 ## 3. 进程、线程、内存和冻结组
 

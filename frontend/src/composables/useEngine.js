@@ -23,12 +23,14 @@ export function useEngine(api, feedback) {
   const life = useLifetime();
   const state = ref(null), total = ref(null), action = ref(''), setting = ref(''), scope = ref(0), error = ref('');
   const ready = computed(() => !!state.value);
-  const running = computed(() => !!state.value?.running && !!state.value?.iptables_active);
+  const running = computed(() => !!state.value?.running && !!state.value?.iptables_active && state.value?.daemon_image_current !== false);
+  const outdated = computed(() => !!state.value?.running && state.value?.daemon_image_current === false);
+  const routingLost = computed(() => !!state.value?.running && !state.value?.iptables_active);
   const needsRules = computed(() => ready.value && !running.value && state.value.rules_black === 0 && state.value.rules_white === 0);
-  const kind = computed(() => running.value ? 'ok' : state.value?.runtime === 'error' ? 'bad' : state.value?.runtime === 'starting' ? 'warn' : 'neutral');
-  const badge = computed(() => !ready.value ? '未连接' : ({ ok: '正在守护', bad: '上次启动失败', warn: '启动中', neutral: '已暂停' })[kind.value]);
-  const title = computed(() => !ready.value ? '等待连接管理器' : ({ ok: '拦截已开启', bad: '当前未运行，上次启动失败', warn: '正在准备守护', neutral: '当前未接管网络' })[kind.value]);
-  const description = computed(() => error.value || (!ready.value ? '请在 KernelSU / APatch 中打开模块 WebUI。' : running.value ? '规则已接管当前网络请求，广告域名将被拦截。' : kind.value === 'bad' ? state.value.last_error || '引擎已退出，请查看运行日志与诊断。' : kind.value === 'warn' ? '正在加载规则、建立队列与路由，请稍候。' : needsRules.value ? '尚无可用规则，请先点击“同步开源规则”，同步成功后再启动守护。' : '本模块未接管网络；其他网络模块的状态请分别检查。'));
+  const kind = computed(() => running.value ? 'ok' : routingLost.value ? 'bad' : outdated.value ? 'warn' : state.value?.runtime === 'error' ? 'bad' : state.value?.runtime === 'starting' ? 'warn' : 'neutral');
+  const badge = computed(() => !ready.value ? '未连接' : routingLost.value ? '路由待恢复' : outdated.value ? '升级待生效' : ({ ok: '正在守护', bad: '上次启动失败', warn: '启动中', neutral: '已暂停' })[kind.value]);
+  const title = computed(() => !ready.value ? '等待连接管理器' : routingLost.value ? '拦截未正常接管' : outdated.value ? '旧版本守护仍在运行' : ({ ok: '拦截已开启', bad: '当前未运行，上次启动失败', warn: '正在准备守护', neutral: '当前未接管网络' })[kind.value]);
+  const description = computed(() => error.value || (!ready.value ? '请在 KernelSU / APatch 中打开模块 WebUI。' : routingLost.value ? '守护进程仍在，但双栈路由校验未通过。点击“启动守护”安全替换旧实例并重建路由。' : outdated.value ? '安装文件已更新，运行中的守护尚未切换。点击“启动守护”使当前版本生效，不改变开机自启设置。' : running.value ? '规则已接管当前网络请求，广告域名将被拦截。' : kind.value === 'bad' ? state.value.last_error || '引擎已退出，请查看运行日志与诊断。' : kind.value === 'warn' ? '正在加载规则、建立队列与路由，请稍候。' : needsRules.value ? '尚无可用规则，请先点击“同步开源规则”，同步成功后再启动守护。' : '本模块未接管网络；其他网络模块的状态请分别检查。'));
   const blockedTotal = computed(() => {
     const metrics=state.value?.metrics;
     if (!metrics || !Number.isSafeInteger(metrics.updated_at) || metrics.updated_at<=0) return null;
@@ -47,6 +49,15 @@ export function useEngine(api, feedback) {
       if (!life.active || revision!==stateRevision) return;
       if (result.code || !next || typeof next.running!=='boolean') { metricsStale.value=true; return; }
       metricsStale.value=false;
+      // Entry-only polling may downgrade health, never make an approximate
+      // route green. Recoveries and faults get a full, read-only verification.
+      if (next.running && (next.iptables_active===false || next.daemon_image_current===false || !running.value)) {
+        state.value={...state.value,metrics:next.metrics,
+          ...(next.iptables_active===false ? {iptables_active:false} : {}),
+          ...(next.daemon_image_current===false ? {daemon_image_current:false} : {})};
+        if (!await refresh()) metricsStale.value=true;
+        return;
+      }
       if (!next.running) state.value={...state.value,running:false,iptables_active:false,runtime:next.runtime,last_error:next.last_error};
       else if (running.value) state.value={...state.value,metrics:next.metrics};
     })();
@@ -57,7 +68,7 @@ export function useEngine(api, feedback) {
     if (refreshing) return refreshing;
     refreshing = (async () => {
       const result = await api.command('--status'), next = lastJson(result.stdout);
-      if (!next || !('running' in next)) { feedback.log(result.stderr || '无法读取引擎状态', 'error'); return null; }
+      if (result.code || !next || typeof next.running!=='boolean') { feedback.log(result.stderr || '无法读取引擎状态', 'error'); return null; }
       if (!life.active) return null;
       state.value = next;
       stateRevision++;

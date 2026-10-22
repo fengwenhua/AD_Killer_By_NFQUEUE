@@ -72,6 +72,9 @@ std::string iptables_install(const IptablesConfig &cfg);
 void iptables_remove_all();
 bool iptables_verify(const IptablesConfig &cfg);
 bool iptables_chain_active(const IptablesConfig &cfg);
+// Read-only two-command check, explicitly not a full generation verification.
+bool iptables_entry_attached();
+bool iptables_validate_output_attachment(const std::vector<std::string> &lines);
 bool iptables_any_left();
 std::string iptables_sync_app_routes(const IptablesConfig &cfg);
 int run_shell(const char *cmd);

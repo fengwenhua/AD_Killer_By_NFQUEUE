@@ -24,6 +24,10 @@ def main() -> None:
     disabled_check = service.index("should_autostart || exit 0")
     start = service.index('"$MODDIR/AD_Killer_By_NFQUEUE" --start')
     assert disabled_check < start, "boot service must honor persisted pause before start"
+    assert service.index('--prepare-reboot') < disabled_check
+    hook = (ROOT / 'module/emulated-soft-reboot.sh').read_text()
+    assert '"$MODDIR/AD_Killer_By_NFQUEUE" --prepare-reboot' in hook
+    assert '--stop\n' not in hook
     assert '"$i" -ge 180 ] && exit 0' in service, "incomplete boot must skip startup"
     assert '"autostart=false\\n"' in main_source, "installation must default to no autostart"
     assert '"enabled=false\\n"' in main_source, "first installation must be paused"

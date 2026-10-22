@@ -219,6 +219,41 @@ static int find_daemon_pid() {
     return -1;
 }
 
+// Compare kernel file identities, not path strings: a replaced/deleted old image
+// can keep the same argv and module path after a root-manager update.
+static bool daemon_image_current(int pid) {
+    if (pid <= 0 || !is_daemon_pid(pid)) return false;
+    struct stat running {}, current {};
+    const std::string path = "/proc/" + std::to_string(pid) + "/exe";
+    return stat(path.c_str(), &running) == 0 && stat("/proc/self/exe", &current) == 0 &&
+           running.st_dev == current.st_dev && running.st_ino == current.st_ino;
+}
+
+// Lifecycle stop, not a user pause. The verified daemon owns queue/route cleanup
+// and its lifetime lock. Never edit preferences, SIGKILL, unlink its PID, or
+// remove routes over a still-live instance. Also safe before data exists.
+static int cmd_prepare_reboot() {
+    if (!am_root()) { fprintf(stderr, "生命周期清理需要 root 权限\n"); return 1; }
+    int pid = find_daemon_pid();
+    if (pid <= 0) { printf("{\"status\":\"stopped\"}\n"); return 0; }
+    configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
+    log_line("系统", "重启生命周期：优雅停止本模块守护 pid %d，保留暂停与自启策略", pid);
+    if (!is_daemon_pid(pid) || kill(pid, SIGTERM) != 0) {
+        log_line("错误", "生命周期停止未能通知已核实的守护，未执行强杀或路由清理");
+        fprintf(stderr, "无法通知已核实的守护退出，未执行强杀或路由清理\n");
+        return 1;
+    }
+    for (int i = 0; i < STOP_WAIT_MS / 100 && is_daemon_pid(pid); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (is_daemon_pid(pid)) {
+        log_line("错误", "生命周期停止超时，保留现场且不启动第二个实例");
+        fprintf(stderr, "守护退出超时，保留现场且不启动第二个实例\n");
+        return 1;
+    }
+    printf("{\"status\":\"stopped\"}\n");
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // --start:拉起守护进程
 //
@@ -264,9 +299,9 @@ static int cmd_start() {
             routes.scope = cfg.scope;
             routes.bypass_uids = cfg.bypass_uids;
             routes.intercept_uids = cfg.intercept_uids;
-            if (!iptables_chain_active(routes)) {
+            if (!daemon_image_current(old) || !iptables_chain_active(routes)) {
                 configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
-                log_line("系统", "守护仍在但路由校验失败；本次手动启动将优雅退出本模块旧实例，再使用当前二进制重建队列和双栈路由");
+                log_line("系统", "守护映像过期或路由校验失败；本次手动启动将优雅退出本模块旧实例，再使用当前二进制重建队列和双栈路由");
                 // Do not attach traffic to an unverified/old listener. A module
                 // upgrade can leave a deleted executable alive. Let that exact
                 // daemon release its queues and lifecycle lock before restart.
@@ -1030,10 +1065,6 @@ static int cmd_status() {
     int pid = read_daemon_pid();
     bool frozen = daemon_cgroup_frozen(pid);
     bool running = pid > 0 && !frozen;
-    if (pid <= 0) {
-        // 异常退出残留规则 → 顺手清理
-        if (iptables_any_left()) iptables_remove_all();
-    }
 
     // 配置读取
     EngineConfig engine_cfg = load_engine_config();
@@ -1061,7 +1092,7 @@ static int cmd_status() {
            "\"dev_mode\": %s, \"block_quic\": %s, \"enabled\": %s, \"manual_stop\": %s, \"autostart\": %s, "
            "\"rules_black\": %ld, \"rules_white\": %ld, \"rules_updated_at\": %ld, "
            "\"ports\": \"53,80,443\", \"quic\": %s, \"table\": \"mangle\", "
-           "\"metrics\": %s, \"state_file\": \"state.conf\", %s}\n",
+           "\"metrics\": %s, \"state_file\": \"state.conf\", \"daemon_pid\":%d, \"daemon_image_current\":%s, \"route_check\":\"full\", %s}\n",
            running ? "true" : "false",
            ipt_active ? "true" : "false",
            engine_cfg.mode, engine_cfg.scope,
@@ -1071,13 +1102,14 @@ static int cmd_status() {
            (manual == "true" || manual == "1") ? "true" : "false",
            (autostart == "true" || autostart == "1") ? "true" : "false",
            black, white, updated,
-           engine_cfg.block_quic ? "true" : "false", metrics.c_str(), engine_diagnostics_json(frozen).c_str());
+           engine_cfg.block_quic ? "true" : "false", metrics.c_str(), pid > 0 ? pid : 0,
+           daemon_image_current(pid) ? "true" : "false", engine_diagnostics_json(frozen).c_str());
     return 0;
 }
 
 // ---------------------------------------------------------------------------
-// --status-fast:快速状态(跳过 iptables 校验,直接读配置与 runtime.state)
-// WebUI 高频轮询用,避免每次 popen iptables 的开销
+// --status-fast:低频概览轮询，只读核对双栈 OUTPUT 的唯一入口挂载。
+// route_check=entry 不代表完整代际布局校验；异常时 WebUI 再调用 --status。
 static int cmd_status_fast() {
     int pid = find_daemon_pid();
     bool frozen = daemon_cgroup_frozen(pid);
@@ -1108,14 +1140,14 @@ static int cmd_status_fast() {
     }
     bool dev_on = (dev == "true" || dev == "1");
     bool quic_on = (quic == "true" || quic == "1");
-    // 快速模式:iptables_active 以运行状态近似(不执行 iptables 命令)
+    const bool attached = running && iptables_entry_attached();
     printf("{\"running\": %s, \"iptables_active\": %s, \"mode\": %d, \"scope\": %d, "
            "\"dev_mode\": %s, \"block_quic\": %s, \"enabled\": %s, \"manual_stop\": %s, \"autostart\": %s, "
            "\"rules_black\": %ld, \"rules_white\": %ld, \"rules_updated_at\": %ld, "
            "\"ports\": \"53,80,443\", \"quic\": %s, \"table\": \"mangle\", "
-           "\"metrics\": %s, \"state_file\": \"state.conf\", %s}\n",
+           "\"metrics\": %s, \"state_file\": \"state.conf\", \"daemon_pid\":%d, \"daemon_image_current\":%s, \"route_check\":\"entry\", %s}\n",
            running ? "true" : "false",
-           pid > 0 ? "true" : "false",
+           attached ? "true" : "false",
            mode, scope,
            dev_on ? "true" : "false",
            quic_on ? "true" : "false",
@@ -1123,7 +1155,8 @@ static int cmd_status_fast() {
            (manual == "true" || manual == "1") ? "true" : "false",
            (autostart == "true" || autostart == "1") ? "true" : "false",
            black, white, updated,
-           quic_on ? "true" : "false", metrics.c_str(), engine_diagnostics_json(frozen).c_str());
+           quic_on ? "true" : "false", metrics.c_str(), pid > 0 ? pid : 0,
+           daemon_image_current(pid) ? "true" : "false", engine_diagnostics_json(frozen).c_str());
     return 0;
 }
 
@@ -1228,6 +1261,7 @@ static void usage() {
             "  AD_Killer_By_NFQUEUE --install          安装初始化\n"
             "  AD_Killer_By_NFQUEUE --start            启动引擎(守护进程)\n"
             "  AD_Killer_By_NFQUEUE --stop             停止引擎并清理规则\n"
+            "  AD_Killer_By_NFQUEUE --prepare-reboot  生命周期停止，不修改暂停或自启策略\n"
             "  AD_Killer_By_NFQUEUE --reload           热重载规则\n"
             "  AD_Killer_By_NFQUEUE --update           拉取规则源更新\n"
             "  AD_Killer_By_NFQUEUE --update-start     创建后台更新 job\n"
@@ -1284,6 +1318,10 @@ int main(int argc, char **argv) {
     }
     if (arg == "--start")          return cmd_start();
     if (arg == "--stop")           return cmd_stop();
+    if (arg == "--prepare-reboot") {
+        if (argc != 2) { usage(); return 1; }
+        return cmd_prepare_reboot();
+    }
     if (arg == "--daemon")         return cmd_daemon();
     if (arg == "--reload")         return cmd_reload();
     if (arg == "--update")         return cmd_update();

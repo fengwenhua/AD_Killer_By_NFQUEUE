@@ -874,6 +874,25 @@ bool iptables_chain_active(const IptablesConfig &cfg) {
     return iptables_verify(cfg);
 }
 
+bool iptables_validate_output_attachment(const std::vector<std::string> &lines) {
+    size_t attached = 0;
+    for (const auto &line : lines) {
+        if (line == std::string("-A OUTPUT -j ") + ENTRY_CHAIN) ++attached;
+        else if (line.find("-A OUTPUT ") == 0 && line.find("-j ADK_NFQ_") != std::string::npos)
+            return false;
+    }
+    return attached == 1;
+}
+
+bool iptables_entry_attached() {
+    for (const char *tb : TB) {
+        bool ok = false;
+        auto lines = shell_output_lines((std::string(tb) + " -t mangle -S OUTPUT").c_str(), &ok);
+        if (!ok || !iptables_validate_output_attachment(lines)) return false;
+    }
+    return true;
+}
+
 bool iptables_any_left() {
     return shell_output_contains("iptables -w 5 -t mangle -S", "ADK_NFQ_") ||
            shell_output_contains("ip6tables -w 5 -t mangle -S", "ADK_NFQ_");

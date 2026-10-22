@@ -34,6 +34,10 @@ def main():
         command("--install")
         conf = DATA / "state.conf"
         first = status()
+        saved=conf.read_bytes()
+        assert command_json('--prepare-reboot')['status']=='stopped'
+        assert conf.read_bytes()==saved and not (DATA/'runtime.state').exists()
+        assert first['daemon_pid']==0 and not first['daemon_image_current'] and not first['iptables_active']
         assert not first["autostart"] and not first["enabled"] and first["manual_stop"]
         assert first["block_quic"], "fresh installation must block QUIC by default"
         assert first["dev_mode"], "fresh installation must enable DNS diagnostics by default"

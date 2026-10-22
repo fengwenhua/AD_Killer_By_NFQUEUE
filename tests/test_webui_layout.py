@@ -39,6 +39,8 @@ window.previewNativeBusy = [];
 window.previewReleaseNotesFails = false;
 window.previewRulesEmpty = false;
 window.previewEngineState = "stopped";
+window.previewRoutingActive = true;
+window.previewDaemonImageCurrent = true;
 window.previewStartFails = true;
 window.previewStartDelay = 0;
 window.previewMetrics = {updated_at:1792610000,block_suffix_hits:120,block_exact_hits:34,blocked_retransmits:999,quic_rejects:99};
@@ -74,7 +76,8 @@ window.ksu = {
     else if(command.includes(" --module-update-download ")) {previewModuleReady="9.0";text=JSON.stringify({status:"started",job_id:"987-654"});}
     else if(command.includes(" --module-update-install ")) {previewModuleReboot=true;text=JSON.stringify({status:"started",job_id:"987-655"});}
     else if(command.includes(" --status")) text = JSON.stringify({
-      iptables_active:previewEngineState==="running", running:previewEngineState==="running",
+      iptables_active:previewEngineState==="running" && previewRoutingActive, running:previewEngineState==="running",
+      daemon_image_current:previewDaemonImageCurrent,
       runtime:previewEngineState, last_error:previewEngineState==="error"?previewEngineError:"",
       enabled:previewEngineState!=="stopped", metrics:previewMetrics, ...previewSettings});
     else if(command.endsWith(" --start")) {

@@ -9,6 +9,7 @@ REQUIRED = {
     "AD_Killer_By_NFQUEUE",
     "module.prop",
     "service.sh",
+    "emulated-soft-reboot.sh",
     "customize.sh",
     "uninstall.sh",
     "webroot/index.html",
@@ -40,7 +41,7 @@ def main() -> None:
             fail(str(error))
         if b"MIT License" not in archive.read("LICENSE"):
             fail("missing project MIT license text")
-        for script in ("service.sh", "customize.sh", "uninstall.sh"):
+        for script in ("service.sh", "emulated-soft-reboot.sh", "customize.sh", "uninstall.sh"):
             if not archive.read(script).startswith(b"#!"):
                 fail(f"{script} has no shebang")
         prop = archive.read("module.prop").decode("utf-8")
