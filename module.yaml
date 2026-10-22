@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "AD_Killer_By_NFQUEUE",
+  "name": "AD Killer (by NFQUEUE)",
+  "summary": "基于 NFQUEUE 的 Android 本地去广告模块，提供规则管理、应用名单和离线 WebUI。需要内核支持 NFQUEUE。",
+  "description": "README.md",
+  "license": "MIT",
+  "homepage": "https://github.com/fengwenhua/AD_Killer_By_NFQUEUE",
+  "support": "https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/issues",
+  "tags": ["ad-blocking", "network", "privacy"],
+  "authors": [{"name": "fengwenhua", "url": "https://github.com/fengwenhua"}],
+  "compatibility": {"androidMinApi": 31, "architectures": ["arm64-v8a"]},
+  "release": {"assetPattern": "AD_Killer_By_NFQUEUE-*.zip"}
+}

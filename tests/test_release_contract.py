@@ -23,18 +23,27 @@ def main() -> None:
                 "LICENSE")
 
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    require_all(workflow, (
-        "needs: [host-tests, webui-layout, android-build]",
-        "github.ref == 'refs/heads/main'", "contents: write",
-        "gh release create", "--prerelease",
-    ), "gated prerelease workflow")
+    assert 'contents: write' not in workflow and 'gh release create' not in workflow, (
+        'ordinary CI must only build/test; it must never consume a release tag'
+    )
+    publication = (ROOT / '.github/workflows/release.yml').read_text()
+    require_all(publication, (
+        'workflow_dispatch:', "github.ref == 'refs/heads/main'", 'contents: write',
+        'actions: read', 'ci_run_id:', 'KERNELSU_IMMUTABLE_RELEASES',
+        'scripts/publish_release.py prepare', 'scripts/publish_release.py publish',
+        'cancel-in-progress: false', 'persist-credentials: false',
+    ), 'explicit gated immutable publication')
+    assert '\n  push:' not in publication, 'a push must not publish automatically'
     require_all(workflow, (
         "RELEASE_CHANNEL=preview", "tests/test_release_channels.py",
         "tests/test_webui_update_channels.py", "name: AD_Killer_By_NFQUEUE-module-preview",
     ), "separate stable/preview build gates")
-    assert workflow.count("name: AD_Killer_By_NFQUEUE-module-preview") == 2, (
-        "automatic prerelease must download the marked preview artifact"
+    assert workflow.count("name: AD_Killer_By_NFQUEUE-module-preview") == 1, (
+        "CI must retain the marked preview artifact without publishing it"
     )
+    assert workflow.count('KernelSU-Modules/tools/actions/module-release@b6d340ddcd562ad482568b6e66b8d7a9c34d645e') == 2
+    assert workflow.count("dry-run: 'true'") == 2
+    assert 'module.yaml' in (ROOT / 'scripts/validate_listing.py').read_text()
     require_all(workflow, (
         "tests/validate_manager_update.py dist/AD_Killer_By_NFQUEUE-v*.zip",
         "tests/validate_manager_update.py dist/preview/AD_Killer_By_NFQUEUE-v*.zip",
@@ -43,7 +52,7 @@ def main() -> None:
     # setup-node's node-version only controls the project build runtime.
     for action, minimum in (
         ("checkout", 6), ("setup-node", 6), ("setup-python", 6),
-        ("upload-artifact", 6), ("download-artifact", 7),
+        ("upload-artifact", 6),
     ):
         refs = re.findall(rf"uses:\s*actions/{action}@([^\s#]+)", workflow)
         assert refs, f"workflow must exercise actions/{action}"

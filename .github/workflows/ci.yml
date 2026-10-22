@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
@@ -143,39 +144,20 @@ jobs:
             dist/preview/update.json
             dist/preview/changelog.md
 
-  prerelease:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: [host-tests, webui-layout, android-build]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v7
-        with:
-          name: AD_Killer_By_NFQUEUE-module-preview
-          path: release
-      - name: Publish versioned prerelease after all checks pass
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Resolve package version for upstream prechecks
+        id: module_version
         run: |
-          version=$(sed -n 's/^version=v//p' module/module.prop)
-          tag="v${version}"
-          test -n "$version"
-          test -f "release/AD_Killer_By_NFQUEUE-${tag}.zip"
-          test -f "release/AD_Killer_By_NFQUEUE-${tag}.zip.sha256"
-          test -f release/update.json
-          test -f release/changelog.md
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists; leaving it unchanged."
-            exit 0
-          fi
-          gh release create "$tag" \
-            "release/AD_Killer_By_NFQUEUE-${tag}.zip" \
-            "release/AD_Killer_By_NFQUEUE-${tag}.zip.sha256" \
-            release/update.json release/changelog.md \
-            --target "$GITHUB_SHA" \
-            --title "$tag Preview" \
-            --notes-file release/changelog.md \
-            --prerelease
+          version=$(sed -n 's/^version=//p' module/module.prop)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: KernelSU official stable ZIP and listing precheck (no publication)
+        uses: KernelSU-Modules/tools/actions/module-release@b6d340ddcd562ad482568b6e66b8d7a9c34d645e
+        with:
+          zip: dist/AD_Killer_By_NFQUEUE-${{ steps.module_version.outputs.version }}.zip
+          dry-run: 'true'
+          require-immutable: 'false'
+      - name: KernelSU official preview ZIP and listing precheck (no publication)
+        uses: KernelSU-Modules/tools/actions/module-release@b6d340ddcd562ad482568b6e66b8d7a9c34d645e
+        with:
+          zip: dist/preview/AD_Killer_By_NFQUEUE-${{ steps.module_version.outputs.version }}.zip
+          dry-run: 'true'
+          require-immutable: 'false'

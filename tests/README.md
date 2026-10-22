@@ -81,6 +81,10 @@ NFQUEUE netlink 解析入口。`FUZZ_CXX` 可指定支持 `-fsanitize=fuzzer` �
 缺少 libFuzzer runtime 时烟测自动改用确定性随机驱动，仍保留 ASan/UBSan；长时间
 fuzz 时应使用完整 LLVM，并给各二进制传入持久 corpus 和 artifact 目录。
 
+`test_listing_and_release.py` 使用合成 GitHub 响应验证收录清单、main 全绿门禁、
+渠道与来源一致性、版本单调增长、禁止复用标签、草稿上传顺序及中断不公开。
+不创建真实发布；完整官方清单／ZIP 校验在 CI 的固定 SHA dry-run Action 中执行。
+
 `test-nfqueue-integration` 会临时插入仅匹配本机测试端口的 IPv4/IPv6 mangle 规则，
 实际绑定 queue、启用 copy/maxlen/fail-open、接收 packet ID 和 payload、发送 ACCEPT
 verdict，并验证 verdict 写 PASS/BLOCK connmark 后，同一连接的下一包会绕过队列或在

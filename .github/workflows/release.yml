@@ -1,0 +1,61 @@
+name: Publish immutable release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: 'Completed green main CI run ID (not this workflow run)'
+        required: true
+        type: string
+      version:
+        description: 'Unused version tag matching the CI package, e.g. v1.2.6'
+        required: true
+        type: string
+      channel:
+        description: 'Publishing either channel consumes this version tag permanently'
+        required: true
+        type: choice
+        default: stable
+        options: [stable, preview]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: publish-module-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Require owner acknowledgement of release immutability
+        env:
+          IMMUTABLE_RELEASES: ${{ vars.KERNELSU_IMMUTABLE_RELEASES }}
+        run: |
+          if [ "$IMMUTABLE_RELEASES" != enabled ]; then
+            echo 'Enable GitHub release immutability, then set KERNELSU_IMMUTABLE_RELEASES=enabled in repository Actions variables.' >&2
+            exit 1
+          fi
+      - name: Download and verify the exact fully green CI artifact
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+        run: |
+          python3 scripts/publish_release.py prepare --run-id "$CI_RUN_ID" --version "$RELEASE_VERSION" --channel "$RELEASE_CHANNEL" --output release
+      - name: Create draft, upload and verify all assets, then publish once
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          KERNELSU_IMMUTABLE_RELEASES: ${{ vars.KERNELSU_IMMUTABLE_RELEASES }}
+        run: python3 scripts/publish_release.py publish --output release
