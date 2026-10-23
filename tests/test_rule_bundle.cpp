@@ -36,6 +36,7 @@ void cleanup_root(const std::string &root) {
         rmdir(staging.c_str());
     }
     unlink((root + "/rules.current").c_str());
+    unlink((root + "/rules.current.previous").c_str());
     unlink((root + "/legacy-hosts.gz").c_str());
     unlink((root + "/legacy-adguard.gz").c_str());
     rmdir((root + "/rulesets").c_str());

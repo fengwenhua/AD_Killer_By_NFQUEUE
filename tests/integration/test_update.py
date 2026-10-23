@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real CLI publishing tests; root only inside a disposable Linux container."""
 import gzip
+import fcntl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -215,8 +216,37 @@ def main():
             fields = dict(line.split("=", 1) for line in section.splitlines() if "=" in line)
             assert int(fields["checked_at"]) > 0
         assert not (DATA / "daemon.pid").exists()
+        # Real CLI GC, not only the bundle helper: unchanged input reuses a
+        # generation; a reader that captured old paths survives 100 changes.
+        before = (DATA / "rules.current").read_bytes()
+        rollback = (DATA / "rules.current.previous").read_bytes()
+        directories = set((DATA / "rulesets").iterdir())
+        command("--update")
+        assert (DATA / "rules.current").read_bytes() == before
+        assert (DATA / "rules.current.previous").read_bytes() == rollback
+        assert set((DATA / "rulesets").iterdir()) == directories
+        held = DATA / "rulesets" / before.decode().strip()
+        lease = os.open(held, os.O_RDONLY | os.O_DIRECTORY)
+        fcntl.flock(lease, fcntl.LOCK_SH)
+        old_content = {name: (held / name).read_bytes() for name in ("hosts_rules.gz", "adguard_rules.gz")}
+        try:
+            sources("/changing")
+            previous = before.decode().strip()
+            for index in range(100):
+                FIXTURES["/changing"] = f"0.0.0.0 change-{index}.example.org\n".encode()
+                command("--update")
+                current = (DATA / "rules.current").read_text().strip()
+                assert current != previous
+                assert (DATA / "rules.current.previous").read_text().strip() == previous
+                assert len(list((DATA / "rulesets").iterdir())) <= 4
+                assert {name: (held / name).read_bytes() for name in old_content} == old_content
+                active = DATA / "rulesets" / current
+                assert f"change-{index}.example.org".encode() in gzip.decompress((active / "hosts_rules.gz").read_bytes())
+                previous = current
+        finally:
+            os.close(lease)
         print("real update AdGuard-only/Hosts-only/mixed, paused counters, bad-source "
-              "preservation and asynchronous job tests passed")
+              "preservation, asynchronous jobs, unchanged reuse and 100-generation pinned-reader GC passed")
     finally:
         SLOW_RELEASE.set()
         server.shutdown()

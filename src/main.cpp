@@ -856,6 +856,17 @@ static int cmd_update(const std::string &test_url = "") {
         printf("{\"status\": \"busy\"}\n");
         return 2;
     }
+    auto collect_history = [] {
+        struct stat info {};
+        if (lstat(DIR_RULESETS, &info) && errno == ENOENT) return;
+        const auto gc = collect_rule_bundles(DATA_DIR);
+        if (!gc.ok) log_line("规则清理", "历史未能确认清理: %s", gc.error.c_str());
+        else if (gc.removed || gc.over_budget || gc.skipped)
+            log_line("规则清理", "移除 %zu / 保留 %zu (%llu 字节) / 租约 %zu / 跳过 %zu%s",
+                gc.removed, gc.retained, static_cast<unsigned long long>(gc.retained_bytes),
+                gc.pinned, gc.skipped, gc.over_budget ? "；受保护代际暂时超过预算" : "");
+    };
+    if (test_url.empty()) collect_history(); // Test-only jobs never collect/publish.
     std::string sources;
     if (test_url.empty() && !read_file(FILE_UPDATE_SOURCES, sources)) {
         log_line("更新", "未找到规则源配置 %s", FILE_UPDATE_SOURCES);
@@ -1037,13 +1048,15 @@ static int cmd_update(const std::string &test_url = "") {
     if (!committed) {
         discard_staged_rule_bundle(staged);
         save_source_reports("publish_failed");
-        log_line("更新", "规则指针提交失败: %s,保留旧规则", stage_error.c_str());
+        log_line("更新", "规则指针提交未确认: %s；请核查当前指针", stage_error.c_str());
         printf("{\"status\": \"error_download\"}\n");
         return 1;
     }
     log_line("更新", "规则 generation %s 已原子发布(引擎可加载 %d/%d 行)",
-             generation.c_str(), staged_hosts, staged_adguard);
-    published = {generation, candidate.black.size(), candidate.white.size()};
+             staged.generation.c_str(), staged_hosts, staged_adguard);
+    if (staged.reused) log_line("更新", "规则内容未变化，复用当前 generation");
+    published = {staged.generation, candidate.black.size(), candidate.white.size()};
+    collect_history();
     size_t accepted_sources = 0, accepted_lines = 0, filtered_lines = 0;
     for (const auto &report : source_reports) {
         if (report.status == "accepted") {

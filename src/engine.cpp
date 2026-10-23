@@ -575,7 +575,7 @@ EngineConfig load_engine_config() {
 // Snapshot writers participate in the same lock order: apps -> editable ->
 // state. In particular, do not read the rule mode, then read routing settings
 // again after a slow gzip load. rules.current selects immutable bundle files
-// once; generation collection must respect readers (see O01).
+// once; the returned shared lease pins it across the lock-free load.
 struct CandidateInputs {
     EngineConfig config;
     RuleBundlePaths bundle;
@@ -609,7 +609,7 @@ static bool load_candidate(EngineConfig &cfg, RuleDB &rules, std::string &revisi
     if (!captured) return false;
     // Decompression, hashing and sorting can be expensive. No mutable input
     // lock remains held, so a user pause/save need not wait for a huge gzip.
-    // Generation files are immutable; O01 collection must pin this reader.
+    // Generation files are immutable and inputs.bundle pins their directory.
     load_rule_files(rules, cfg.mode, inputs.bundle.hosts_path, inputs.bundle.adguard_path,
                     "", inputs.bundle.from_manifest, &inputs.custom);
     rules.generation = inputs.bundle.from_manifest ? inputs.bundle.generation : "legacy";

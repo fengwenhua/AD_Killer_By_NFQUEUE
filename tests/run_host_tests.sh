@@ -273,6 +273,11 @@ ${CXX:-c++} $COMPILE_FLAGS \
 
 "$BUILD_DIR/test_rule_bundle"
 
+${CXX:-c++} $COMPILE_FLAGS -DADK_RULE_BUNDLE_TESTING -I"$ROOT/src" \
+    "$ROOT/tests/test_rule_bundle_gc.cpp" "$ROOT/src/rule_bundle.cpp" \
+    -o "$BUILD_DIR/test_rule_bundle_gc"
+"$BUILD_DIR/test_rule_bundle_gc"
+
 ${CXX:-c++} $COMPILE_FLAGS \
     -I"$ROOT/src" \
     "$ROOT/tests/test_update_job.cpp" \

@@ -41,8 +41,8 @@ export function useSync(api, feedback, history, refresh, storage = getStorage())
       const partial = ok && (summary ? summary.partial : /下载失败:|来源内容拒绝:|来源累计资源上限|注意：部分来源失败/.test(text));
       const failure = text.trim().split(/\r?\n/).reverse().find(line => /失败|拒绝|错误|无法|不可用|超限/.test(line));
       const missing = ['not_found', 'invalid_state', 'invalid_job'].includes(state.status);
-      const detail = missing ? '后台任务记录不存在或不可用，当前规则未改变，请重新同步。' : failure ? failure.replace(/^\[[^\]]*\]\s*\[[^\]]*\]\s*/, '') : '请展开诊断日志查看详情';
-      const final = ok ? summary?.message || (partial ? '部分来源失败，成功来源已合并保存；请查看诊断日志。' : '规则已校验并合并，成功保存到本地。') : state.status === 'interrupted' ? '更新进程意外中断，旧规则未被替换。' : '同步失败：' + detail;
+      const detail = missing ? '后台任务记录不存在或不可用，发布结果未确认，请核查当前规则。' : failure ? failure.replace(/^\[[^\]]*\]\s*\[[^\]]*\]\s*/, '') : '请展开诊断日志查看详情';
+      const final = ok ? summary?.message || (partial ? '部分来源失败，成功来源已合并保存；请查看诊断日志。' : '规则已校验并合并，成功保存到本地。') : state.status === 'interrupted' ? '更新进程意外中断，发布结果未确认；请核查当前规则。' : '同步失败：' + detail;
       const finalKind = ok ? partial ? 'warning' : 'success' : 'error';
       feedback.log(final, finalKind === 'success' ? 'ok' : finalKind === 'error' ? 'error' : '');
       status(final, finalKind); if (!ok) feedback.consoleOpen.value = true;

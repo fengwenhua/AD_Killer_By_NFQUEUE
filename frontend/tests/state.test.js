@@ -170,6 +170,20 @@ test('diagnostic buffer is bounded and feedback treats hostile text as text', ()
   finally { scope.stop(); }
 });
 
+test('interrupted publishing is unknown, never a promise that the old pointer survived', async () => {
+  const scope = effectScope();
+  const api = { command: async command => command === '--update-start'
+    ? ok({ status: 'started', job_id: '123-456' }) : ok({ status: 'interrupted', exit_code: 255 }),
+  readFile: async () => '', readJob: async () => 'generation 已原子发布' };
+  const sync = scope.run(() => useSync(api, feedback(), ref([]), async () => {}, memory()));
+  try {
+    await sync.start();
+    assert.match(sync.message.value, /发布结果未确认/);
+    assert.doesNotMatch(sync.message.value, /旧规则未被替换|当前规则未改变/);
+    assert.equal(sync.busy.value, false);
+  } finally { scope.stop(); }
+});
+
 test('WebView denied localStorage getter does not prevent source loading or synchronization', async () => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage'), scope = effectScope();
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new Error('SecurityError'); } });
