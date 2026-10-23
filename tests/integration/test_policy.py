@@ -98,7 +98,7 @@ def main():
         (DATA / 'hosts_rules.gz').write_bytes(gzip.compress(b'# valid empty category\n'))
         (DATA / 'adguard_rules.gz').write_bytes(gzip.compress(b'ads.example.com\n'))
         (DATA / 'custom_rules.txt').write_text('')
-        daemon = subprocess.Popen([BINARY, '--daemon'])
+        daemon = subprocess.Popen([BINARY, '--daemon', '--foreground'])
         wait_for(lambda: state() == 'running' or daemon.poll() is not None, 'policy engine start')
         assert daemon.poll() is None and state() == 'running'
         wait_policy(2, 1, 'initial AdGuard rule')
@@ -158,7 +158,7 @@ def main():
         uid_request(socket.AF_INET, 10002, False, host='custom-block.example')
         command(BINARY, '--stop')
         assert daemon.wait(timeout=10) == 0
-        result = subprocess.run([BINARY, '--daemon'], capture_output=True, text=True, timeout=10)
+        result = subprocess.run([BINARY, '--daemon', '--foreground'], capture_output=True, text=True, timeout=10)
         assert result.returncode != 0
         status = json.loads(command(BINARY, '--status').splitlines()[-1])
         assert status['last_error_code'] == 'rule_load_failed' and not status['iptables_active']

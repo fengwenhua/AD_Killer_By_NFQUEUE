@@ -49,7 +49,7 @@ def main():
         subprocess.run([*compiler, *flags, str(AUDIT / 'probe_cli.cpp'),
                         str(ROOT / 'src/update_job.cpp'), *linker, '-o', str(cli)], check=True, timeout=120)
         observed = ''
-        for operation in ('paused-daemon', 'cleanup-failure', 'unrelated-pid'):
+        for operation in ('cleanup-failure', 'unrelated-pid'):
             output = observe([str(cli), operation])
             observed += output
             if operation == 'unrelated-pid':
@@ -62,8 +62,8 @@ def main():
                         *(str(ROOT / 'src' / source) for source in sources),
                         *linker, '-lz', '-o', str(engine)], check=True, timeout=120)
         observed += observe([str(engine)])
-        assert sum(line.startswith('OBSERVED ') for line in observed.splitlines()) == 6
-    print('Audit characterization completed: 6 remaining observations; O02/O17/O18 have normal regressions now.')
+        assert sum(line.startswith('OBSERVED ') for line in observed.splitlines()) == 5
+    print('Audit characterization completed: 5 remaining observations; O02/O15/O17/O18 have normal regressions now.')
 
 
 if __name__ == '__main__':

@@ -45,7 +45,7 @@ def run_case(config, boot="1", changed_config=None, expect_start=False,
                                 timeout=10, capture_output=True)
         assert result.returncode == (1 if prepare_fails else 0), result.stderr
         calls = (base / "calls").read_text().splitlines() if (base / "calls").exists() else []
-        assert calls == ['--prepare-reboot'] + (["--start"] if expect_start else []), calls
+        assert calls == ['--prepare-reboot'] + (["--start-boot"] if expect_start else []), calls
         sleeps = (base / "sleeps").read_text().splitlines() if (base / "sleeps").exists() else []
         assert len(sleeps) == expect_sleeps, len(sleeps)
         if changed_config is None:

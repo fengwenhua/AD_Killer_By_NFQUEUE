@@ -4,6 +4,7 @@
 #include <iostream>
 #include <string>
 #include <unistd.h>
+#include <sys/stat.h>
 
 int main() {
     std::string path = "/tmp/ad_killer_by_nfqueue_daemon_lock_test_" + std::to_string((long)getpid());
@@ -31,6 +32,12 @@ int main() {
         std::cerr << "FAIL: lock should be reusable after release\n";
         unlink(path.c_str());
         return EXIT_FAILURE;
+    }
+    unlink(path.c_str());
+    if (mkfifo(path.c_str(), 0600) != 0) return EXIT_FAILURE;
+    {
+        ExclusiveFileLock fifo(path.c_str(), true, 30);
+        if (fifo.ok()) return EXIT_FAILURE;
     }
     unlink(path.c_str());
     std::cout << "exclusive file lock tests passed\n";

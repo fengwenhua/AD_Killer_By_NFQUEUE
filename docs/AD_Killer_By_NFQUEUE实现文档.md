@@ -85,7 +85,9 @@ AD_Killer_By_NFQUEUE/
 | `--install` | 安装初始化 | 建数据目录;写默认 `state.conf`/`adblock_mode.txt`/`update_sources.txt` 等 |
 | `--start` | 启动引擎 | 见 §4.1 进程模型 |
 | `--stop` | 安全停止 | state=stopping → 找守护进程 → SIGTERM → 超时 8s 强杀 → 拔规则 → state=stopped |
-| `--daemon` | 守护进程入口 | 由 `--start` exec 而来;写 pid 后进引擎主循环 |
+| `--daemon` | 内部守护进程入口 | 需要当前启动修订号；发布 PID 前复核授权，裸调用不能绕过暂停 |
+| `--daemon --foreground` | 显式前台调试 | 作为新的手动启动，预检并记录修订号，再前台运行；不用于自启 |
+| `--start-boot` | 开机策略启动 | 后端复核自启及暂停，等待/加载期间策略变更使旧请求失效 |
 | `--reload` | 热重载 | 运行中向守护进程发 SIGHUP;未运行输出 `{"status": "error"}` |
 | `--update` | 拉取规则源 | 下载(支持 .gz)→ 逐行归类 Hosts/AdGuard → gzip 落盘 → 热重载 |
 | `--update-start` | 后台更新 | 创建唯一 job，脱离 WebUI exec 会话运行并返回 job_id |
@@ -143,7 +145,10 @@ AD_Killer_By_NFQUEUE/
 
 要点:
 - **DISPATCHED 环境变量**是防重入标记 —— nohup 重入后的 `--start` 不再派发,
-  直接进 daemonize,避免无限循环
+  直接进 daemonize,避免无限循环；它不是授权。实际派发还携带启动修订号与 boot 标记，
+  后台重入及发布 PID 前核验 `lifecycle.intent` 与最新暂停/自启策略。
+- **启停协调**：意图锁只保护短事务，控制锁覆盖 PID 发布和 stop 后置清理；
+  迟到的旧启动不能绕过新暂停，旧 stop 不能清理新实例。详见《软重启与守护生命周期》。
 - **双 fork + setsid**:WebUI 划掉后台后守护进程不退出
 - **生命周期锁**:`.daemon.lock` 由守护进程全程持有,并发启动只有一个实例能进入引擎
 - 守护进程完整 `argv[0]` 为 `AD_Killer_By_NFQUEUEd`；受 Linux `TASK_COMM_LEN`

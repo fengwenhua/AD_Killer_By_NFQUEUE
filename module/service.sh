@@ -57,4 +57,4 @@ chmod 755 "$MODDIR/AD_Killer_By_NFQUEUE"
 
 # 4. 由核心自己双 fork + setsid 拉起独立守护进程；启动路径会先清理残留链。
 #    不修改 autostart 配置；手动启停与是否开机自启是两个独立选择。
-"$MODDIR/AD_Killer_By_NFQUEUE" --start >/dev/null 2>&1
+"$MODDIR/AD_Killer_By_NFQUEUE" --start-boot >/dev/null 2>&1

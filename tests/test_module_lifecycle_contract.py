@@ -13,10 +13,8 @@ def require_all(text: str, values: tuple[str, ...], label: str) -> None:
 def main() -> None:
     main_source = (ROOT / "src/main.cpp").read_text(encoding="utf-8")
     require_all(main_source, (
-        'write_conf_value(FILE_STATE_CONF, "enabled", "true")',
-        'write_conf_value(FILE_STATE_CONF, "manual_stop", "false")',
-        'write_conf_value(FILE_STATE_CONF, "enabled", "false")',
-        'write_conf_value(FILE_STATE_CONF, "manual_stop", "true")',
+        'lifecycle::enable(DATA_DIR, request',
+        'lifecycle::Action::STOP',
         'error_storage',
     ), "CLI lifecycle")
 
@@ -34,7 +32,7 @@ def main() -> None:
     assert '"block_quic=true\\n"' in main_source, "first installation must block QUIC by default"
     assert '"dev_mode=true\\n"' in main_source, "first installation must enable DNS logging by default"
     assert "--autostart" in main_source
-    manual_start = main_source.split("static int cmd_start()", 1)[1].split(
+    manual_start = main_source.split("static int cmd_start(bool", 1)[1].split(
         "static int cmd_daemon()", 1
     )[0]
     assert 'write_conf_value(FILE_STATE_CONF, "autostart"' not in manual_start, (

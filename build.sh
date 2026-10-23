@@ -90,6 +90,7 @@ $CXX -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -fvisibility=hidden \
   "$HERE/src/main.cpp" "$HERE/src/engine.cpp" "$HERE/src/rules.cpp" \
   "$HERE/src/module_update.cpp" \
   "$HERE/src/edit_config.cpp" \
+  "$HERE/src/lifecycle.cpp" \
   "$HERE/src/rule_stream.cpp" \
   "$HERE/src/snapshot_merge.cpp" \
   "$HERE/src/metrics.cpp" \

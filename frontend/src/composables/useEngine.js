@@ -99,6 +99,10 @@ export function useEngine(api, feedback) {
     await life.wait(32); // let the WebView paint before a synchronous native call
     try {
       const result = await api.command(`--${verb}`), reply = lastJson(result.stdout);
+      if (reply?.status === 'cancelled' || reply?.status === 'error_start_cancelled') {
+        const message = '本次启停请求已取消，请以刷新后的实际状态为准。';
+        feedback.log(message); feedback.toast(message); return;
+      }
       if (verb === 'start' && reply?.status === 'error_rules_empty') {
         const message = '请先点击“同步开源规则”，同步成功后再启动守护。';
         error.value = message; feedback.log(message); feedback.toast(message);

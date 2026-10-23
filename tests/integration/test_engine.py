@@ -198,7 +198,7 @@ def main() -> None:
         (DATA / "custom_rules.txt").write_text("ads.example.com\n")
         firewall("iptables", "-A", "OUTPUT", *anonymous_drop)
         canary = True
-        daemon = subprocess.Popen([BINARY, "--daemon"])
+        daemon = subprocess.Popen([BINARY, "--daemon", "--foreground"])
         wait_for(lambda: state() == "running" or daemon.poll() is not None,
                  "daemon startup")
         assert daemon.poll() is None and state() == "running", "daemon failed startup"
@@ -246,7 +246,7 @@ def main() -> None:
         for table in TABLES:
             assert 'ADK_NFQ_' not in firewall(table,'-S')
         assert not json.loads(command(BINARY,'--status-fast').splitlines()[-1])['running']
-        daemon=subprocess.Popen([BINARY,'--daemon'])
+        daemon=subprocess.Popen([BINARY,'--daemon','--foreground'])
         wait_for(lambda:state()=='running' or daemon.poll() is not None,'startup after lifecycle stop')
         assert daemon.poll() is None
         command(BINARY, "--stop")
@@ -258,7 +258,7 @@ def main() -> None:
 
         # A SIGKILL cannot execute cleanup. New unclassified traffic must still
         # bypass absent listeners, and a restart must replace the stale chains.
-        daemon = subprocess.Popen([BINARY, "--daemon"])
+        daemon = subprocess.Popen([BINARY, "--daemon", "--foreground"])
         wait_for(lambda: state() == "running" or daemon.poll() is not None,
                  "second daemon startup")
         assert daemon.poll() is None and state() == "running"
@@ -273,7 +273,7 @@ def main() -> None:
         for family in (socket.AF_INET, socket.AF_INET6):
             udp_dns(family, "safe.example.org", True)
             tcp_inspection(family, 80, "safe.example.org", True)
-        daemon = subprocess.Popen([BINARY, "--daemon"])
+        daemon = subprocess.Popen([BINARY, "--daemon", "--foreground"])
         wait_for(lambda: (state() == "running" and
                          (DATA / "daemon.pid").read_text().strip() == str(daemon.pid))
                  or daemon.poll() is not None,
@@ -294,7 +294,7 @@ def main() -> None:
         with tempfile.TemporaryDirectory(prefix="ad_killer_by_nfqueue_old_image_") as directory:
             old_image = Path(directory) / "AD_Killer_By_NFQUEUE"
             shutil.copy2(BINARY, old_image)
-            daemon = subprocess.Popen([str(old_image), "--daemon"])
+            daemon = subprocess.Popen([str(old_image), "--daemon", "--foreground"])
             wait_for(lambda: (state() == "running" and
                              (DATA / "daemon.pid").read_text().strip() == str(daemon.pid))
                      or daemon.poll() is not None, "old image startup")
@@ -366,7 +366,7 @@ def main() -> None:
 
         firewall("iptables", "-A", "OUTPUT", *foreign)
         conflict = True
-        daemon = subprocess.Popen([BINARY, "--daemon"])
+        daemon = subprocess.Popen([BINARY, "--daemon", "--foreground"])
         assert daemon.wait(timeout=15) != 0, "external connmark conflict was not rejected"
         assert state() == "error"
         for table in TABLES:

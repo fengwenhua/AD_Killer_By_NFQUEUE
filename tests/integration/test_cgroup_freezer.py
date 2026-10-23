@@ -48,7 +48,7 @@ def main():
         before = {table: engine.firewall(table, "-S") for table in engine.TABLES}
         denied = subprocess.run([
             "unshare", "--mount", "--propagation", "private", "sh", "-c",
-            'mount --bind "$1" "$1" && mount -o remount,bind,ro "$1" && exec "$2" --daemon',
+            'mount --bind "$1" "$1" && mount -o remount,bind,ro "$1" && exec "$2" --daemon --foreground',
             "sh", str(mount), engine.BINARY,
         ], preexec_fn=enter_test_group, capture_output=True, text=True, timeout=10)
         assert denied.returncode != 0
@@ -58,7 +58,7 @@ def main():
         for table in engine.TABLES:
             assert engine.firewall(table, "-S") == before[table], "failed isolation changed firewall"
         for entry in ("--daemon", "--start"):
-            launcher = subprocess.Popen([engine.BINARY, entry], preexec_fn=enter_test_group,
+            launcher = subprocess.Popen([engine.BINARY, entry] + (['--foreground'] if entry == '--daemon' else []), preexec_fn=enter_test_group,
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if entry == "--start":
                 assert launcher.wait(timeout=10) == 0

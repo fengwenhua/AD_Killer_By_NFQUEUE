@@ -34,6 +34,7 @@
 #include "source_preview.h"
 #include "module_update.h"
 #include "edit_config.h"
+#include "lifecycle.h"
 
 #include <cstdio>
 #include <cerrno>
@@ -46,6 +47,7 @@
 #include <sstream>
 #include <thread>
 #include <chrono>
+#include <memory>
 #include <fcntl.h>
 #include <signal.h>
 #include <unistd.h>
@@ -232,6 +234,15 @@ static bool daemon_image_current(int pid) {
 // remove routes over a still-live instance. Also safe before data exists.
 static int cmd_prepare_reboot() {
     if (!am_root()) { fprintf(stderr, "生命周期清理需要 root 权限\n"); return 1; }
+    if (!file_exists(DATA_DIR)) { printf("{\"status\":\"stopped\"}\n"); return 0; }
+    lifecycle::Ticket request;
+    std::string error;
+    if (!lifecycle::begin(DATA_DIR, lifecycle::Action::REBOOT, request, error)) {
+        fprintf(stderr, "%s\n", error.c_str()); return 1;
+    }
+    ExclusiveFileLock operation(DATA_DIR "/.control.lock", true, 12000);
+    if (!operation.ok()) { fprintf(stderr, "生命周期操作繁忙，请稍后重试\n"); return 1; }
+    if (!lifecycle::current(DATA_DIR, request)) { printf("{\"status\":\"cancelled\"}\n"); return 0; }
     int pid = find_daemon_pid();
     if (pid <= 0) { printf("{\"status\":\"stopped\"}\n"); return 0; }
     configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
@@ -265,11 +276,27 @@ static int cmd_prepare_reboot() {
 //          umask 022; cd /; nohup <自身> --start >/dev/null 2>&1 < /dev/null &
 //        环境变量 DISPATCHED 标记"已派发",重入的 --start 直接 daemonize
 //   4. daemonize(双 fork + setsid)后 exec 自身为 --daemon
-static int cmd_start() {
+static int cmd_daemon(void);
+static int cmd_start(bool boot = false, bool foreground = false) {
     if (!ensure_dirs()) {
         printf("{\"status\": \"error_storage\"}\n");
         return 1;
     }
+
+    const char *dispatched = getenv("ADK_NFQ_START_DISPATCHED");
+    lifecycle::Ticket request;
+    std::string intent_error;
+    if (dispatched) {
+        const char *revision = getenv("ADK_NFQ_START_REVISION");
+        const char *boot_request = getenv("ADK_NFQ_START_BOOT");
+        request = {revision ? revision : "", boot_request && strcmp(boot_request, "1") == 0};
+    } else if (!lifecycle::begin(DATA_DIR, boot ? lifecycle::Action::BOOT : lifecycle::Action::START, request, intent_error)) {
+        printf("{\"status\":\"%s\",\"message\":%s}\n", boot && intent_error == "boot policy disabled or paused" ? "cancelled" : "error_storage", source_json_string(intent_error).c_str());
+        return boot && intent_error == "boot policy disabled or paused" ? 0 : 1;
+    }
+    auto operation = std::make_unique<ExclusiveFileLock>(DATA_DIR "/.control.lock", true, 12000);
+    if (!operation->ok()) { printf("{\"status\":\"error_busy\",\"message\":\"启停操作繁忙，请稍后重试\"}\n"); return 1; }
+    if (!lifecycle::current(DATA_DIR, request)) { printf("{\"status\":\"cancelled\"}\n"); return 0; }
 
     // 自身真实路径(readlink /proc/self/exe):无论从 modules 还是 modules_update
     // 目录运行都正确,避免硬编码 MODULE_DIR_BASE 在安装期路径不对
@@ -280,9 +307,6 @@ static int cmd_start() {
     } else {
         self[nl] = 0;
     }
-
-    // 已派发标记:重入路径直接走守护化,避免无限循环
-    const char *dispatched = getenv("ADK_NFQ_START_DISPATCHED");
 
     int old = find_daemon_pid();
     if (!dispatched && old > 0) {
@@ -338,6 +362,8 @@ static int cmd_start() {
             const std::string message = candidate.load_valid
                 ? "尚无可用规则，请先点击“同步开源规则”，同步成功后再启动守护。"
                 : "规则读取失败，请先点击“同步开源规则”修复规则后再启动守护。";
+            configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
+            fail_engine_start(candidate.load_valid ? "rules_empty" : "rule_load_failed", message);
             printf("{\"status\":\"%s\",\"message\":%s}\n",
                    candidate.load_valid ? "error_rules_empty" : "error_rule_load",
                    source_json_string(message).c_str());
@@ -349,10 +375,8 @@ static int cmd_start() {
         }
     }
 
-    if (!dispatched &&
-        (!write_conf_value(FILE_STATE_CONF, "enabled", "true") ||
-         !write_conf_value(FILE_STATE_CONF, "manual_stop", "false"))) {
-        printf("{\"status\": \"error_storage\"}\n");
+    if (!dispatched && !lifecycle::enable(DATA_DIR, request, intent_error)) {
+        printf("{\"status\":\"error_start_cancelled\",\"message\":%s}\n", source_json_string(intent_error).c_str());
         return 1;
     }
 
@@ -369,6 +393,13 @@ static int cmd_start() {
     if (!write_runtime_state("starting")) {
         printf("{\"status\":\"error_storage\"}\n");
         return 1;
+    }
+
+    if (foreground) {
+        setenv("ADK_NFQ_START_REVISION", request.revision.c_str(), 1);
+        setenv("ADK_NFQ_START_BOOT", request.boot ? "1" : "0", 1);
+        operation.reset();
+        return cmd_daemon();
     }
 
     if (!dispatched) {
@@ -394,9 +425,9 @@ static int cmd_start() {
         // 有 root:shell 防重入拉起(nohup + 环境变量)
         char cmd[1024];
         snprintf(cmd, sizeof(cmd),
-                 "export ADK_NFQ_START_DISPATCHED=1; mkdir -p '%s'; "
+                 "export ADK_NFQ_START_DISPATCHED=1 ADK_NFQ_START_REVISION=%s ADK_NFQ_START_BOOT=%d; mkdir -p '%s'; "
                  "umask 022; cd /; nohup '%s' --start >/dev/null 2>&1 < /dev/null &",
-                 DATA_DIR, self);
+                 request.revision.c_str(), request.boot ? 1 : 0, DATA_DIR, self);
         if (system(cmd) != 0) {
             printf("{\"status\": \"error_start\"}\n");
             return 1;
@@ -443,6 +474,16 @@ static int cmd_start() {
 // --daemon 入口(由 --start exec 而来):写 pid 后进入引擎
 static int cmd_daemon() {
     if (!ensure_dirs()) return 1;
+    std::string intent_error;
+    auto operation = std::make_unique<ExclusiveFileLock>(DATA_DIR "/.control.lock", true, 12000);
+    if (!operation->ok()) return 1;
+    const char *revision = getenv("ADK_NFQ_START_REVISION");
+    const char *boot_request = getenv("ADK_NFQ_START_BOOT");
+    const lifecycle::Ticket request{revision ? revision : "", boot_request && strcmp(boot_request, "1") == 0};
+    if (!lifecycle::current(DATA_DIR, request)) {
+        printf("{\"status\":\"error_start_cancelled\",\"message\":\"启动已取消；前台调试请显式使用 --daemon --foreground\"}\n");
+        return 1;
+    }
     ExclusiveFileLock daemon_lock(DAEMON_LOCK_FILE);
     if (!daemon_lock.ok()) {
         return 0;
@@ -459,10 +500,15 @@ static int cmd_daemon() {
     // before a PID is published, workers are created or queues are opened.
     if (!prepare_daemon_cgroups()) return 1;
     int self_pid = (int)getpid();
-    if (!write_daemon_pid(self_pid)) {
-        fail_engine_start("pid_write_failed", "无法写入守护进程 pid 文件");
+    if (!lifecycle::publish(DATA_DIR, request, [&] { return write_daemon_pid(self_pid); }, intent_error)) {
+        // A newer STOP may be waiting for the operation lock. Do not overwrite
+        // its preference or expose a PID/queue from the cancelled request.
+        log_line("系统", "启动未接管网络: %s", intent_error.c_str());
+        if (intent_error == "PID publication failed") fail_engine_start("pid_write_failed", intent_error);
+        else write_runtime_state("stopped");
         return 1;
     }
+    operation.reset(); // Stop can now find this PID; daemon retains lifetime lock.
     int rc = run_daemon();
     clear_daemon_pid_if(self_pid);
     return rc;
@@ -473,11 +519,14 @@ static int cmd_daemon() {
 // 流程:runtime.state="stopping" → 找守护进程(pgrep)
 // → SIGTERM 优雅退出 → 超时强杀 → 拔规则 → state="stopped" + {"status": "stopped"}
 static int cmd_stop() {
-    const bool enabled_saved =
-        write_conf_value(FILE_STATE_CONF, "enabled", "false");
-    const bool manual_stop_saved =
-        write_conf_value(FILE_STATE_CONF, "manual_stop", "true");
-    const bool config_saved = enabled_saved && manual_stop_saved;
+    lifecycle::Ticket request;
+    std::string error;
+    if (!lifecycle::begin(DATA_DIR, lifecycle::Action::STOP, request, error)) {
+        printf("{\"status\":\"error_storage\",\"message\":%s}\n", source_json_string(error).c_str()); return 1;
+    }
+    ExclusiveFileLock operation(DATA_DIR "/.control.lock", true, 12000);
+    if (!operation.ok()) { printf("{\"status\":\"error_busy\"}\n"); return 1; }
+    if (!lifecycle::current(DATA_DIR, request)) { printf("{\"status\":\"cancelled\"}\n"); return 0; }
     write_runtime_state("stopping");
     int pid = find_daemon_pid();
     if (pid <= 0 && !iptables_any_left()) {
@@ -485,7 +534,7 @@ static int cmd_stop() {
         write_runtime_state("stopped");
         log_line("系统", "引擎已停止,拦截规则已清理");
         printf("{\"status\": \"stopped\"}\n");
-        return config_saved ? 0 : 1;
+        return 0;
     }
     if (pid > 0 && is_daemon_pid(pid)) {
         log_line("系统", "已向守护进程发送停止信号,等待安全退出");
@@ -509,7 +558,7 @@ static int cmd_stop() {
     write_runtime_state("stopped");
     log_line("系统", "引擎已停止,拦截规则已清理");
     printf("{\"status\": \"stopped\"}\n");
-    return config_saved ? 0 : 1;
+    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -578,7 +627,10 @@ static int cmd_scope(int scope) {
 // ---------------------------------------------------------------------------
 // --dev / --quic / --autostart on|off（自启只修改下次开机策略）
 static int cmd_toggle(const char *key, bool on) {
-    if (!write_conf_value(FILE_STATE_CONF, key, on ? "true" : "false")) {
+    std::string error;
+    const bool saved = strcmp(key, "autostart") == 0 ? lifecycle::set_autostart(DATA_DIR, on, error)
+        : write_conf_value(FILE_STATE_CONF, key, on ? "true" : "false");
+    if (!saved) {
         fprintf(stderr, "配置写入失败: %s\n", key);
         return 1;
     }
@@ -1267,6 +1319,8 @@ static void usage() {
             "  AD_Killer_By_NFQUEUE --config-read custom|allow|intercept 安全读取配置及修订号\n"
             "  AD_Killer_By_NFQUEUE --config-save TARGET REVISION 从 stdin 校验并原子保存配置\n"
             "  AD_Killer_By_NFQUEUE --start            启动引擎(守护进程)\n"
+            "  AD_Killer_By_NFQUEUE --start-boot       按最新自启/暂停策略启动，不恢复手动暂停\n"
+            "  AD_Killer_By_NFQUEUE --daemon --foreground 显式前台启动(调试)，不双 fork\n"
             "  AD_Killer_By_NFQUEUE --stop             停止引擎并清理规则\n"
             "  AD_Killer_By_NFQUEUE --prepare-reboot  生命周期停止，不修改暂停或自启策略\n"
             "  AD_Killer_By_NFQUEUE --reload           热重载规则\n"
@@ -1329,13 +1383,20 @@ int main(int argc, char **argv) {
         }
         return cmd_update_start("",argv[2],arg == "--module-update-install",argc == 4 && strcmp(argv[3],"preview") == 0);
     }
-    if (arg == "--start")          return cmd_start();
+    if (arg == "--start" || arg == "--start-boot") {
+        if (argc != 2) { usage(); return 1; }
+        return cmd_start(arg == "--start-boot");
+    }
     if (arg == "--stop")           return cmd_stop();
     if (arg == "--prepare-reboot") {
         if (argc != 2) { usage(); return 1; }
         return cmd_prepare_reboot();
     }
-    if (arg == "--daemon")         return cmd_daemon();
+    if (arg == "--daemon") {
+        if (argc == 3 && strcmp(argv[2], "--foreground") == 0) return cmd_start(false, true);
+        if (argc != 2) { usage(); return 1; }
+        return cmd_daemon();
+    }
     if (arg == "--reload")         return cmd_reload();
     if (arg == "--update")         return cmd_update();
     if (arg == "--update-start")   return cmd_update_start();

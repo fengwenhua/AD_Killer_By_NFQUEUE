@@ -26,7 +26,6 @@ python3 tests/audit/run_deep_audit.py --sanitize
 
 | 标记 | 观测内容 | 证据边界 |
 | --- | --- | --- |
-| `paused-daemon` | 暂停配置下，daemon 入口仍到达引擎桩 | 证明入口缺少复核；未复现真实启动/暂停交错 |
 | `cleanup-failure` | 清理桩保留路由时，实际 stop 仍返回 0/stopped | 故障注入，不会留下真实路由 |
 | `unrelated-pid` | 用探针自身 PID 模拟被复用的旧任务 PID，查询仍为 running | 未强制内核复用 PID |
 | `mixed-generation` | 路由安装返回失败后，真实规则匹配已切至新快照 | 路由依赖为桩，规则逻辑真实执行 |
@@ -39,6 +38,10 @@ O18 的 `badfilter-substring` 已迁移至 `tests/rule_cases.tsv`，由实际 C+
 解析器及 Python 合并工具共同验证黑白、精确/后缀和真正的 `$` 修饰符。
 O17 的 `unknown-freezer` 已迁移至 `tests/test_cgroup_isolation.cpp` 和前端状态回归，
 分别断言正常/冻结/未知，不再用 bool 折叠检查失败。
-当前隔离审计保留其余 6 个观测点，不再要求这些已修复的缺陷存在。
+O15 的 `paused-daemon` 已迁移至 `tests/test_lifecycle.cpp`、
+`tests/lifecycle_cli.cpp` / `tests/test_lifecycle_cli.py`：真实 CLI、配置、文件锁和进程调度，
+用 barrier 验证 PID 发布前暂停、旧清理与新启动交错、多窗口和自启策略复核；
+仅 PID 身份、引擎/防火墙执行及 cgroup 迁移隔离，不接管实际网络。
+当前隔离审计保留其余 5 个观测点，不再要求这些已修复的缺陷存在。
 
 最终出现 `Audit characterization completed` 仅表示预期的当前行为已被观测；ASan/UBSan 没有报错也不代表完成安全审计。

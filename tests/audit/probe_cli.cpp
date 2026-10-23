@@ -15,6 +15,13 @@ bool routes_left = true;
 int removal_attempts = 0;
 }
 
+// Cleanup/job characterization isolates the already-tested lifecycle protocol.
+// Its desired behavior is in tests/test_lifecycle_cli.py, not asserted defective.
+namespace lifecycle {
+bool begin(const std::string &, Action, Ticket &ticket, std::string &) { ticket = {"isolated", false}; return true; }
+bool current(const std::string &, const Ticket &) { return true; }
+}
+
 // No real logging, process migration, daemon, or firewall implementation links.
 void configure_process_log(const char *, size_t, int) {}
 void log_line(const char *, const char *, ...) {}
@@ -46,13 +53,7 @@ void iptables_remove_all() { ++removal_attempts; }  // Inject cleanup failure.
 int main(int argc, char **argv) {
     assert(argc == 2);
     const std::string operation = argv[1];
-    if (operation == "paused-daemon") {
-        assert(read_conf_value(FILE_STATE_CONF, "enabled") == "false");
-        assert(read_conf_value(FILE_STATE_CONF, "manual_stop") == "true");
-        const int result = cmd_daemon();
-        assert(result == 0 && entered_daemon);
-        puts("OBSERVED paused-daemon: daemon entry reaches engine despite paused configuration");
-    } else if (operation == "cleanup-failure") {
+    if (operation == "cleanup-failure") {
         const int result = cmd_stop();
         assert(result == 0 && removal_attempts == 1 && routes_left && runtime == "stopped");
         puts("OBSERVED cleanup-failure: stop reports stopped/0 with injected routes still present");

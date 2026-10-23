@@ -197,6 +197,22 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread \
 
 "$BUILD_DIR/test_config_store"
 
+${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" \
+    "$ROOT/tests/test_lifecycle.cpp" "$ROOT/src/lifecycle.cpp" \
+    "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" -lz -o "$BUILD_DIR/test_lifecycle"
+"$BUILD_DIR/test_lifecycle"
+case "$(uname -s)" in
+    Darwin) LIFECYCLE_LINK_FLAGS=-Wl,-dead_strip ;;
+    *) LIFECYCLE_LINK_FLAGS=-Wl,--gc-sections ;;
+esac
+${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fdata-sections \
+    -DADK_AUDIT_DATA_DIR=\""$BUILD_DIR/lifecycle-data"\" \
+    -include "$ROOT/tests/audit/rebase_paths.h" -I"$ROOT/src" \
+    "$ROOT/tests/lifecycle_cli.cpp" "$ROOT/tests/lifecycle_logging.cpp" \
+    "$ROOT/src/lifecycle.cpp" "$ROOT/src/bounded_log.cpp" \
+    $LIFECYCLE_LINK_FLAGS -lz -o "$BUILD_DIR/lifecycle_cli"
+python3 "$ROOT/tests/test_lifecycle_cli.py" "$BUILD_DIR/lifecycle_cli"
+
 for probe in test_edit_config edit_config_cli; do
     ${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" \
         "$ROOT/tests/$probe.cpp" "$ROOT/src/edit_config.cpp" \

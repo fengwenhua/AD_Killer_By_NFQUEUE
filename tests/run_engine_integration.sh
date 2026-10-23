@@ -36,6 +36,7 @@ python3 "$ROOT/tests/integration/test_autostart.py" "$BUILD_DIR/AD_Killer_By_NFQ
     "$ROOT/src/nfnetlink.cpp" "$ROOT/src/nfnetlink_parser.cpp" \
     -o "$BUILD_DIR/hold_nfqueue"
 python3 "$ROOT/tests/integration/test_startup_conflict.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE" "$BUILD_DIR/hold_nfqueue"
+python3 "$ROOT/tests/integration/test_lifecycle_races.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE"
 python3 "$ROOT/tests/integration/test_engine.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE"
 python3 "$ROOT/tests/integration/test_policy.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE"
 "${CXX:-c++}" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \

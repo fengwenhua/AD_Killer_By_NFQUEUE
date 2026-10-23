@@ -41,11 +41,11 @@ def main() -> None:
     )
     assert entry.index("prepare_daemon_cgroups()") < entry.index("write_daemon_pid(")
     assert entry.index("prepare_daemon_cgroups()") < entry.index("run_daemon()")
-    start = main_source.split("static int cmd_start()", 1)[1].split(
+    start = main_source.split("static int cmd_start(bool", 1)[1].split(
         "static int cmd_daemon()", 1
     )[0]
     assert start.index("prepare_daemon_cgroups()") < start.index("pid_t pid = fork()")
-    assert start.index('"error_rules_empty"') < start.index('write_conf_value(FILE_STATE_CONF, "enabled"') < start.index("pid_t pid = fork()")
+    assert start.index('"error_rules_empty"') < start.index('lifecycle::enable(DATA_DIR, request') < start.index("pid_t pid = fork()")
     assert start.index("prepare_daemon_cgroups()") < start.index("export ADK_NFQ_START_DISPATCHED")
     assert '"cgroup_isolation_failed"' in main_source
     assert "daemon_cgroup_status(old)" in start
@@ -58,7 +58,7 @@ def main() -> None:
     assert "is_daemon_pid(old)" in recovery and "STOP_WAIT_MS" in recovery
     assert "SIGKILL" not in recovery and "iptables_remove_all()" not in recovery
     assert '"recovery_stop_timeout"' in recovery
-    prepare = main_source.split('static int cmd_prepare_reboot()', 1)[1].split('static int cmd_start()', 1)[0]
+    prepare = main_source.split('static int cmd_prepare_reboot()', 1)[1].split('static int cmd_start(bool', 1)[0]
     assert 'kill(pid, SIGTERM)' in prepare and 'STOP_WAIT_MS' in prepare
     assert 'write_conf_value(' not in prepare and 'SIGKILL)' not in prepare
     assert 'iptables_remove_all()' not in prepare

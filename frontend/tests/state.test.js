@@ -104,6 +104,23 @@ test('empty-rule startup explains synchronization first and never enters daemon 
   } finally {scope.stop();}
 });
 
+test('superseded lifecycle requests refresh actual state without polling or claiming stop/start success', async () => {
+  for (const verb of ['start', 'stop']) {
+    const scope = effectScope(), commands = [], messages = [];
+    const api = { readFile: async () => '', command: async command => {
+      commands.push(command);
+      return command === `--${verb}` ? ok({ status: 'cancelled' }) : ok({ running: false, iptables_active: false, runtime: 'stopped', scope: 0 });
+    } };
+    const model = scope.run(() => useEngine(api, { log: text => messages.push(text), toast() {}, consoleOpen: ref(false) }));
+    try {
+      await model.refresh(); await model.control(verb);
+      assert.deepEqual(commands, ['--status', `--${verb}`, '--status']);
+      assert.ok(messages.some(message => message.includes('已取消')));
+      assert.ok(!messages.some(message => message.includes('引擎与规则已')));
+    } finally { scope.stop(); }
+  }
+});
+
 test('scope-specific app lists and custom rules retain commands and content semantics', async () => {
   const scope = effectScope(), current = ref(0), writes = [], commands = [];
   const api = {
