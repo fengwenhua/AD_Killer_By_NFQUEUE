@@ -47,6 +47,16 @@ window.previewStartFails = true;
 window.previewStartDelay = 0;
 window.previewMetrics = {updated_at:1792610000,block_suffix_hits:120,block_exact_hits:34,blocked_retransmits:999,quic_rejects:99};
 window.previewSettings = {mode:2,scope:0,autostart:false,block_quic:false,dev_mode:false};
+window.previewApplySerial=1;
+window.previewApplyResult='applied';
+window.previewApply={status:'applied',verified:true,verification:'owner_and_commit',desired_revision:'a'.repeat(64),applied_revision:'a'.repeat(64),mode:2,scope:0,block_quic:false,error:''};
+window.previewSubmitApply=()=>{
+  const running=previewEngineState==='running', revision=(++previewApplySerial).toString(16).padStart(64,'0');
+  const complete=running && previewApplyResult==='applied';
+  previewApply={...previewApply,status:running?previewApplyResult:'deferred',desired_revision:revision,
+    ...(complete?{...previewSettings,applied_revision:revision,verified:true,error:''}:{})};
+  return JSON.stringify({status:running?'queued':'deferred',revision});
+};
 window.previewEngineError = "NFQUEUE 队列 0 已被 YH_hosts 占用，请先停用旧模块。";
 window.previewBuiltinSource={url:"builtin:hagezi-pro-minus-fake",enabled:false,locked:true,name:"HaGeZi Pro − Fake",dependencies:[
   "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/pro.txt",
@@ -69,6 +79,7 @@ window.ksu = {
     }
     else if(command.includes(" --config-save ")) {
       const target=command.match(/--config-save (custom|allow|intercept)/)[1];
+      previewApply={...previewApply,status:'saved',desired_revision:(++previewApplySerial).toString(16).padStart(64,'0')};
       text=JSON.stringify({status:'ok',target,revision:'b'.repeat(64)});
     }
     else if(command.includes(" --module-update-status")) text=JSON.stringify({version:previewModuleReady,rebootRequired:previewModuleReboot});
@@ -85,25 +96,31 @@ window.ksu = {
     }
     else if(command.includes(" --module-update-download ")) {previewModuleReady="9.0";text=JSON.stringify({status:"started",job_id:"987-654"});}
     else if(command.includes(" --module-update-install ")) {previewModuleReboot=true;text=JSON.stringify({status:"started",job_id:"987-655"});}
+    else if(command.includes(' --apply-status ')) text=JSON.stringify({...previewApply,
+      status:command.split(' ').pop()!==previewApply.desired_revision?'superseded':previewApply.status});
     else if(command.includes(" --status")) text = JSON.stringify({
       iptables_active:previewEngineState==="running" && previewRoutingActive, running:previewEngineState==="running",
       daemon_image_current:previewDaemonImageCurrent,
       freezer_state:previewFreezerState,frozen:previewFreezerState==='unknown'?null:previewFreezerState==='frozen',
       last_error_code:previewCleanupCode,
       runtime:previewEngineState, last_error:previewEngineState==="error"?previewEngineError:"",
-      enabled:previewEngineState!=="stopped", metrics:previewMetrics, ...previewSettings});
+      enabled:previewEngineState!=="stopped", metrics:previewMetrics,
+      rules_black:previewRulesEmpty?0:185695,rules_white:previewRulesEmpty?0:1062,
+      apply:previewEngineState==='running'?previewApply:{...previewApply,status:'deferred',verified:false}, ...previewSettings});
     else if(command.endsWith(" --start")) {
       if(previewRulesEmpty){errno=1;text=JSON.stringify({status:'error_rules_empty',message:'请先点击“同步开源规则”，同步成功后再启动守护。'});}
       else {previewEngineState=previewStartFails?"error":"running";
+      if(!previewStartFails)previewSubmitApply();
       errno=previewStartFails?1:0;
       text=JSON.stringify({status:previewStartFails?"error_queue_conflict":"starting",message:previewStartFails?previewEngineError:""});}
     }
     else if(command.endsWith(" --stop")) {previewEngineState="stopped";previewCleanupCode='';text='{"status":"stopped"}';}
     else if(command.includes(' --autostart ')) {previewSettings.autostart=command.endsWith(' on');text=JSON.stringify({autostart:previewSettings.autostart});}
-    else if(command.includes(' --quic ')) {previewSettings.block_quic=command.endsWith(' on');text='{}';}
+    else if(command.includes(' --quic ')) {previewSettings.block_quic=command.endsWith(' on');text=previewSubmitApply();}
     else if(command.includes(' --dev ')) {previewSettings.dev_mode=command.endsWith(' on');text='{}';}
-    else if(command.includes(' --scope ')) {previewSettings.scope=Number(command.split(' ').pop());text='{}';}
-    else if(command.includes(' --mode ')) {previewSettings.mode=Number(command.split(' ').pop());text='{}';}
+    else if(command.includes(' --scope ')) {previewSettings.scope=Number(command.split(' ').pop());text=previewSubmitApply();}
+    else if(command.includes(' --mode ')) {previewSettings.mode=Number(command.split(' ').pop());text=previewSubmitApply();}
+    else if(command.includes(' --apps-apply') || command.includes(' --reload')) text=previewSubmitApply();
     else if(command.includes(" --sources-list")) text=JSON.stringify({status:"ok",sources:previewSources});
     else if(command.includes(" --sources-save")) {
       if(previewSaveFails){setTimeout(()=>window[callback](2,"","规则同步正在运行"),0);return}
@@ -172,6 +189,36 @@ def fixture_regression(browser, errors):
         page.close()
 
 
+def apply_health_regression(browser, errors):
+    for theme in ('light', 'dark'):
+        page = browser.new_page(viewport={'width': 320, 'height': 740}, color_scheme=theme, reduced_motion='reduce')
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.add_init_script(mock_script() + "\npreviewEngineState='running';previewSettings.scope=1;previewSettings.mode=1;previewSettings.block_quic=true;previewApply={...previewApply,status:'failed',desired_revision:'f'.repeat(64),error:'IPv6 switch failed <img src=x onerror=alert(1)>'};")
+        page.goto((ROOT / 'module/webroot/index.html').as_uri())
+        expect(page.locator('#stateBadge')).to_have_text('应用失败')
+        expect(page.locator('#stateDesc')).to_contain_text('此前策略仍在运行')
+        expect(page.locator('#appliedPolicy')).to_contain_text('Hosts + AdGuard · 全局 · QUIC 放行')
+        expect(page.locator('#startBtn')).to_be_disabled()
+        expect(page.locator('#ruleTotal')).to_have_text('186,757')
+        assert page.locator('#stateDesc img').count() == 0
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1')
+        page.evaluate('previewCommands.length=0')
+        page.locator('#retryApplyBtn').click()
+        expect(page.locator('#retryApplyBtn')).to_have_attribute('aria-busy', 'true')
+        expect(page.locator('#stateBadge')).to_have_text('正在守护')
+        expect(page.locator('#retryApplyBtn')).to_have_count(0)
+        assert page.evaluate("previewCommands.some(c=>c.includes(' --apps-apply')) && previewCommands.some(c=>c.includes(' --apply-status '))")
+        assert page.evaluate("!previewCommands.some(c=>/ --(?:start|stop|daemon)$/.test(c))")
+        # A healthy-looking process and route alone are not startup/config ACKs.
+        page.evaluate("previewApply={...previewApply,status:'unverified',verified:false}")
+        page.locator('nav [data-page="settings"]').click()
+        page.locator('nav [data-page="home"]').click()
+        expect(page.locator('#stateBadge')).to_have_text('生效待确认')
+        expect(page.locator('#startBtn')).to_be_disabled()
+        expect(page.locator('#verifyHealthBtn')).to_be_visible()
+        page.close()
+
+
 def freezer_health_regression(browser, errors):
     page = browser.new_page(viewport={'width': 320, 'height': 740}, reduced_motion='reduce')
     page.on('pageerror', lambda error: errors.append(str(error)))
@@ -202,7 +249,7 @@ def cleanup_health_regression(browser, errors):
     expect(page.locator('#stopBtn')).to_be_enabled()
     page.locator('#stopBtn').click()
     expect(page.locator('#stateBadge')).to_have_text('已暂停')
-    assert page.evaluate("!previewCommands.some(c=>c.endsWith(' --start') || c.endsWith(' --reload'))")
+    assert page.evaluate("!previewCommands.some(c=>c.endsWith(' --start') || / --reload(?: |$)/.test(c))")
     page.close()
 
 
@@ -1145,10 +1192,10 @@ def adaptive_regression(browser, screenshots, errors):
     assert page.locator('#appSearch').input_value() == '浏览器'
     assert '1 个放行' in page.locator('#appCount').inner_text()
     page.locator('#saveApps').click()
-    page.wait_for_function("previewCommands.some(c=>c.endsWith(' --apps-apply'))")
+    page.wait_for_function("previewCommands.some(c=>/ --apps-apply (?:allow|intercept) [a-f0-9]{64}$/.test(c))")
     page.locator('nav [data-page="rules"]').click()
     page.locator('#saveRules').click()
-    page.wait_for_function("previewCommands.some(c=>c.endsWith(' --reload'))")
+    page.wait_for_function("previewCommands.some(c=>/ --reload custom [a-f0-9]{64}$/.test(c))")
     assert page.evaluate("previewCommands.some(c=>c.includes('base64 -d |') && c.includes('--config-save custom') && atob(c.match(/'([A-Za-z0-9+/=]+)'/)[1]).includes('draft.example.org'))")
     page.locator('nav [data-page="home"]').click()
     # Persisting boot policy must never invoke engine controls.
@@ -1203,6 +1250,7 @@ def main():
             fixture_regression(browser, errors)
             freezer_health_regression(browser, errors)
             cleanup_health_regression(browser, errors)
+            apply_health_regression(browser, errors)
             quic_setting_regression(browser, errors)
             preview_regression(browser, errors, args.screenshots)
             source_editor_dialog_regression(browser, errors, args.screenshots)

@@ -1,6 +1,7 @@
 import { computed, ref, watch } from 'vue';
 import { PATHS } from '../services/api.js';
-import { isPackage } from '../domain/rules.js';
+import { isPackage, lastJson } from '../domain/rules.js';
+import { observeApply, validApplyRevision } from '../domain/apply.js';
 import { useLifetime } from './useLifetime.js';
 
 export function useApps(api, feedback, scope) {
@@ -63,11 +64,19 @@ export function useApps(api, feedback, scope) {
     saving.value = true;
     const current = scope.value, packages = [...selected.value].filter(isPackage);
     try {
+      await life.wait(32);
+      if (!life.active) return;
       const write = await api.writeFile(pathFor(current), packages.join('\n') + (packages.length ? '\n' : ''));
+      if (!life.active) return;
       if (write.code) { feedback.log('应用名单写入失败：' + write.stderr, 'error'); feedback.toast('保存失败'); return; }
-      const result = await api.command('--apps-apply');
-      const text = result.code ? '名单已保存，但应用路由刷新失败，请重试' : result.stdout.includes('deferred') ? '名单已保存，启动后生效' : '应用名单已保存，已提交后台热重载；失败原因请查看引擎日志';
-      feedback.log(text, result.code ? 'error' : 'ok'); feedback.toast(text);
+      const revision = lastJson(write.stdout)?.revision;
+      const target = current === 1 ? 'intercept' : 'allow';
+      const result = await api.command('--apps-apply' + (validApplyRevision(revision) ? ` ${target} ${revision}` : ''));
+      const outcome = await observeApply(api, result, life);
+      if (!life.active) return;
+      feedback.log(outcome.message, outcome.level); feedback.toast(outcome.message);
+    } catch (error) {
+      if (life.active) { feedback.log('保存或应用结果未确认：' + error.message, 'error'); feedback.toast('结果未确认，请重新读取名单并核对'); }
     } finally { saving.value = false; }
   }
   return { catalog, selected, query, loading, saving, ready, noun, filtered, load, toggle, clear, save };

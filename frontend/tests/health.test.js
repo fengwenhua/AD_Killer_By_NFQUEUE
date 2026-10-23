@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { effectScope, ref } from 'vue';
 import { useEngine, waitEngine } from '../src/composables/useEngine.js';
+import { applied } from './fixtures/apply.js';
 
 const ok = value => ({ code: 0, stdout: JSON.stringify(value), stderr: '' });
 test('unknown freezer health stays observable but never green or automatically restarted', async () => {
   const scope = effectScope(), commands = [];
-  let state = { running: true, iptables_active: true, runtime: 'running', freezer_state: 'normal', frozen: false, scope: 0 };
+  let state = { running: true, iptables_active: true, runtime: 'running', freezer_state: 'normal', frozen: false, scope: 0, apply: applied() };
   let fullFails = false;
   const api = { readFile: async () => '', command: async command => {
     commands.push(command);
@@ -45,7 +46,7 @@ test('a normal fast observation followed by unknown full verification is not sta
 
 test('cleanup failure never shows healthy or restarts; explicit stop retry clears the fault', async () => {
   const scope = effectScope(), commands = [];
-  let state = { running: true, iptables_active: true, runtime: 'error', last_error_code: 'cleanup_unknown', enabled: false };
+  let state = { running: true, iptables_active: true, runtime: 'error', last_error_code: 'cleanup_unknown', enabled: false, apply: applied() };
   const api = { readFile: async () => '', command: async command => {
     commands.push(command);
     if (command === '--stop') { state = { ...state, running: false, iptables_active: false, runtime: 'stopped', last_error_code: '' }; return ok({ status: 'stopped' }); }

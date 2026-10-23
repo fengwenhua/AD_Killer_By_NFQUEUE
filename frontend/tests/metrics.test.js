@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import { effectScope, nextTick, ref } from 'vue';
 import { useEngine } from '../src/composables/useEngine.js';
 import { useLiveMetrics } from '../src/composables/useLiveMetrics.js';
+import { applied } from './fixtures/apply.js';
 
 const ok=value=>({code:0,stdout:JSON.stringify(value),stderr:''});
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 test('blocked count is current-session rule hits only; metrics polling never upgrades approximate routing state',async()=>{
   const scope=effectScope(), commands=[];
-  let snapshot={running:true,iptables_active:true,scope:0,metrics:{updated_at:1,block_suffix_hits:4,block_exact_hits:3,blocked_retransmits:99,quic_rejects:100}};
+  let snapshot={running:true,iptables_active:true,scope:0,apply:applied(),metrics:{updated_at:1,block_suffix_hits:4,block_exact_hits:3,blocked_retransmits:99,quic_rejects:100}};
   let fail=false, fullFails=false, fastOverride=null;
   const api={command:async command=>{commands.push(command);return fail || (fullFails && command==='--status') ? {code:1,stdout:'',stderr:''} : ok(command==='--status-fast' && fastOverride ? fastOverride : snapshot);},readFile:async()=>''};
   const engine=scope.run(()=>useEngine(api,{log(){},toast(){},consoleOpen:ref(false)}));

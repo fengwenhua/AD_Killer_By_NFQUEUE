@@ -9,6 +9,7 @@ import { useCustomRules } from '../src/composables/useCustomRules.js';
 import { useFeedback } from '../src/composables/useFeedback.js';
 import { HAGEZI_ID } from '../src/domain/rules.js';
 import { PATHS } from '../src/services/api.js';
+import { applied } from './fixtures/apply.js';
 
 const ok = (value = {}) => ({ code: 0, stdout: JSON.stringify(value), stderr: '' });
 const feedback = () => ({ log() {}, toast() {}, consoleOpen: ref(false) });
@@ -57,7 +58,7 @@ test('dispose source observer leaves resumable job and prevents delayed status p
 test('engine waits distinguish error, query, early exit, bad route and actual timeout', async () => {
   let state = { runtime: 'error', running: false, last_error: 'NFQUEUE occupied' }, polls = 0;
   const api = { command: async () => { polls++; return ok(state); } }, life = { active: true, wait: async () => {} };
-  const refresh = async () => ({ running: true, iptables_active: true });
+  const refresh = async () => ({ running: true, iptables_active: true, apply: applied() });
   assert.match((await waitEngine('running', api, refresh, life)).message, /occupied/);
   state = { runtime: 'stopped', running: false }; assert.equal((await waitEngine('running', api, refresh, life)).kind, 'exited');
   state = { runtime: 'running', running: true }; assert.equal((await waitEngine('running', api, refresh, life)).ok, true);
@@ -74,6 +75,7 @@ test('autostart persists only boot policy, never starts/stops; all settings use 
     commands.push(args);
     if (args === '--autostart on') { state = { ...state, autostart: true }; return ok({ autostart: true }); }
     if (args === '--autostart off') return { code: 1, stdout: '', stderr: 'denied' };
+    if (args === '--scope 1') return ok({ status: 'deferred', revision: 'a'.repeat(64) });
     return ok(state);
   } };
   const engine = scope.run(() => useEngine(api, feedback()));
@@ -81,7 +83,8 @@ test('autostart persists only boot policy, never starts/stops; all settings use 
     await engine.refresh(); assert.equal(engine.total.value, 3); assert.equal(engine.kind.value, 'neutral');
     await engine.changeSetting('autostart', true); assert.equal(engine.state.value.autostart, true);
     await engine.changeSetting('autostart', false); assert.equal(engine.state.value.autostart, true);
-    await engine.changeSetting('scope', 1); assert.ok(commands.includes('--apps-apply'));
+    await engine.changeSetting('scope', 1); assert.ok(commands.includes('--scope 1'));
+    assert.ok(!commands.includes('--apps-apply'), 'scope and UID mapping are one backend submission, not two competing reloads');
     assert.equal(commands.filter(c => /^--(?:start|stop|daemon)$/.test(c)).length, 0);
     assert.equal(engine.setting.value, '');
   } finally { scope.stop(); }

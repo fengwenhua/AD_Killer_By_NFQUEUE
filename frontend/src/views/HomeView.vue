@@ -19,21 +19,23 @@ defineProps({ engine: Object, sync: Object, apps: Object, feedback: Object, modu
           <div class="guard-emblem" aria-hidden="true"><span v-if="engine.running" class="guard-halo" /><span class="guard-core"><UiIcon :name="engine.running ? 'shield' : 'shield-idle'" /></span></div>
         </div>
         <p id="stateDesc" class="subtle">{{ engine.description }}</p>
-        <ActionButton v-if="engine.healthUnknown" id="verifyHealthBtn" icon="sync" :busy="engine.checking" :disabled="!!engine.action" @click="engine.verifyHealth">重新核实状态</ActionButton>
+        <p v-if="engine.applyIssue && engine.state?.apply?.verified" id="appliedPolicy" class="subtle">当前生效：{{ engine.state.apply.mode === 1 ? '仅 Hosts' : engine.state.apply.mode === 2 ? 'Hosts + AdGuard' : '模式待核实' }} · {{ engine.state.apply.scope === 1 ? '仅名单应用' : engine.state.apply.scope === 0 ? '全局' : '范围待核实' }} · QUIC {{ engine.state.apply.block_quic === true ? '阻止' : engine.state.apply.block_quic === false ? '放行' : '待核实' }}</p>
+        <ActionButton v-if="engine.healthUnknown || (engine.applyIssue && (!engine.state?.apply || engine.state.apply.status === 'unverified'))" id="verifyHealthBtn" icon="sync" :busy="engine.checking" :disabled="!!engine.action" @click="engine.verifyHealth">重新核实状态</ActionButton>
+        <ActionButton v-if="engine.canRetryApply || engine.setting === 'apply'" id="retryApplyBtn" icon="sync" :busy="engine.setting === 'apply'" :disabled="!!engine.action || (!!engine.setting && engine.setting !== 'apply') || apps.saving" @click="engine.retryApply">重新应用配置</ActionButton>
         <div v-if="engine.running" class="blocked-summary" aria-label="本次守护规则命中统计">
           <div class="blocked-heading"><span>累计拦截</span><span class="blocked-period">本次守护</span></div>
           <div class="blocked-value"><b id="blockedTotal" :class="{ 'is-long': engine.blockedTotal >= 1000000000 }">{{ engine.blockedTotal === null ? '—' : engine.blockedTotal.toLocaleString() }}</b><span v-if="engine.blockedTotal !== null" class="blocked-unit">次</span></div>
           <small :data-stale="engine.metricsStale">{{ engine.metricsStale ? '统计暂不可用，保留上次记录' : engine.blockedTotal === null ? '等待统计数据' : '规则命中次数 · 守护重启后重新累计' }}</small>
         </div>
         <div class="action-grid">
-          <ActionButton id="startBtn" :variant="engine.running ? undefined : 'primary'" icon="play" :busy="engine.action === 'start'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || engine.running || engine.healthUnknown || engine.cleanupFailed" @click="engine.control('start')"><span id="startLabel">{{ engine.action === 'start' ? '启动中…' : '启动守护' }}</span></ActionButton>
+          <ActionButton id="startBtn" :variant="engine.running ? undefined : 'primary'" icon="play" :busy="engine.action === 'start'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || engine.running || engine.healthUnknown || engine.cleanupFailed || engine.applyIssue" @click="engine.control('start')"><span id="startLabel">{{ engine.action === 'start' ? '启动中…' : '启动守护' }}</span></ActionButton>
           <ActionButton id="stopBtn" :variant="engine.running ? 'primary' : undefined" icon="pause" :busy="engine.action === 'stop'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || (!engine.state?.running && !engine.state?.enabled && !engine.cleanupFailed)" @click="engine.control('stop')"><span id="stopLabel">{{ engine.action === 'stop' ? '暂停中…' : '暂停守护' }}</span></ActionButton>
         </div>
       </section>
       <section class="card sync-card">
         <div class="section-heading"><h2>本地规则库</h2></div>
         <div class="metric-grid">
-          <div class="metric"><b id="ruleTotal">{{ engine.total === null ? '—' : engine.total.toLocaleString() }}</b><span>当前模式规则</span></div>
+          <div class="metric"><b id="ruleTotal">{{ engine.total === null ? '—' : engine.total.toLocaleString() }}</b><span>{{ engine.state?.running ? '生效快照规则' : '上次本地统计' }}</span></div>
           <div class="metric"><b id="allowTotal">{{ apps.selected.size }} 个</b><span id="appMetricLabel">{{ apps.noun }}应用</span></div>
         </div>
         <ActionButton id="syncBtn" icon="sync" :busy="sync.busy" :disabled="!engine.ready" @click="sync.start"><span id="syncLabel">{{ sync.busy ? '正在同步…' : '同步开源规则' }}</span></ActionButton>

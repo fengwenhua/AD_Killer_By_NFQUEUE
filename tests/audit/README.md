@@ -49,8 +49,10 @@ O03 的 `mixed-generation` 已迁移到 `test_engine_failure.cpp`、`test_policy
 和真实内核 `test_reload_consistency.py`，验证失败保留旧快照/统计、切换期间无连接标记旁路、
 双队列空闲边界与既有 PASS 连接保留。后端期望/生效修订号已由
 `test_apply_state.cpp`、`test_engine_failure.cpp` 和真实内核 `test_apply_protocol.py`
-验证保存/提交/失败/实际生效、身份、损坏与并发覆盖；界面 ACK 尚待接入，
-不能把后端修复当作 O03 全部完成。
+验证保存/提交/失败/实际生效、身份、损坏与并发覆盖；界面由
+`frontend/tests/apply*.test.js` 和 `test_webui_layout.py` 验证精确修订号观察、
+旧策略呈现、核验失败不显示健康、显式重试不重启及关闭后无隐藏写入。
+这些主机/浏览器/Linux 回归不替代 Android 真机长稳和压力验收。
 当前隔离审计保留其余 2 个观测点，不再要求这些已修复的缺陷存在。
 
 最终出现 `Audit characterization completed` 仅表示预期的当前行为已被观测；ASan/UBSan 没有报错也不代表完成安全审计。
