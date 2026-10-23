@@ -45,14 +45,12 @@ def state() -> str:
 
 
 def reload_command(*args):
-    # A route can already match while workers are still draining the cutover
-    # epoch. Only use this helper for commands expected to apply successfully;
-    # the pending O03 ACK API must replace this test-only log boundary later.
-    log = DATA / 'log/engine.log'
-    previous = log.read_text().count('热重载已完成:') if log.exists() else 0
     result = command(BINARY, *args)
-    wait_for(lambda: log.exists() and log.read_text().count('热重载已完成:') > previous,
-             'completed policy cutover after ' + ' '.join(args))
+    submitted = json.loads(result)
+    assert submitted['status'] == 'queued' and len(submitted['revision']) == 64, submitted
+    revision = submitted['revision']
+    wait_for(lambda: json.loads(command(BINARY, '--apply-status', revision))['status'] == 'applied',
+             'verified policy ACK after ' + ' '.join(args))
     return result
 
 

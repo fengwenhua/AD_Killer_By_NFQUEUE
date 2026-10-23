@@ -88,19 +88,20 @@ AD_Killer_By_NFQUEUE/
 | `--daemon` | 内部守护进程入口 | 需要当前启动修订号；发布 PID 前复核授权，裸调用不能绕过暂停 |
 | `--daemon --foreground` | 显式前台调试 | 作为新的手动启动，预检并记录修订号，再前台运行；不用于自启 |
 | `--start-boot` | 开机策略启动 | 后端复核自启及暂停，等待/加载期间策略变更使旧请求失效 |
-| `--reload` | 热重载 | 运行中向守护进程发 SIGHUP;未运行输出 `{"status": "error"}` |
+| `--reload [custom FILE_REVISION]` | 提交热重载 | 返回 `queued/deferred + revision`，不是生效 ACK；可绑定刚保存的自定义文件修订号 |
+| `--apply-status [REVISION]` | 查询生效回执 | 只读返回 saved/pending/applying/applied/failed/deferred/superseded/unverified；回执绑定 boot ID、PID、启动时间 |
 | `--update` | 拉取规则源 | 下载(支持 .gz)→ 逐行归类 Hosts/AdGuard → gzip 落盘 → 热重载 |
 | `--update-start` | 后台更新 | 创建唯一 job，脱离 WebUI exec 会话运行并返回 job_id |
 | `--update-status ID` | 更新状态 | 查询 job 的 running/success/failed/interrupted 与真实退出码 |
-| `--status` | 状态 JSON | 完整版:按当前配置验证双栈 OUTPUT/ENTRY、queue 0/1、scope、UID 与 QUIC |
-| `--status-fast` | 快速状态 | 跳过 iptables 校验(WebUI 高频轮询用) |
+| `--status` | 状态 JSON | 按回执中的实际生效配置验证双栈路由；配置字段表示磁盘期望，`apply` 表示生效结果，规则数优先取有效回执 |
+| `--status-fast` | 快速状态 | 只读核验双栈唯一 OUTPUT 入口，不等同完整路由校验；也带 `apply` 回执 |
 | `--version-status` | 版本 JSON | module/version/versionCode |
 | `--mode 1\|2` | 规则强度 | 1=仅 Hosts 2=Hosts+AdGuard;写配置 + 运行中热重载 |
 | `--scope 0\|1` | 作用域 | 严格校验参数;0=全局拦截 1=仅名单内应用;运行中触发路由热重载 |
 | `--dev on\|off` | DNS 查询日志 | 写 `dev_mode_enabled` 标志文件;输出 `{"dev_mode": "done"}` |
 | `--quic on\|off` | 阻止 QUIC | 通知守护进程重建规则(热重载);输出 `{"block_quic": %s}` |
 | `--autostart on\|off` | 开机自启 | 独立配置，默认关闭；只持久化策略，不启动、停止或重载当前引擎 |
-| `--apps-apply` | 应用名单生效 | 见 §4.3 三级 uid 解析;输出 `applied/deferred + scope` |
+| `--apps-apply [allow\|intercept FILE_REVISION]` | 提交应用名单 | 生成附带名单修订号的 UID 缓存，返回 `queued/deferred + revision + scope`；不是已生效 |
 | `--config-read custom\|allow\|intercept` | 安全读取可编辑配置 | JSON 返回内容和 SHA-256 修订号；读取失败不视为空文件 |
 | `--config-save TARGET REVISION` | 安全保存可编辑配置 | 从 stdin 读取 UTF-8，固定目标、语法校验、锁内修订号比较与原子替换 |
 
@@ -262,6 +263,34 @@ DNS UDP/TCP 均进入 queue 0、TCP 80/443 未分类连接均进入 queue 1，�
   两条接收 socket 都观察到提交后的真正空闲才恢复判定、记录完成。
   普通回滚保留旧快照/统计/重组缓存；回滚或收包边界无法确认则故障退出。
   已有连接标记不清空，具体边界见[兼容性与协议限制](兼容性与协议限制.md)。
+
+### 4.6.1 配置应用回执
+
+`apply.state` 使用独立终端锁、原子替换及文件/目录同步。路由输入写入者必须在
+各自配置锁内，先持久化新的 dirty 意图，再替换文件；输入全部保存后，在
+apps → editable → state 锁序下提交新的应用修订号。修订号是唯一的保存/提交意图
+标识，不是整个文件集合的内容哈希；可编辑文件的 SHA-256 CAS 修订号另行绑定。
+
+引擎在同一锁序下捕获修订号、模式、路由参数、名单缓存、generation 和自定义文本；
+解压/哈希/排序在锁外完成，不让大规则文件长时间阻塞暂停或保存。配置读取失败、
+重复/非法键、非法 UID、缓存与当前名单不符、坏 UTF-8 或非法自定义规则均拒绝应用，
+不以默认/空值代替。旧版无来源修订号的 UID 缓存仅在包名集合严格一致时兼容。
+缓存来源修订号不代表能发现 Android 重新分配 UID；包安装变更、多用户等仍归 O10。
+非空名单但无法取得任何已安装包 UID 时拒绝写缓存，不冒充“未安装”并发布空映射；
+PackageManager 兜底采用有界 argv 调用（每个 2 秒、最多 8 MiB），空名单不查询系统。
+
+成功切换且收包恢复后记录 `applied_revision`、实际路由参数、规则 generation/数量，
+失败记录原因并保留上一次实际策略。并发保存不会被旧操作的完成覆盖；新实例不能
+继承旧实例 ACK。已提交但 SIGHUP 未送达的请求由引擎每秒协调一次；dirty 尚未提交
+则不会自动应用。回执无法持久化时故障退出，不伪造成功。
+
+`--apply-status` 的 `verification=owner_and_commit` 只证明匹配当前守护身份的最近
+提交，不是全套网络健康检查；完整路由/冻结/进程检查仍使用 `--status`。
+只读查询不创建锁或修复文件。外部 root 工具绕过配置锁直接改文件不属于该协议，
+必须显式提交 `--reload`；损坏回执应先保留诊断、按实际状态恢复，不能盲目删除锁。
+
+规则同步只更新 `available_rule_stats.conf`（已发布文件），不能覆盖活跃快照统计。
+前端的独立 ACK 观察与“旧策略/应用失败”呈现尚待 O03 下一阶段接入。
 
 ### 4.7 安全下载器
 

@@ -17,8 +17,9 @@ using Commit = std::function<AtomicWriteResult(const char *, const std::string &
 // root is explicit for isolated tests. Production CLI always supplies DATA_DIR;
 // target is an enum-like name, NEVER an arbitrary file path.
 Result read(const std::string &root, const std::string &target);
+std::string validate_content(const std::string &target, const std::string &text);
 Result save(const std::string &root, const std::string &target,
             const std::string &revision, const std::string &text, const Commit &commit = {});
 int command(const std::string &root, bool saving, const std::string &target,
-            const std::string &revision = "");
+            const std::string &revision = "", const Commit &commit = {});
 }

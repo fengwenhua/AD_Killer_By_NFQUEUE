@@ -56,6 +56,7 @@ inline std::string DATA_FILE(const char *name) {
 #define FILE_ENGINE_ACTIVE    (DATA_DIR "/engine_active.txt")    // 引擎活跃标志
 #define FILE_LAST_STOP_MANUAL (DATA_DIR "/last_stop_manual")     // 手动停止标记
 #define FILE_RULE_STATS       (DATA_DIR "/rule_stats.conf")      // 规则统计(WebUI 读取)
+#define FILE_AVAILABLE_RULE_STATS (DATA_DIR "/available_rule_stats.conf") // 已发布文件，不冒充运行快照
 #define FILE_SOURCE_STATS     (DATA_DIR "/source_stats.conf")    // 最近一次来源校验统计
 #define FILE_APP_WHITELIST    (DATA_DIR "/app_whitelist.txt")    // 应用放行名单(包名,scope=0)
 #define FILE_APP_INTERCEPT    (DATA_DIR "/app_intercept.txt")    // 应用拦截名单(包名,scope=1)

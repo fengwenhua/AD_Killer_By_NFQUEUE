@@ -58,6 +58,7 @@ struct RuleDB {
     bool ok = false;       // 是否加载到至少一条规则
     bool load_valid = true; // 有效空分类与文件损坏必须区分
     std::string load_error;
+    std::string generation; // immutable bundle ID, or legacy for fixed files
 
     void finalize() const { black.finalize(); white.finalize(); }
 };
@@ -89,14 +90,16 @@ bool load_rule_file_checked(const char *path, bool adguard, RuleDB &db,
                             int *loaded = nullptr, bool require_gzip = false);
 
 // 加载全部规则(hosts_rules.gz + adguard_rules.gz + custom_rules.txt)
-// 结果写入 rule_stats.conf(WebUI 读取的 black=/white= 来源)
+// Only loads privately; the engine saves active counters after commit. Source
+// sync saves available_rule_stats.conf instead of overwriting a live snapshot.
 void load_all_rules(RuleDB &db);
 // Explicit paths for isolated tests/benchmarks. Absent legacy files are optional;
 // published bundles require both selected gzip files to exist and be intact.
 void load_rule_files(RuleDB &db, int mode, const std::string &hosts,
                      const std::string &adguard, const std::string &custom,
-                     bool require_bundle_files = false);
-void save_rule_stats(const RuleDB &db);
+                     bool require_bundle_files = false,
+                     const std::string *captured_custom = nullptr);
+void save_rule_stats(const RuleDB &db, const char *path = FILE_RULE_STATS);
 
 // 当前不可变规则快照。读线程获取 shared_ptr 后可无锁完成一次匹配；发布新快照时，
 // 已经在用旧快照的线程继续安全持有旧对象，最后一个读者退出后自动释放。

@@ -84,7 +84,11 @@ def stats_match(mode, black):
 
 
 def wait_policy(mode, black, description):
-    wait_for(lambda: stats_match(mode, black) and json.loads(command(BINARY, '--status').splitlines()[-1])['iptables_active'], description)
+    def committed():
+        state = json.loads(command(BINARY, '--status').splitlines()[-1])
+        return (stats_match(mode, black) and state['iptables_active'] and
+                state['apply']['status'] == 'applied' and state['apply']['mode'] == mode)
+    wait_for(committed, description)
 
 
 def main():

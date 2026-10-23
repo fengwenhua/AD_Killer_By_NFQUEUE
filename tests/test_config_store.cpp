@@ -1,4 +1,5 @@
 #include "logging.h"
+#include "exclusive_file_lock.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -67,6 +68,16 @@ int main() {
     std::string after;
     if (!read_file(conf.c_str(), after) || after != before) {
         std::cerr << "FAIL: failed atomic write must preserve old config\n";
+        ok = false;
+    }
+    bool called = false;
+    const bool committed = write_conf_value_with_lock(conf.c_str(), "key0", "changed", lock.c_str(), [&] {
+        called = true;
+        ExclusiveFileLock same(lock.c_str());
+        return same.ok(); // must be false: the dirty hook runs UNDER the input lock
+    });
+    if (committed || !called || !read_file(conf.c_str(), after) || after != before) {
+        std::cerr << "FAIL: rejected pre-commit marker must preserve the original input under its lock\n";
         ok = false;
     }
 

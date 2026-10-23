@@ -71,6 +71,10 @@ std::string validate(const std::string &target, const std::string &content) {
 }
 }
 
+std::string validate_content(const std::string &target, const std::string &text) {
+    return filename(target).empty() ? "非法配置目标" : validate(target, text);
+}
+
 Result read(const std::string &root, const std::string &target) {
     const std::string name = filename(target);
     if (name.empty()) return failed("invalid_target", "只允许编辑规则或两种应用名单");
@@ -125,7 +129,7 @@ Result save(const std::string &root, const std::string &target,
     return result;
 }
 
-int command(const std::string &root, bool saving, const std::string &target, const std::string &revision) {
+int command(const std::string &root, bool saving, const std::string &target, const std::string &revision, const Commit &commit) {
     Result result;
     if (saving) {
         std::string text; char buffer[8192]; size_t count = 0;
@@ -133,7 +137,7 @@ int command(const std::string &root, bool saving, const std::string &target, con
             if (count > MAX_BYTES - text.size()) { result = failed("invalid_content", "配置超过 1 MiB 上限"); break; }
             text.append(buffer, count);
         }
-        if (result.message.empty()) result = ferror(stdin) ? failed("read_error", "无法完整读取保存内容") : save(root, target, revision, text);
+        if (result.message.empty()) result = ferror(stdin) ? failed("read_error", "无法完整读取保存内容") : save(root, target, revision, text, commit);
     } else result = read(root, target);
     printf("{\"status\":%s,\"target\":%s,\"revision\":%s,\"content\":%s,\"committed\":%s,\"message\":%s}\n",
         source_json_string(result.status).c_str(), source_json_string(target).c_str(),

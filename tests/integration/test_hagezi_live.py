@@ -86,7 +86,7 @@ def main():
             configure(False)
             command("--update")
             assert server.requests == ["/ordinary"], "disabled pair was downloaded"
-            protected = ["state.conf", "update_sources.txt", "rules.current", "rule_stats.conf", "source_stats.conf"]
+            protected = ["state.conf", "update_sources.txt", "rules.current", "available_rule_stats.conf", "source_stats.conf", "apply.state"]
             before = {name: (DATA / name).read_bytes() for name in protected}
             preview = json.loads(command("--source-preview", ID))
             assert preview["status"] == "ok" and len(preview["previews"]) == 2

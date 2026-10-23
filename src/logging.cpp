@@ -17,6 +17,7 @@
 #include "exclusive_file_lock.h"
 #include "bounded_log.h"
 #include "cli_utils.h"
+#include "process_identity.h"
 
 #include <cstdio>
 #include <cerrno>
@@ -194,12 +195,13 @@ std::string read_conf_value(const char *path, const char *key) {
 
 // state.conf 键值写入(存在则替换,不存在则追加;保留其它行)
 bool write_conf_value_with_lock(const char *path, const char *key,
-                                const char *value, const char *lock_path) {
+                                const char *value, const char *lock_path,
+                                const std::function<bool()> &before_commit) {
     if (!path || !key || !*key || !value || !lock_path) return false;
     ExclusiveFileLock lock(lock_path, true, 1000);
     if (!lock.ok()) return false;
     std::string content;
-    read_file(path, content);
+    if (read_regular_bounded(path, content, 1024u * 1024u) == BoundedRead::ERROR) return false;
     std::istringstream ss(content);
     std::ostringstream out;
     std::string line;
@@ -214,6 +216,7 @@ bool write_conf_value_with_lock(const char *path, const char *key,
         }
     }
     if (!found) out << key << "=" << value << "\n";
+    if (before_commit && !before_commit()) return false;
     const auto saved = write_file_durable_atomic(path, out.str());
     return saved.committed && saved.durable;
 }

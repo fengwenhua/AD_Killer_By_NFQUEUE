@@ -137,9 +137,10 @@ def main():
             for name in ("hosts_rules.gz", "adguard_rules.gz"):
                 assert gzip.decompress((base / name).read_bytes()).startswith(b"# AD_Killer_By_NFQUEUE")
             stats = dict(line.split("=", 1) for line in
-                         (DATA / "rule_stats.conf").read_text().splitlines())
+                         (DATA / "available_rule_stats.conf").read_text().splitlines())
             assert (int(stats["black"]), int(stats["white"])) == counts, stats
             assert not (DATA / "daemon.pid").exists(), "updating started an engine"
+            assert not (DATA / "rule_stats.conf").exists(), "sync overwrote active-rule counters without an engine ACK"
             summary = dict(line.split("=", 1) for line in
                            (DATA / "source_stats.conf").read_text().split("\n[source_0]")[0].splitlines())
             assert int(summary["unique_total"]) == sum(counts)
@@ -158,8 +159,8 @@ def main():
 
         # Testing good/bad/disabled/unsaved URLs must not touch published data,
         # source settings, counters, boot policy, or daemon state.
-        protected = ["rules.current", "source_stats.conf", "rule_stats.conf",
-                     "state.conf", "update_sources.txt"]
+        protected = ["rules.current", "source_stats.conf", "available_rule_stats.conf",
+                     "state.conf", "update_sources.txt", "apply.state"]
         snapshot = {p: (DATA / p).read_bytes() for p in protected}
         for path, status in (("/hosts", "success"), ("/html", "failed"), ("/404", "failed")):
             started = json.loads(command("--source-test", prefix + path).splitlines()[-1])

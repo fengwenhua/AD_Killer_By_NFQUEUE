@@ -328,11 +328,12 @@ void load_all_rules(RuleDB &db) {
     }
     load_rule_files(db, selected_mode, bundle.hosts_path, bundle.adguard_path,
                     FILE_CUSTOM_RULES, bundle.from_manifest);
+    db.generation = bundle.from_manifest ? bundle.generation : "legacy";
 }
 
 void load_rule_files(RuleDB &db, int mode, const std::string &hosts,
                      const std::string &adguard, const std::string &custom,
-                     bool require_bundle_files) {
+                     bool require_bundle_files, const std::string *captured_custom) {
     db = RuleDB{};
     db.mode = mode;
     auto load = [&](const std::string &path, bool adguard_syntax, bool gzip,
@@ -350,21 +351,24 @@ void load_rule_files(RuleDB &db, int mode, const std::string &hosts,
     };
     load(hosts, false, true, require_bundle_files);
     if (mode == MODE_HOSTS_ADGUARD) load(adguard, true, true, require_bundle_files);
-    load(custom, true, false, false);
+    if (captured_custom) {
+        std::istringstream lines(*captured_custom); std::string line;
+        while (db.load_valid && std::getline(lines, line)) parse_adguard_line(line, db);
+    } else load(custom, true, false, false);
     if (!db.load_valid) { db.black.clear(); db.white.clear(); }
     db.loaded_at = (long)now_epoch();
     db.ok = db.load_valid && (db.black.size() + db.white.size()) > 0;
 }
 
 // 规则统计写入 rule_stats.conf(WebUI 规则总数的来源)
-void save_rule_stats(const RuleDB &db) {
+void save_rule_stats(const RuleDB &db, const char *path) {
     char buf[256];
     std::string out;
     snprintf(buf, sizeof(buf), "mode=%d\n", db.mode);          out += buf;
     snprintf(buf, sizeof(buf), "black=%zu\n", db.black.size()); out += buf;
     snprintf(buf, sizeof(buf), "white=%zu\n", db.white.size()); out += buf;
     snprintf(buf, sizeof(buf), "updated_at=%ld\n", db.loaded_at); out += buf;
-    write_file_atomic(FILE_RULE_STATS, out);
+    write_file_atomic(path, out);
 }
 
 // ============================================================================

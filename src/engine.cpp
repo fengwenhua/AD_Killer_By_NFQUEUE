@@ -13,6 +13,11 @@
 #include "fast_response.h"
 #include "policy_barrier.h"
 #include "exclusive_file_lock.h"
+#include "config_input_lock.h"
+#include "apply_state.h"
+#include "edit_config.h"
+#include "rule_bundle.h"
+#include "cli_utils.h"
 
 #include <atomic>
 #include <chrono>
@@ -23,6 +28,10 @@
 #include <memory>
 #include <exception>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <limits>
+#include <sstream>
 #include <unistd.h>
 #include <pthread.h>
 #include <sys/prctl.h>
@@ -41,6 +50,7 @@ static DataPlaneMetrics g_metrics;
 static PolicyBarrier g_policy;
 static bool g_workers_started = false; // owner thread only
 static bool g_applied_block_quic = false; // protected by policy read/write leases
+static ProcessIdentity g_owner;
 // Each worker owns its separate, bounded-timeout CTNETLINK request socket.
 static int g_ct_fds[2] = {-1, -1};
 static FastResponseSender g_response_senders[2];
@@ -476,51 +486,89 @@ bool daemon_running() { return read_daemon_pid() > 0; }
 // 配置装配:state.conf + adblock_mode.txt + 应用名单 → uid
 //   包名→uid:优先读 app_uids.conf 缓存(--apps-apply 生成);
 //   兜底直接解析 /data/system/packages.list(免 popen)
-EngineConfig load_engine_config() {
-    EngineConfig cfg;
-    // 拦截模式
-    std::string mode = read_conf_value(FILE_STATE_CONF, "mode");
-    if (mode.empty()) mode = read_conf_value(FILE_ADBLOCK_MODE, "mode");
-    if (mode == "1") cfg.mode = MODE_HOSTS_ONLY;
-    else cfg.mode = MODE_HOSTS_ADGUARD;
-    // 作用域 / 日志 / QUIC / 启用
-    std::string scope = read_conf_value(FILE_STATE_CONF, "scope");
-    cfg.scope = (scope == "1") ? SCOPE_PER_APP : SCOPE_GLOBAL;
-    std::string dev = read_conf_value(FILE_STATE_CONF, "dev_mode");
-    cfg.dev_mode = (dev == "true" || dev == "1");
-    std::string quic = read_conf_value(FILE_STATE_CONF, "block_quic");
-    cfg.block_quic = (quic == "true" || quic == "1");
-    std::string en = read_conf_value(FILE_STATE_CONF, "enabled");
-    cfg.enabled = (en != "false" && en != "0");
-
-    // 读 uid 缓存(每行 "<uid> <包名>")
-    auto load_uids = [](const char *path, std::vector<uid_t> &out) {
-        std::string content;
-        if (!read_file(path, content)) return;
-        const char *p = content.c_str();
-        while (*p) {
-            char *end = nullptr;
-            long uid = strtol(p, &end, 10);
-            if (end > p && uid > 0) out.push_back((uid_t)uid);
-            while (*p && *p != '\n') p++;
-            if (*p == '\n') p++;
+static bool load_engine_config_checked(EngineConfig &cfg, std::string &error) {
+    cfg = {};
+    std::unordered_map<std::string, std::string> values;
+    auto config_file = [&](const char *path, bool optional) {
+        std::string text;
+        const auto result = read_regular_bounded(path, text, 65536);
+        if (result == BoundedRead::MISSING && optional) return true;
+        if (result != BoundedRead::OK || text.find('\0') != std::string::npos) return false;
+        std::istringstream input(text); std::string row;
+        while (std::getline(input, row)) {
+            if (!row.empty() && row.back() == '\r') row.pop_back();
+            if (row.empty() || row[0] == '#') continue;
+            const auto at = row.find('=');
+            if (at == std::string::npos || !at || at > 64 || row.size() > 1024 ||
+                row.substr(0, at).find_first_not_of("abcdefghijklmnopqrstuvwxyz_0123456789") != std::string::npos ||
+                !values.emplace(row.substr(0, at), row.substr(at + 1)).second) return false;
         }
+        return true;
     };
-    load_uids(DATA_FILE("app_uids.conf").c_str(), cfg.bypass_uids);
-    if (cfg.scope == SCOPE_PER_APP) {
-        // 拦截名单的 uid 缓存
-        std::string content;
-        if (read_file(DATA_FILE("app_intercept_uids.conf").c_str(), content)) {
-            const char *p = content.c_str();
-            while (*p) {
-                char *end = nullptr;
-                long uid = strtol(p, &end, 10);
-                if (end > p && uid > 0) cfg.intercept_uids.push_back((uid_t)uid);
-                while (*p && *p != '\n') p++;
-                if (*p == '\n') p++;
-            }
-        }
+    if (!config_file(FILE_STATE_CONF, false)) { error = "state.conf 无法完整读取或含重复/非法字段"; return false; }
+    if (!values.count("mode")) {
+        auto previous = std::move(values); values.clear();
+        if (!config_file(FILE_ADBLOCK_MODE, true)) { error = "旧版规则模式无法读取"; return false; }
+        const std::string fallback = values.count("mode") ? values["mode"] : "2";
+        values = std::move(previous); values["mode"] = fallback;
     }
+    const auto mode = values["mode"], scope = values.count("scope") ? values["scope"] : "0";
+    if ((mode != "1" && mode != "2") || (scope != "0" && scope != "1")) { error = "mode/scope 配置值非法"; return false; }
+    cfg.mode = mode == "1" ? MODE_HOSTS_ONLY : MODE_HOSTS_ADGUARD;
+    cfg.scope = scope == "1" ? SCOPE_PER_APP : SCOPE_GLOBAL;
+    auto boolean = [&](const char *key, bool fallback, bool &out) {
+        const auto found = values.find(key);
+        if (found == values.end()) { out = fallback; return true; }
+        if (found->second != "true" && found->second != "false" && found->second != "1" && found->second != "0") return false;
+        out = found->second == "true" || found->second == "1"; return true;
+    };
+    if (!boolean("block_quic", false, cfg.block_quic) || !boolean("dev_mode", false, cfg.dev_mode) || !boolean("enabled", true, cfg.enabled)) {
+        error = "布尔配置值非法"; return false;
+    }
+
+    const bool selected = cfg.scope == SCOPE_PER_APP;
+    const auto list = edit_config::read(DATA_DIR, selected ? "intercept" : "allow");
+    if (list.status != "ok" && list.status != "missing") { error = "应用名单无法完整读取"; return false; }
+    std::unordered_set<std::string> packages, cached;
+    std::istringstream names(list.content); std::string row;
+    while (std::getline(names, row)) {
+        const auto begin = row.find_first_not_of(" \t\r");
+        if (begin == std::string::npos || row[begin] == '#') continue;
+        row = row.substr(begin, row.find_last_not_of(" \t\r") - begin + 1);
+        if (!valid_package_name(row)) { error = "应用名单含非法包名"; return false; }
+        packages.insert(row);
+        if (packages.size() > edit_config::MAX_LINES) { error = "应用名单超过容量上限"; return false; }
+    }
+    std::string text, source_revision;
+    const auto cache = read_regular_bounded(DATA_FILE(selected ? "app_intercept_uids.conf" : "app_uids.conf"), text, edit_config::MAX_BYTES);
+    if (cache == BoundedRead::ERROR) { error = "UID 缓存不可读或不是普通文件"; return false; }
+    std::vector<uid_t> &uids = selected ? cfg.intercept_uids : cfg.bypass_uids;
+    std::istringstream lines(text);
+    while (std::getline(lines, row)) {
+        if (row.compare(0, 20, "# packages_revision=") == 0) {
+            if (!source_revision.empty()) { error = "UID 缓存修订号重复"; return false; }
+            source_revision = row.substr(20);
+            if (!apply_state::valid_revision(source_revision)) { error = "UID 缓存修订号非法"; return false; }
+            continue;
+        }
+        const auto begin = row.find_first_not_of(" \t\r");
+        if (begin == std::string::npos || row[begin] == '#') continue;
+        std::istringstream fields(row); std::string number, package, extra; uint64_t uid = 0;
+        if (!(fields >> number >> package) || (fields >> extra) || !parse_u64(number, uid) || !uid ||
+            uid > std::numeric_limits<uid_t>::max() || !valid_package_name(package) || !packages.count(package) ||
+            uids.size() >= edit_config::MAX_LINES) { error = "UID 缓存内容非法或不属于当前名单"; return false; }
+        uids.push_back(static_cast<uid_t>(uid)); cached.insert(package);
+    }
+    if ((!source_revision.empty() && source_revision != list.revision) ||
+        (source_revision.empty() && cached != packages)) {
+        error = "应用名单与 UID 缓存不一致，请重新保存应用名单或执行 --apps-apply"; return false;
+    }
+    return true;
+}
+
+EngineConfig load_engine_config() {
+    EngineConfig cfg; std::string ignored;
+    load_engine_config_checked(cfg, ignored);
     return cfg;
 }
 
@@ -528,20 +576,63 @@ EngineConfig load_engine_config() {
 // state. In particular, do not read the rule mode, then read routing settings
 // again after a slow gzip load. rules.current selects immutable bundle files
 // once; generation collection must respect readers (see O01).
-static bool load_candidate(EngineConfig &cfg, RuleDB &rules, std::string &error) {
-    ExclusiveFileLock apps(DATA_FILE(".apps.lock").c_str(), true, 1000);
-    ExclusiveFileLock editable(DATA_FILE(".editable.lock").c_str(), true, 1000);
-    ExclusiveFileLock state(STATE_LOCK_FILE, true, 1000);
-    if (!apps.ok() || !editable.ok() || !state.ok()) {
+struct CandidateInputs {
+    EngineConfig config;
+    RuleBundlePaths bundle;
+    std::string custom, revision;
+};
+static bool capture_candidate_inputs(CandidateInputs &inputs, std::string &error, bool startup = false) {
+    ConfigInputLock locks(DATA_DIR);
+    if (!locks.ok()) {
         error = "配置正在保存，暂未应用；请稍后重试";
         return false;
     }
-    cfg = load_engine_config();
-    load_all_rules(rules);
+    if (!apply_state::capture(DATA_DIR, startup, g_owner, inputs.revision, error)) return false;
+    if (!load_engine_config_checked(inputs.config, error)) return false;
+    auto custom = edit_config::read(DATA_DIR, "custom");
+    if (custom.status != "ok" && custom.status != "missing") { error = custom.message; return false; }
+    error = edit_config::validate_content("custom", custom.content);
+    if (!error.empty()) return false;
+    inputs.custom = std::move(custom.content);
+    inputs.bundle = resolve_rule_bundle(DATA_DIR, FILE_RULESET_CURRENT, FILE_HOSTS_RULES, FILE_ADGUARD_RULES);
+    struct stat manifest {};
+    if (!inputs.bundle.from_manifest && (lstat(FILE_RULESET_CURRENT, &manifest) == 0 || errno != ENOENT)) {
+        error = "规则 generation 指针或分类文件不可用"; return false;
+    }
+    return true;
+}
+static bool load_candidate(EngineConfig &cfg, RuleDB &rules, std::string &revision,
+                           std::string &error, bool startup = false) {
+    CandidateInputs inputs;
+    const bool captured = capture_candidate_inputs(inputs, error, startup);
+    cfg = std::move(inputs.config); revision = inputs.revision;
+    if (!captured) return false;
+    // Decompression, hashing and sorting can be expensive. No mutable input
+    // lock remains held, so a user pause/save need not wait for a huge gzip.
+    // Generation files are immutable; O01 collection must pin this reader.
+    load_rule_files(rules, cfg.mode, inputs.bundle.hosts_path, inputs.bundle.adguard_path,
+                    "", inputs.bundle.from_manifest, &inputs.custom);
+    rules.generation = inputs.bundle.from_manifest ? inputs.bundle.generation : "legacy";
     if (!rules.load_valid) { error = rules.load_error; return false; }
     if (cfg.mode != rules.mode) { error = "候选规则与路由的模式不一致"; return false; }
     rules.finalize(); // No allocation/sorting should be deferred until cutover.
     return true;
+}
+
+static bool complete_apply(const std::string &revision, const EngineConfig &cfg,
+                           const RuleDB *rules, const std::string &failure = "") {
+    if (revision.empty()) return false; // no request was captured
+    apply_state::Applied actual;
+    if (rules) {
+        actual.config = cfg; actual.generation = rules->generation;
+        actual.black = rules->black.size(); actual.white = rules->white.size();
+        actual.updated_at = static_cast<uint64_t>(rules->loaded_at);
+    }
+    std::string error;
+    if (apply_state::finish(DATA_DIR, g_owner, revision, rules ? &actual : nullptr, failure, error)) return true;
+    record_engine_error("apply_ack_failed", error);
+    watchdog_emergency(); // actual policy cannot be truthfully acknowledged
+    return false;
 }
 
 // After switching/rolling back routes, keep bypassing until both consumers
@@ -567,10 +658,14 @@ static bool hot_reload() {
     log_line("系统", "收到热重载信号，构建私有规则与路由候选...");
     auto candidate = std::make_shared<RuleDB>();
     EngineConfig cfg;
-    std::string candidate_error;
-    if (!load_candidate(cfg, *candidate, candidate_error)) {
+    std::string candidate_error, revision;
+    if (!load_candidate(cfg, *candidate, revision, candidate_error)) {
         log_line("错误", "热重载失败，保留旧规则与路由: %s", candidate_error.c_str());
+        if (!revision.empty()) complete_apply(revision, cfg, nullptr, candidate_error);
         return false;
+    }
+    if (!apply_state::current(DATA_DIR, g_owner, revision)) {
+        complete_apply(revision, cfg, nullptr, "候选已被新的配置保存替代"); return false;
     }
     IptablesConfig icfg;
     icfg.block_quic = cfg.block_quic;
@@ -580,6 +675,7 @@ static bool hot_reload() {
     PolicyBarrier::Change change(g_policy);
     if (!change.ok()) {
         log_line("错误", "热重载未能及时取得数据面写租约，保留旧策略");
+        complete_apply(revision, cfg, nullptr, "数据面写租约等待超时，保留旧策略");
         return false;
     }
     std::string err = iptables_install(icfg);
@@ -590,10 +686,14 @@ static bool hot_reload() {
                      err.c_str());
             record_engine_error("reload_rollback_failed", "热重载路由回滚失败: " + err);
             watchdog_emergency();
+            complete_apply(revision, cfg, nullptr, "路由回滚失败: " + err);
         } else {
             log_line("错误", "热重载 iptables 失败: %s,已保留旧规则和路由",
                      err.c_str());
-            if (drain_policy_transition(change)) change.resume();
+            if (drain_policy_transition(change)) {
+                change.resume();
+                complete_apply(revision, cfg, nullptr, err);
+            }
         }
         return false;
     }
@@ -606,6 +706,7 @@ static bool hot_reload() {
     if (!drain_policy_transition(change)) return false;
     save_rule_stats(*candidate);
     change.resume();
+    if (!complete_apply(revision, cfg, candidate.get())) return false;
     log_line("规则", "热重载已完成:黑 %zu / 白 %zu (mode %d)，新连接使用新策略",
              candidate->black.size(), candidate->white.size(), candidate->mode);
     return true;
@@ -628,6 +729,11 @@ int run_daemon() {
         fail_engine_start("signal_setup_failed", "信号处理器注册失败，拒绝启动");
         return 1;
     }
+    g_owner = process_identity(getpid());
+    if (!g_owner.valid()) {
+        fail_engine_start("process_identity_unknown", "无法读取 boot ID 或守护启动时间，拒绝发布生效回执");
+        return 1;
+    }
 
     // Read-only preflight before rule loading, firewall cleanup or binding.
     // In particular, never unbind or kill another module to claim its queue.
@@ -643,12 +749,14 @@ int run_daemon() {
     // 1. 规则加载。启动阶段尚无数据面线程，但仍经同一个不可变快照入口发布。
     auto initial_rules = std::make_shared<RuleDB>();
     EngineConfig cfg;
-    std::string candidate_error;
-    if (!load_candidate(cfg, *initial_rules, candidate_error)) {
+    std::string candidate_error, revision;
+    if (!load_candidate(cfg, *initial_rules, revision, candidate_error, true)) {
+        if (!revision.empty()) complete_apply(revision, cfg, nullptr, candidate_error);
         fail_engine_start("rule_load_failed", candidate_error);
         return 1;
     }
     if (!initial_rules->ok) {
+        complete_apply(revision, cfg, nullptr, "尚无可用规则");
         fail_engine_start("rules_empty", "尚无可用规则，请先点击“同步开源规则”，同步成功后再启动守护。");
         return 1;
     }
@@ -717,8 +825,7 @@ int run_daemon() {
         const bool saved = write_runtime_state(g_fault.load() ? "error" : "stopped");
         return g_fault.load() || !saved ? 1 : 0;
     }
-    write_runtime_state("running");
-    log_line("系统", "引擎已启动,2 线程并行处理 DNS/HTTP-TLS 握手阶段流量");
+    log_line("系统", "路由已建立，正在启动双队列收包线程");
     if (cfg.block_quic)
         log_line("系统", "已启用连接分类拦截,QUIC/UDP 443 快速返回不可达以回退 TCP");
     else
@@ -743,15 +850,27 @@ int run_daemon() {
         return 1;
     }
 
+    if (!stop_requested() && complete_apply(revision, cfg, initial_rules.get())) {
+        if (!write_runtime_state("running")) {
+            record_engine_error("runtime_state_failed", "无法保存运行状态"); watchdog_emergency();
+        } else log_line("系统", "引擎已启动，策略回执已确认，2 线程并行处理流量");
+    }
+
     // 6. 主循环:热重载 + 停止等待
     uint64_t next_metrics_ms = 0;
+    uint64_t next_reconcile_ms = 0;
     while (!stop_requested()) {
         try {
-            if (g_signal_reload != 0) {
+            const uint64_t now = monotonic_ms();
+            bool reconcile = false;
+            if (now >= next_reconcile_ms) {
+                reconcile = apply_state::pending(apply_state::read(DATA_DIR), g_owner);
+                next_reconcile_ms = now + 1000;
+            }
+            if (g_signal_reload != 0 || reconcile) {
                 g_signal_reload = 0;
                 hot_reload();
             }
-            uint64_t now = monotonic_ms();
             if (now >= next_metrics_ms) {
                 save_metrics();
                 next_metrics_ms = now + 1000;

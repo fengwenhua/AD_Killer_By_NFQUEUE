@@ -198,6 +198,11 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread \
 
 "$BUILD_DIR/test_config_store"
 
+${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" "$ROOT/tests/test_apply_state.cpp" \
+    "$ROOT/src/apply_state.cpp" "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" -lz \
+    -o "$BUILD_DIR/test_apply_state"
+"$BUILD_DIR/test_apply_state"
+
 ${CXX:-c++} $COMPILE_FLAGS "$ROOT/tests/process_fixture.cpp" -o "$BUILD_DIR/process_fixture"
 ${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" "$ROOT/tests/test_process_runner.cpp" \
     "$ROOT/src/process_runner.cpp" -o "$BUILD_DIR/test_process_runner"
@@ -215,7 +220,7 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fd
     -DADK_AUDIT_DATA_DIR=\""$BUILD_DIR/lifecycle-data"\" \
     -include "$ROOT/tests/audit/rebase_paths.h" -I"$ROOT/src" \
     "$ROOT/tests/lifecycle_cli.cpp" "$ROOT/tests/lifecycle_logging.cpp" \
-    "$ROOT/src/lifecycle.cpp" "$ROOT/src/process_runner.cpp" "$ROOT/src/bounded_log.cpp" \
+    "$ROOT/src/lifecycle.cpp" "$ROOT/src/apply_state.cpp" "$ROOT/src/process_runner.cpp" "$ROOT/src/bounded_log.cpp" \
     $LIFECYCLE_LINK_FLAGS -lz -o "$BUILD_DIR/lifecycle_cli"
 python3 "$ROOT/tests/test_lifecycle_cli.py" "$BUILD_DIR/lifecycle_cli"
 
@@ -231,8 +236,8 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" "$ROOT/tests/test_policy_barri
 "$BUILD_DIR/test_policy_barrier"
 ${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fdata-sections \
     -DADK_AUDIT_DATA_DIR=\""$BUILD_DIR/engine-failure-data"\" -include "$ROOT/tests/audit/rebase_paths.h" \
-    -I"$ROOT/tests/audit/include" -I"$ROOT/src" "$ROOT/tests/test_engine_failure.cpp" \
-    "$ROOT/src/rules.cpp" "$ROOT/src/rule_stream.cpp" "$ROOT/src/rule_bundle.cpp" \
+    -I"$ROOT/tests/audit/include" -I"$ROOT/src" "$ROOT/tests/test_engine_failure.cpp" "$ROOT/src/edit_config.cpp" \
+    "$ROOT/src/rules.cpp" "$ROOT/src/rule_stream.cpp" "$ROOT/src/rule_bundle.cpp" "$ROOT/src/apply_state.cpp" \
     "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" "$ROOT/src/tcp_reassembly.cpp" \
     "$ROOT/src/dns_tcp_reassembly.cpp" "$ROOT/src/packet.cpp" \
     $LIFECYCLE_LINK_FLAGS -lz -o "$BUILD_DIR/test_engine_failure"

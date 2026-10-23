@@ -47,8 +47,10 @@ O03 原 `fault-state` 子问题随 O16 的退出故障传播一并修复，正�
 `test_engine_failure.cpp`，以及 `test_cleanup_failures.py` 中真实双栈切换/回滚失败后的非零退出。
 O03 的 `mixed-generation` 已迁移到 `test_engine_failure.cpp`、`test_policy_barrier.cpp`
 和真实内核 `test_reload_consistency.py`，验证失败保留旧快照/统计、切换期间无连接标记旁路、
-双队列空闲边界与既有 PASS 连接保留。期望/生效修订号与界面 ACK 仍待后续实施，
-不能把切换子问题修复当作 O03 全部完成。
+双队列空闲边界与既有 PASS 连接保留。后端期望/生效修订号已由
+`test_apply_state.cpp`、`test_engine_failure.cpp` 和真实内核 `test_apply_protocol.py`
+验证保存/提交/失败/实际生效、身份、损坏与并发覆盖；界面 ACK 尚待接入，
+不能把后端修复当作 O03 全部完成。
 当前隔离审计保留其余 2 个观测点，不再要求这些已修复的缺陷存在。
 
 最终出现 `Audit characterization completed` 仅表示预期的当前行为已被观测；ASan/UBSan 没有报错也不代表完成安全审计。

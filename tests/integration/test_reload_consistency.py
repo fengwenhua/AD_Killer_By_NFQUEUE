@@ -15,6 +15,13 @@ DATA, BINARY = engine.DATA, engine.BINARY
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def wait_result(submission, expected='applied'):
+    assert submission.returncode == 0, (submission.stdout, submission.stderr)
+    revision = json.loads(submission.stdout)['revision']
+    engine.wait_for(lambda: json.loads(command('--apply-status', revision).stdout)['status'] == expected,
+                    'revision ACK ' + expected)
+
+
 def main():
     assert os.geteuid() == 0 and not DATA.exists() and released()
     for table in engine.TABLES:
@@ -38,14 +45,12 @@ def main():
             custom.write_text('ads.example.com\n')
             daemon = subprocess.Popen([BINARY, '--daemon', '--foreground'], env=env,
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            log = DATA / 'log/engine.log'
             engine.wait_for(lambda: engine.state() == 'running' or daemon.poll() is not None, 'reload daemon start')
             assert daemon.poll() is None
             original = (DATA / 'rule_stats.conf').read_bytes()
             custom.write_text('new.example.com\nother.example.com\n')
             mode.write_text('switch\n')
-            assert command('--reload').returncode == 0
-            engine.wait_for(lambda: '已保留旧规则和路由' in log.read_text(), 'IPv6 switch failure with successful rollback')
+            wait_result(command('--reload'), 'failed')
             engine.wait_for(lease_finished, 'rollback lease completed')
             assert daemon.poll() is None and (DATA / 'rule_stats.conf').read_bytes() == original
             for family in (socket.AF_INET, socket.AF_INET6):
@@ -66,14 +71,14 @@ def main():
                         payload = b'GET / HTTP/1.1\r\nHost: new.example.com\r\n\r\n'
                         client.sendall(payload); assert peer.recv(4096) == payload
                         mode.write_text('hold\n')
-                        assert command('--reload').returncode == 0
+                        held = command('--reload'); assert held.returncode == 0
                         engine.wait_for(Path(str(mode) + '.entered').exists, 'held actual firewall transaction')
                         # Consumers remain live during slow installation. Even
                         # old-policy blocks bypass, without a permanent mark.
                         for family in (socket.AF_INET, socket.AF_INET6):
                             engine.udp_dns(family, 'ads.example.com', True)
                         mode.write_text(''); release.touch()
-                        engine.wait_for(lambda: '热重载已完成' in log.read_text(), 'policy and both receive queues committed')
+                        wait_result(held)
                         assert json.loads(command('--status').stdout)['iptables_active']
                         client.sendall(payload); assert peer.recv(4096) == payload
                         for family in (socket.AF_INET, socket.AF_INET6):
@@ -85,7 +90,8 @@ def main():
             # must eventually win and both queue loops must resume verdicts.
             custom.write_text('final.example.com\n')
             for _ in range(5):
-                assert command('--reload').returncode == 0
+                last = command('--reload'); assert last.returncode == 0
+            wait_result(last)
             engine.wait_for(lambda: 'black=1\n' in (DATA / 'rule_stats.conf').read_text(), 'last coalesced reload')
             for family in (socket.AF_INET, socket.AF_INET6):
                 engine.udp_dns(family, 'final.example.com', False)

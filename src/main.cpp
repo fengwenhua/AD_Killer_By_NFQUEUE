@@ -36,6 +36,8 @@
 #include "edit_config.h"
 #include "lifecycle.h"
 #include "process_runner.h"
+#include "apply_state.h"
+#include "config_input_lock.h"
 
 #include <cstdio>
 #include <cerrno>
@@ -583,71 +585,90 @@ static int cmd_stop() {
 // ---------------------------------------------------------------------------
 // --reload:热重载(运行中通知 SIGHUP;未运行报错)
 // 输出:{"status": "reloaded"} / {"status": "error"}
-static int cmd_reload() {
-    int pid = read_daemon_pid();
-    if (pid > 0 && kill(pid, SIGHUP) == 0) {
-        printf("{\"status\": \"reloaded\"}\n");
-        return 0;
+static bool mark_policy_dirty() {
+    std::string error;
+    if (apply_state::dirty(DATA_DIR, error)) return true;
+    fprintf(stderr, "%s\n", error.c_str()); return false;
+}
+static bool write_policy_value(const char *key, const char *value) {
+    return write_conf_value_with_lock(FILE_STATE_CONF, key, value, STATE_LOCK_FILE, mark_policy_dirty);
+}
+static bool setting_matches(const char *key, const char *expected) {
+    if (read_conf_value(FILE_STATE_CONF, key) == expected) return true;
+    printf("{\"status\":\"superseded\",\"message\":\"配置已被其他窗口修改，请重新读取\"}\n");
+    return false;
+}
+static int submit_apply_locked(const std::string &extra = "", bool emit = true) {
+    std::string revision, error;
+    if (!apply_state::queue(DATA_DIR, revision, error)) {
+        if (emit) printf("{\"status\":\"error_apply_submission\",\"message\":%s%s}\n", source_json_string(error).c_str(), extra.c_str());
+        else log_line("错误", "%s", error.c_str());
+        return 1;
     }
-    printf("{\"status\": \"error\"}\n");
-    return 1;
+    const int pid = find_daemon_pid();
+    const bool signalled = pid > 0 && kill(pid, SIGHUP) == 0;
+    if (emit) printf("{\"status\":%s,\"revision\":%s,\"signalled\":%s%s}\n",
+        source_json_string(pid > 0 ? "queued" : "deferred").c_str(), source_json_string(revision).c_str(),
+        signalled ? "true" : "false", extra.c_str());
+    return 0; // queued is durable, never a claim that it has been applied
+}
+static int cmd_reload(const std::string &target = "", const std::string &expected = "") {
+    ConfigInputLock inputs(DATA_DIR);
+    if (!inputs.ok()) { printf("{\"status\":\"busy\"}\n"); return 2; }
+    if (!target.empty()) {
+        const auto value = edit_config::read(DATA_DIR, target);
+        if (value.status != "ok" || value.revision != expected) {
+            printf("{\"status\":\"superseded\",\"message\":\"配置已被其他修改替代，请重新读取\"}\n"); return 2;
+        }
+    }
+    return submit_apply_locked();
 }
 
 // ---------------------------------------------------------------------------
 // --mode N:切换规则强度(写配置;运行中热重载)
 static int cmd_mode(int mode) {
+    configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
     if (!valid_mode(mode)) {
         fprintf(stderr, "参数错误\n用法: AD_Killer_By_NFQUEUE --mode 1|2 (1=仅Hosts 2=Hosts+AdGuard)\n");
         return 1;
     }
     char v[8];
     snprintf(v, sizeof(v), "%d", mode);
-    if (!write_conf_value(FILE_STATE_CONF, "mode", v)) {
+    if (!write_policy_value("mode", v)) {
         fprintf(stderr, "配置写入失败: mode\n");
         return 1;
     }
-    int pid = read_daemon_pid();
-    if (pid > 0) {
-        kill(pid, SIGHUP);
-        log_line("系统", "模式已切换: %s,正在重载规则...",
-                 mode == MODE_HOSTS_ONLY ? "仅 Hosts" : "Hosts + AdGuard");
-    } else {
-        log_line("系统", "模式已切换: %s(引擎未运行,启动后生效)",
-                 mode == MODE_HOSTS_ONLY ? "仅 Hosts" : "Hosts + AdGuard");
-    }
-    return 0;
+    ConfigInputLock inputs(DATA_DIR);
+    if (!inputs.ok()) { printf("{\"status\":\"busy\"}\n"); return 2; }
+    if (!setting_matches("mode", v)) return 2;
+    return submit_apply_locked(",\"mode\":" + std::to_string(mode));
 }
 
 // ---------------------------------------------------------------------------
 // --scope 0|1:切换作用域并让运行中的守护进程重建路由。
+static int cmd_apps_apply(const std::string &target = "", const std::string &expected = "", int expected_scope = -1);
 static int cmd_scope(int scope) {
+    configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
     if (!valid_scope(scope)) {
         fprintf(stderr, "参数错误\n用法: AD_Killer_By_NFQUEUE --scope 0|1 (0=全局 1=仅名单应用)\n");
         return 1;
     }
     char value[8];
     snprintf(value, sizeof(value), "%d", scope);
-    if (!write_conf_value(FILE_STATE_CONF, "scope", value)) {
+    if (!write_policy_value("scope", value)) {
         fprintf(stderr, "配置写入失败: scope\n");
         return 1;
     }
-    int pid = read_daemon_pid();
-    if (pid > 0) {
-        kill(pid, SIGHUP);
-        log_line("系统", "作用域已切换为 %d,正在重建应用路由...", scope);
-        printf("{\"status\": \"reloading\", \"scope\": %d}\n", scope);
-    } else {
-        log_line("系统", "作用域已切换为 %d(引擎未运行,启动后生效)", scope);
-        printf("{\"status\": \"deferred\", \"scope\": %d}\n", scope);
-    }
-    return 0;
+    return cmd_apps_apply("", "", scope); // one coherent scope + UID-cache submission
 }
 
 // ---------------------------------------------------------------------------
 // --dev / --quic / --autostart on|off（自启只修改下次开机策略）
 static int cmd_toggle(const char *key, bool on) {
+    configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
     std::string error;
     const bool saved = strcmp(key, "autostart") == 0 ? lifecycle::set_autostart(DATA_DIR, on, error)
+        : strcmp(key, "block_quic") == 0 ? write_policy_value(key, on ? "true" : "false")
         : write_conf_value(FILE_STATE_CONF, key, on ? "true" : "false");
     if (!saved) {
         fprintf(stderr, "配置写入失败: %s\n", key);
@@ -668,10 +689,10 @@ static int cmd_toggle(const char *key, bool on) {
         printf("{\"dev_mode\": \"done\"}\n");
     } else {
         // QUIC 切换需要重建 iptables → 通知守护进程热重载
-        int pid = read_daemon_pid();
-        if (pid > 0) kill(pid, SIGHUP);
-        log_line("系统", "%s QUIC/UDP 443 阻断", on ? "已开启" : "已关闭");
-        printf("{\"block_quic\": %s}\n", on ? "true" : "false");
+        ConfigInputLock inputs(DATA_DIR);
+        if (!inputs.ok()) { printf("{\"status\":\"busy\"}\n"); return 2; }
+        if (!setting_matches("block_quic", on ? "true" : "false")) return 2;
+        return submit_apply_locked(std::string(",\"block_quic\":") + (on ? "true" : "false"));
     }
     return 0;
 }
@@ -681,17 +702,16 @@ static int cmd_toggle(const char *key, bool on) {
 // 流程:读名单(scope 决定读哪个文件)→ 包名解析 uid(优先 packages.list,
 // 兜底 cmd package list packages -U)→ 写 uid 缓存 → 通知守护进程热重载
 // 输出:{"status": "applied"} / {"status": "not_running"}
-static int cmd_apps_apply() {
+static int cmd_apps_apply(const std::string &target, const std::string &expected, int expected_scope) {
+    configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
     if (!ensure_dirs()) {
         printf("{\"status\": \"error_storage\"}\n");
         return 1;
     }
     // Same order as the daemon's candidate capture. Keep selected packages,
     // scope and the generated UID cache from different saves from interleaving.
-    ExclusiveFileLock apps(DATA_FILE(".apps.lock").c_str(), true, 1000);
-    ExclusiveFileLock editable(DATA_FILE(".editable.lock").c_str(), true, 1000);
-    ExclusiveFileLock state(STATE_LOCK_FILE, true, 1000);
-    if (!apps.ok() || !editable.ok() || !state.ok()) {
+    ConfigInputLock inputs(DATA_DIR);
+    if (!inputs.ok()) {
         printf("{\"status\":\"busy\",\"message\":\"配置正在保存，请稍后重试\"}\n");
         return 2;
     }
@@ -700,14 +720,30 @@ static int cmd_apps_apply() {
         std::string s = read_conf_value(FILE_STATE_CONF, "scope");
         scope = (s == "1") ? SCOPE_PER_APP : SCOPE_GLOBAL;
     }
-    const char *list_path = (scope == SCOPE_PER_APP) ? FILE_APP_INTERCEPT : FILE_APP_WHITELIST;
+    const auto selected_list = edit_config::read(DATA_DIR, scope == SCOPE_PER_APP ? "intercept" : "allow");
+    if (selected_list.status != "ok") {
+        printf("{\"status\":\"error_config_read\",\"message\":%s}\n", source_json_string(selected_list.message).c_str()); return 1;
+    }
+    const auto invalid = edit_config::validate_content(scope == SCOPE_PER_APP ? "intercept" : "allow", selected_list.content);
+    if (!invalid.empty()) {
+        printf("{\"status\":\"error_config_content\",\"message\":%s}\n", source_json_string(invalid).c_str()); return 1;
+    }
+    if (expected_scope >= 0 && expected_scope != scope) {
+        printf("{\"status\":\"superseded\",\"message\":\"拦截范围已被其他窗口修改\"}\n"); return 2;
+    }
+    if (!target.empty()) {
+        const auto value = edit_config::read(DATA_DIR, target);
+        if (target != (scope == SCOPE_PER_APP ? "intercept" : "allow") || value.status != "ok" || value.revision != expected) {
+            printf("{\"status\":\"superseded\",\"message\":\"范围或名单已变更，请重新读取\"}\n"); return 2;
+        }
+    }
 
     // 1. 读取包名名单
     std::vector<std::string> pkgs;
     std::unordered_set<std::string> unique_pkgs;
     {
-        std::string content;
-        if (read_file(list_path, content)) {
+        const std::string &content = selected_list.content;
+        {
             std::istringstream lines(content);
             std::string line;
             while (std::getline(lines, line)) {
@@ -726,11 +762,11 @@ static int cmd_apps_apply() {
     // 2. 构建 包名→uid 映射
     //    优先:/data/system/packages.list(每行 "pkg uid debugFlag dataDir seinfo",免子进程)
     //    兜底:cmd package list packages -U(输出 "package:<pkg> uid:<n>")
-    std::string uid_map;   // 结果:每行 "<uid> <包名>"
+    std::string uid_map = "# packages_revision=" + selected_list.revision + "\n";
     {
         std::unordered_map<std::string, long> pkg2uid;
         std::string pl;
-        if (read_file("/data/system/packages.list", pl)) {
+        if (!pkgs.empty() && read_regular_bounded("/data/system/packages.list", pl, 8u * 1024u * 1024u) == BoundedRead::OK) {
             // 快速路径:直接解析 packages.list
             std::istringstream ss(pl);
             std::string line;
@@ -738,18 +774,19 @@ static int cmd_apps_apply() {
                 std::istringstream row(line);
                 std::string pkg;
                 long uid = -1;
-                if (row >> pkg >> uid && valid_package_name(pkg) && uid > 0)
+                if (row >> pkg >> uid && valid_package_name(pkg) && uid > 0 && static_cast<uint64_t>(uid) <= UINT32_MAX)
                     pkg2uid[pkg] = uid;
             }
-        } else {
+        }
+        if (!pkgs.empty() && pkg2uid.empty()) {
             // 兜底链:cmd package → pm list
-            for (const char *cmd : {"cmd package list packages -U 2>/dev/null",
-                                    "pm list packages -U 2>/dev/null"}) {
-                FILE *f = popen(cmd, "r");
-                if (!f) continue;
-                char line[512];
-                while (fgets(line, sizeof(line), f)) {
-                    std::string row(line);
+            const std::vector<std::vector<std::string>> queries = {
+                {"cmd", "package", "list", "packages", "-U"}, {"pm", "list", "packages", "-U"}};
+            for (const auto &query : queries) {
+                const auto result = run_process(query, 2000, 8u * 1024u * 1024u);
+                if (!result.ok()) continue;
+                std::istringstream output(result.output); std::string row;
+                while (std::getline(output, row)) {
                     if (row.compare(0, 8, "package:") != 0) continue;
                     const size_t marker = row.find(" uid:", 8);
                     if (marker == std::string::npos) continue;
@@ -757,12 +794,15 @@ static int cmd_apps_apply() {
                     char *end = nullptr;
                     long uid = strtol(row.c_str() + marker + 5, &end, 10);
                     if (valid_package_name(pkg) && end != row.c_str() + marker + 5 &&
-                        uid > 0)
+                        uid > 0 && static_cast<uint64_t>(uid) <= UINT32_MAX && std::string(end).find_first_not_of(" \t\r") == std::string::npos)
                         pkg2uid[pkg] = uid;
                 }
-                pclose(f);
                 if (!pkg2uid.empty()) break;
             }
+        }
+        if (!pkgs.empty() && pkg2uid.empty()) {
+            printf("{\"status\":\"error_uid_resolution\",\"message\":\"无法核实已安装应用的 UID，原缓存与旧策略未改变\"}\n");
+            return 1;
         }
         // 解析名单中每个包的 uid
         for (auto &pkg : pkgs) {
@@ -783,7 +823,11 @@ static int cmd_apps_apply() {
     std::string uid_cache_path = (scope == SCOPE_PER_APP)
         ? DATA_FILE("app_intercept_uids.conf")
         : DATA_FILE("app_uids.conf");
-    if (!write_file_atomic(uid_cache_path.c_str(), uid_map)) {
+    if (uid_map.size() > edit_config::MAX_BYTES) {
+        printf("{\"status\":\"error_capacity\",\"message\":\"UID 缓存超过容量上限，原缓存未替换\"}\n"); return 1;
+    }
+    const auto cache_saved = mark_policy_dirty() ? write_file_durable_atomic(uid_cache_path.c_str(), uid_map) : AtomicWriteResult{};
+    if (!cache_saved.committed || !cache_saved.durable) {
         log_line("应用", "UID 缓存写入失败: %s", uid_cache_path.c_str());
         printf("{\"status\": \"error_storage\"}\n");
         return 1;
@@ -795,14 +839,7 @@ static int cmd_apps_apply() {
 
     // 4. 通知守护进程热重载(重读 uid 缓存并同步 selector 链)
     // 运行中 applied+scope;未运行 deferred+scope(下次启动生效)
-    int pid = find_daemon_pid();
-    if (pid > 0) {
-        kill(pid, SIGHUP);
-        printf("{\"status\": \"applied\", \"scope\": %d}\n", scope);
-    } else {
-        printf("{\"status\": \"deferred\", \"scope\": %d}\n", scope);
-    }
-    return 0;
+    return submit_apply_locked(",\"scope\":" + std::to_string(scope));
 }
 
 // ---------------------------------------------------------------------------
@@ -989,7 +1026,15 @@ static int cmd_update(const std::string &test_url = "") {
         printf("{\"status\": \"error_download\"}\n");
         return 1;
     }
-    if (!commit_rule_bundle(FILE_RULESET_CURRENT, staged, &stage_error)) {
+    bool committed = [&] {
+        ConfigInputLock inputs(DATA_DIR);
+        if (!inputs.ok() || !mark_policy_dirty()) { stage_error = "配置保存或生效回执不可用，暂未发布"; return false; }
+        if (!commit_rule_bundle(FILE_RULESET_CURRENT, staged, &stage_error)) return false;
+        // Publication success is distinct from applying it to a live daemon.
+        if (submit_apply_locked("", false)) log_line("更新", "规则已发布，应用请求尚未确认；请重新提交热重载");
+        return true;
+    }();
+    if (!committed) {
         discard_staged_rule_bundle(staged);
         save_source_reports("publish_failed");
         log_line("更新", "规则指针提交失败: %s,保留旧规则", stage_error.c_str());
@@ -1018,11 +1063,9 @@ static int cmd_update(const std::string &test_url = "") {
     // current-mode/custom-rule counters without starting an NFQUEUE listener.
     candidate = RuleDB{};
     load_all_rules(candidate);
-    if (candidate.load_valid) save_rule_stats(candidate);
+    if (candidate.load_valid) save_rule_stats(candidate, FILE_AVAILABLE_RULE_STATS);
     else log_line("更新", "规则已发布，但当前模式计数刷新失败: %s", candidate.load_error.c_str());
     // 运行中热重载
-    int pid = read_daemon_pid();
-    if (pid > 0) kill(pid, SIGHUP);
     return 0;
 }
 
@@ -1143,6 +1186,51 @@ static int cmd_update_status(const std::string &job_id) {
 }
 
 // ---------------------------------------------------------------------------
+static apply_state::View current_apply(int pid, const std::string &expected = "") {
+    const auto live = pid > 0 ? process_identity(pid) : ProcessIdentity{};
+    auto view = apply_state::view(apply_state::read(DATA_DIR), live, pid > 0, expected);
+    if (pid > 0 && read_conf_value(FILE_ENGINE_ERROR, "code") == "apply_ack_failed") {
+        // A rename may be visible despite a failed directory sync. Never
+        // present that receipt as confirmed while its owner is fault-closing.
+        view.phase = "unverified"; view.actual_verified = false;
+    }
+    return view;
+}
+static std::string apply_json(const apply_state::View &view) {
+    const auto &record = view.record;
+    std::ostringstream out;
+    out << "{\"status\":" << source_json_string(view.phase) << ",\"verification\":\"owner_and_commit\""
+        << ",\"desired_revision\":" << source_json_string(record.desired)
+        << ",\"applied_revision\":" << source_json_string(view.actual_verified ? record.applied : "")
+        << ",\"verified\":" << (view.actual_verified ? "true" : "false")
+        << ",\"error\":" << source_json_string(record.error)
+        << ",\"mode\":" << (view.actual_verified ? std::to_string(record.actual.config.mode) : "null")
+        << ",\"scope\":" << (view.actual_verified ? std::to_string(record.actual.config.scope) : "null")
+        << ",\"block_quic\":" << (view.actual_verified ? record.actual.config.block_quic ? "true" : "false" : "null")
+        << ",\"generation\":" << source_json_string(view.actual_verified ? record.actual.generation : "")
+        << ",\"rules_black\":" << (view.actual_verified ? std::to_string(record.actual.black) : "null")
+        << ",\"rules_white\":" << (view.actual_verified ? std::to_string(record.actual.white) : "null") << "}";
+    return out.str();
+}
+static int cmd_apply_status(const std::string &expected = "") {
+    const auto view = current_apply(find_daemon_pid(), expected);
+    puts(apply_json(view).c_str());
+    return view.phase == "unverified" ? 1 : 0;
+}
+static void rule_counters(const apply_state::View &apply, int pid, long &black, long &white, long &updated) {
+    if (apply.actual_verified) {
+        black = static_cast<long>(apply.record.actual.black);
+        white = static_cast<long>(apply.record.actual.white);
+        updated = static_cast<long>(apply.record.actual.updated_at); return;
+    }
+    // Never label unrelated/stale file counters as the live daemon's rules.
+    if (pid > 0) { black = white = updated = -1; return; }
+    const char *path = access(FILE_AVAILABLE_RULE_STATS, F_OK) == 0 ? FILE_AVAILABLE_RULE_STATS : FILE_RULE_STATS;
+    black = atol(read_conf_value(path, "black").c_str());
+    white = atol(read_conf_value(path, "white").c_str());
+    updated = atol(read_conf_value(path, "updated_at").c_str());
+}
+
 // --status:WebUI 状态 JSON
 static int cmd_status() {
     int pid = read_daemon_pid();
@@ -1151,31 +1239,26 @@ static int cmd_status() {
 
     // 配置读取
     EngineConfig engine_cfg = load_engine_config();
+    const auto apply = current_apply(pid);
+    const EngineConfig &actual = apply.record.actual.config;
     IptablesConfig iptables_cfg;
-    iptables_cfg.block_quic = engine_cfg.block_quic;
-    iptables_cfg.scope = engine_cfg.scope;
-    iptables_cfg.bypass_uids = engine_cfg.bypass_uids;
-    iptables_cfg.intercept_uids = engine_cfg.intercept_uids;
-    bool ipt_active = pid > 0 ? iptables_chain_active(iptables_cfg) : false;
+    iptables_cfg.block_quic = actual.block_quic;
+    iptables_cfg.scope = actual.scope;
+    iptables_cfg.bypass_uids = actual.bypass_uids;
+    iptables_cfg.intercept_uids = actual.intercept_uids;
+    bool ipt_active = apply.actual_verified && iptables_chain_active(iptables_cfg);
 
     std::string enabled = read_conf_value(FILE_STATE_CONF, "enabled");
     std::string manual = read_conf_value(FILE_STATE_CONF, "manual_stop");
     std::string autostart = read_conf_value(FILE_STATE_CONF, "autostart");
     std::string metrics = current_metrics_json();
     long black = 0, white = 0, updated = 0;
-    {
-        std::string b = read_conf_value(FILE_RULE_STATS, "black");
-        std::string w = read_conf_value(FILE_RULE_STATS, "white");
-        std::string u = read_conf_value(FILE_RULE_STATS, "updated_at");
-        black = b.empty() ? 0 : atol(b.c_str());
-        white = w.empty() ? 0 : atol(w.c_str());
-        updated = u.empty() ? 0 : atol(u.c_str());
-    }
+    rule_counters(apply, pid, black, white, updated);
     printf("{\"running\": %s, \"iptables_active\": %s, \"mode\": %d, \"scope\": %d, "
            "\"dev_mode\": %s, \"block_quic\": %s, \"enabled\": %s, \"manual_stop\": %s, \"autostart\": %s, "
            "\"rules_black\": %ld, \"rules_white\": %ld, \"rules_updated_at\": %ld, "
            "\"ports\": \"53,80,443\", \"quic\": %s, \"table\": \"mangle\", "
-           "\"metrics\": %s, \"state_file\": \"state.conf\", \"daemon_pid\":%d, \"daemon_image_current\":%s, \"route_check\":\"full\", %s}\n",
+           "\"metrics\": %s, \"state_file\": \"state.conf\", \"daemon_pid\":%d, \"daemon_image_current\":%s, \"route_check\":\"full\", \"apply\":%s, %s}\n",
            running ? "true" : "false",
            ipt_active ? "true" : "false",
            engine_cfg.mode, engine_cfg.scope,
@@ -1186,7 +1269,7 @@ static int cmd_status() {
            (autostart == "true" || autostart == "1") ? "true" : "false",
            black, white, updated,
            engine_cfg.block_quic ? "true" : "false", metrics.c_str(), pid > 0 ? pid : 0,
-           daemon_image_current(pid) ? "true" : "false", engine_diagnostics_json(freezer, pid > 0).c_str());
+           daemon_image_current(pid) ? "true" : "false", apply_json(apply).c_str(), engine_diagnostics_json(freezer, pid > 0).c_str());
     return 0;
 }
 
@@ -1195,6 +1278,7 @@ static int cmd_status() {
 // route_check=entry 不代表完整代际布局校验；异常时 WebUI 再调用 --status。
 static int cmd_status_fast() {
     int pid = find_daemon_pid();
+    const auto apply = current_apply(pid);
     const auto freezer = pid > 0 ? daemon_cgroup_status(pid) : FreezerStatus{};
     bool running = pid > 0 && freezer.state != FreezerState::FROZEN;
     int mode = MODE_HOSTS_ADGUARD;
@@ -1213,14 +1297,7 @@ static int cmd_status_fast() {
     std::string autostart = read_conf_value(FILE_STATE_CONF, "autostart");
     std::string metrics = current_metrics_json();
     long black = 0, white = 0, updated = 0;
-    {
-        std::string b = read_conf_value(FILE_RULE_STATS, "black");
-        std::string w = read_conf_value(FILE_RULE_STATS, "white");
-        std::string u = read_conf_value(FILE_RULE_STATS, "updated_at");
-        black = b.empty() ? 0 : atol(b.c_str());
-        white = w.empty() ? 0 : atol(w.c_str());
-        updated = u.empty() ? 0 : atol(u.c_str());
-    }
+    rule_counters(apply, pid, black, white, updated);
     bool dev_on = (dev == "true" || dev == "1");
     bool quic_on = (quic == "true" || quic == "1");
     // A frozen worker is unhealthy, but its routes can still be installed.
@@ -1230,7 +1307,7 @@ static int cmd_status_fast() {
            "\"dev_mode\": %s, \"block_quic\": %s, \"enabled\": %s, \"manual_stop\": %s, \"autostart\": %s, "
            "\"rules_black\": %ld, \"rules_white\": %ld, \"rules_updated_at\": %ld, "
            "\"ports\": \"53,80,443\", \"quic\": %s, \"table\": \"mangle\", "
-           "\"metrics\": %s, \"state_file\": \"state.conf\", \"daemon_pid\":%d, \"daemon_image_current\":%s, \"route_check\":\"entry\", %s}\n",
+           "\"metrics\": %s, \"state_file\": \"state.conf\", \"daemon_pid\":%d, \"daemon_image_current\":%s, \"route_check\":\"entry\", \"apply\":%s, %s}\n",
            running ? "true" : "false",
            attached ? "true" : "false",
            mode, scope,
@@ -1241,7 +1318,7 @@ static int cmd_status_fast() {
            (autostart == "true" || autostart == "1") ? "true" : "false",
            black, white, updated,
            quic_on ? "true" : "false", metrics.c_str(), pid > 0 ? pid : 0,
-           daemon_image_current(pid) ? "true" : "false", engine_diagnostics_json(freezer, pid > 0).c_str());
+           daemon_image_current(pid) ? "true" : "false", apply_json(apply).c_str(), engine_diagnostics_json(freezer, pid > 0).c_str());
     return 0;
 }
 
@@ -1372,6 +1449,7 @@ static void usage() {
             "  AD_Killer_By_NFQUEUE --autostart on|off 开机自启(默认关闭，不改变当前运行状态)\n"
             "  AD_Killer_By_NFQUEUE --apps-apply       应用名单生效\n"
             "  AD_Killer_By_NFQUEUE --status           状态 JSON\n"
+            "  AD_Killer_By_NFQUEUE --apply-status [REVISION]  查询配置生效回执（只读）\n"
             "  AD_Killer_By_NFQUEUE --version-status   版本 JSON\n",
             MODULE_VERSION);
 }
@@ -1385,7 +1463,9 @@ int main(int argc, char **argv) {
     if (arg == "--config-read" || arg == "--config-save") {
         const bool saving = arg == "--config-save";
         if (argc != (saving ? 4 : 3)) { usage(); return 1; }
-        return edit_config::command(DATA_DIR, saving, argv[2], saving ? argv[3] : "");
+        return edit_config::command(DATA_DIR, saving, argv[2], saving ? argv[3] : "", [](const char *path, const std::string &text) {
+            return mark_policy_dirty() ? write_file_durable_atomic(path, text) : AtomicWriteResult{};
+        });
     }
 
     if (arg == "--merge-snapshot") {
@@ -1425,7 +1505,16 @@ int main(int argc, char **argv) {
         if (argc != 2) { usage(); return 1; }
         return cmd_daemon();
     }
-    if (arg == "--reload")         return cmd_reload();
+    if (arg == "--reload") {
+        if (argc == 2) return cmd_reload();
+        if (argc == 4 && strcmp(argv[2], "custom") == 0 && apply_state::valid_revision(argv[3])) return cmd_reload(argv[2], argv[3]);
+        usage(); return 1;
+    }
+    if (arg == "--apply-status") {
+        if (argc == 2) return cmd_apply_status();
+        if (argc == 3 && apply_state::valid_revision(argv[2])) return cmd_apply_status(argv[2]);
+        usage(); return 1;
+    }
     if (arg == "--update")         return cmd_update();
     if (arg == "--update-start")   return cmd_update_start();
     if (arg == "--source-preview") {
@@ -1484,7 +1573,11 @@ int main(int argc, char **argv) {
         return cmd_toggle(arg == "--autostart" ? "autostart" :
                           arg == "--dev" ? "dev_mode" : "block_quic", on);
     }
-    if (arg == "--apps-apply")     return cmd_apps_apply();
+    if (arg == "--apps-apply") {
+        if (argc == 2) return cmd_apps_apply();
+        if (argc == 4 && (strcmp(argv[2], "allow") == 0 || strcmp(argv[2], "intercept") == 0) && apply_state::valid_revision(argv[3])) return cmd_apps_apply(argv[2], argv[3]);
+        usage(); return 1;
+    }
     usage();
     return 1;
 }

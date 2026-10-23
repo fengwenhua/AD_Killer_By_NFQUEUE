@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <string>
 
 // 设置当前进程的独立日志；未设置时 log_line 输出 stdout。
@@ -34,7 +35,8 @@ bool write_conf_value(const char *path, const char *key, const char *value);
 
 // 测试及特殊调用使用的显式锁路径版本；生产配置统一使用 STATE_LOCK_FILE。
 bool write_conf_value_with_lock(const char *path, const char *key,
-                                const char *value, const char *lock_path);
+                                const char *value, const char *lock_path,
+                                const std::function<bool()> &before_commit = {});
 
 // 当前时间字符串 %Y-%m-%d %H:%M:%S
 std::string now_string();

@@ -39,6 +39,11 @@ python3 "$ROOT/tests/integration/test_startup_conflict.py" "$BUILD_DIR/AD_Killer
 python3 "$ROOT/tests/integration/test_lifecycle_races.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE"
 python3 "$ROOT/tests/integration/test_cleanup_failures.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE"
 python3 "$ROOT/tests/integration/test_reload_consistency.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE"
+"${CXX:-c++}" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
+    -I"$ROOT/src" "$ROOT/tests/integration/queue_apply_without_signal.cpp" \
+    "$ROOT/src/apply_state.cpp" "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" \
+    -lz -o "$BUILD_DIR/queue_apply_without_signal"
+python3 "$ROOT/tests/integration/test_apply_protocol.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE" "$BUILD_DIR/queue_apply_without_signal"
 python3 "$ROOT/tests/integration/test_engine.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE"
 python3 "$ROOT/tests/integration/test_policy.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE"
 "${CXX:-c++}" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
