@@ -40,6 +40,7 @@
 #include "config_input_lock.h"
 #include "task_context.h"
 #include "operation_gate.h"
+#include "uninstall.h"
 
 #include <cstdio>
 #include <cerrno>
@@ -519,16 +520,16 @@ static int cmd_daemon() {
 // --stop:安全停止
 // 流程:runtime.state="stopping" → 找守护进程(pgrep)
 // → SIGTERM 优雅退出 → 超时强杀 → 拔规则 → state="stopped" + {"status": "stopped"}
-static int cmd_stop() {
+static int cmd_stop(bool emit = true) {
     lifecycle::Ticket request;
     std::string error;
     if (!lifecycle::begin(DATA_DIR, lifecycle::Action::STOP, request, error)) {
-        printf("{\"status\":\"error_storage\",\"message\":%s}\n", source_json_string(error).c_str()); return 1;
+        if (emit) printf("{\"status\":\"error_storage\",\"message\":%s}\n", source_json_string(error).c_str()); return 1;
     }
     configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
     ExclusiveFileLock operation(DATA_DIR "/.control.lock", true, 12000);
-    if (!operation.ok()) { printf("{\"status\":\"error_busy\"}\n"); return 1; }
-    if (!lifecycle::current(DATA_DIR, request)) { printf("{\"status\":\"cancelled\"}\n"); return 0; }
+    if (!operation.ok()) { if (emit) printf("{\"status\":\"error_busy\"}\n"); return 1; }
+    if (!lifecycle::current(DATA_DIR, request)) { if (emit) printf("{\"status\":\"cancelled\"}\n"); return emit ? 0 : 1; }
     write_runtime_state("stopping");
     int pid = find_daemon_pid();
     if (pid > 0 && is_daemon_pid(pid)) {
@@ -574,6 +575,7 @@ static int cmd_stop() {
         record_engine_error(code, message);
         write_runtime_state("error");
     }
+    if (emit) {
     printf("{\"status\":%s,\"message\":%s,\"cleanup\":{\"routes\":%s,\"process_gone\":%s,\"queues\":%s,\"remaining\":[",
         source_json_string(complete ? (saved ? "stopped" : "error_storage") : (std::string("error_") + code)).c_str(),
         source_json_string(message).c_str(), source_json_string(cleanup.name()).c_str(), process_gone ? "true" : "false", source_json_string(queues.name()).c_str());
@@ -581,6 +583,7 @@ static int cmd_stop() {
     printf("],\"errors\":[");
     for (size_t i = 0; i < cleanup.errors.size(); ++i) printf("%s%s", i ? "," : "", source_json_string(cleanup.errors[i]).c_str());
     printf("]}}\n");
+    }
     return complete && saved ? 0 : 1;
 }
 
@@ -1535,6 +1538,7 @@ static void usage() {
             "  AD_Killer_By_NFQUEUE --module-update-download VERSION [stable|preview] 后台下载并校验模块\n"
             "  AD_Killer_By_NFQUEUE --module-update-install VERSION [stable|preview] 后台安装已校验模块\n"
             "  AD_Killer_By_NFQUEUE --module-update-status 查询安装包与重启状态\n"
+            "  AD_Killer_By_NFQUEUE --uninstall        停止并验证清理，默认删除本模块全部数据\n"
             "  AD_Killer_By_NFQUEUE --sources-list     读取启用/停用来源 JSON\n"
             "  AD_Killer_By_NFQUEUE --sources-save     从 stdin 校验并原子保存来源\n"
             "  AD_Killer_By_NFQUEUE --source-test URL  后台测试单源，不发布规则\n"
@@ -1580,6 +1584,17 @@ int main(int argc, char **argv) {
         return merge_rule_snapshot(argv[2], argv[3]);
     }
 
+    if (arg == "--uninstall") {
+        if (argc != 2) { usage(); return 1; }
+        const auto removed = uninstall_module(DATA_DIR, MODULE_DIR_BASE,
+            [] { return ensure_dirs() && cmd_stop(false) == 0; },
+            [] {
+                ExclusiveFileLock lifetime(DAEMON_LOCK_FILE);
+                return lifetime.ok() && find_daemon_pid() <= 0 && iptables_inspect_owned().ok() && inspect_queue_release(is_daemon_pid).ok();
+            });
+        printf("{\"status\":%s,\"message\":%s}\n", source_json_string(removed.status).c_str(), source_json_string(removed.message).c_str());
+        return removed.ok ? 0 : 1;
+    }
     if (arg == "--install")        return writer(cmd_install);
     if (arg == "--module-update-check") {
         if (argc != 3 || (strcmp(argv[2],"stable") != 0 && strcmp(argv[2],"preview") != 0)) { usage(); return 1; }
@@ -1603,7 +1618,7 @@ int main(int argc, char **argv) {
         if (!am_root()) return cmd_start(arg == "--start-boot"); // su re-enters the root writer gate.
         return writer([&] { return cmd_start(arg == "--start-boot"); });
     }
-    if (arg == "--stop")           return writer(cmd_stop);
+    if (arg == "--stop")           return writer([] { return cmd_stop(); });
     if (arg == "--prepare-reboot") {
         if (argc != 2) { usage(); return 1; }
         return writer(cmd_prepare_reboot);

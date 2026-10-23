@@ -51,6 +51,12 @@ python3 "$ROOT/tests/integration/test_policy.py" "$BUILD_DIR/AD_Killer_By_NFQUEU
     "$ROOT/src/nfnetlink.cpp" "$ROOT/src/nfnetlink_parser.cpp" \
     -o "$BUILD_DIR/conntrack_probe"
 python3 "$ROOT/tests/integration/test_conntrack.py" "$BUILD_DIR/conntrack_probe"
+# Compile with the real loopback downloader for uninstall cancellation coverage.
+"${CXX:-c++}" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
+    '-DADK_NFQ_TEST_CURL_LIBRARY="libcurl.so.4"' \
+    '-DADK_NFQ_TEST_CURL_PROGRAM="/usr/bin/curl"' \
+    -I"$ROOT/src" "$ROOT"/src/*.cpp -ldl -lz -o "$BUILD_DIR/uninstall-engine"
+python3 "$ROOT/tests/integration/test_uninstall.py" "$BUILD_DIR/uninstall-engine"
 # Exercise the production CTNETLINK fallback even on a host with GLUE_CT enabled.
 mkdir "$BUILD_DIR/direct"
 "${CXX:-c++}" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \

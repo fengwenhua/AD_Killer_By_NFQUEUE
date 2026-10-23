@@ -16,6 +16,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[2]
 DATA = Path('/data/adb/AD_Killer_By_NFQUEUE')
 MANAGER = Path('/data/adb/ksud')
+MODULE = Path('/data/adb/modules/AD_Killer_By_NFQUEUE')
 NAME = 'AD_Killer_By_NFQUEUE-v1.1.zip'
 buffer = io.BytesIO()
 with zipfile.ZipFile(buffer, 'w') as archive:
@@ -51,6 +52,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     assert os.geteuid() == 0 and not DATA.exists(), 'requires disposable Linux/root'
+    assert not MODULE.exists(), 'refusing an existing module fixture'
     assert not MANAGER.exists() and not Path('/data/adb/apd').exists() and not Path('/data/adb/magisk').exists(), 'refusing existing root manager'
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     server.corrupt = False
@@ -127,11 +129,37 @@ def main():
             MANAGER.unlink()
             # A slow manager closes its output and exceeds the warning budget.
             # Keep waiting for its normal exit; never kill an installing module.
-            MANAGER.write_text('#!/bin/sh\nexec 1>&- 2>&-\nsleep 1\nprintf completed > /data/adb/AD_Killer_By_NFQUEUE/fake-slow-installed\n')
+            MANAGER.write_text('#!/bin/sh\nexec 1>&- 2>&-\nprintf ready > /data/adb/AD_Killer_By_NFQUEUE/fake-manager-ready\n'
+                               'while [ ! -f /data/adb/AD_Killer_By_NFQUEUE/fake-manager-release ]; do sleep .02; done\n'
+                               'printf completed > /data/adb/AD_Killer_By_NFQUEUE/fake-slow-installed\n')
             MANAGER.chmod(0o700)
-            job('--module-update-install')
+            MODULE.mkdir(parents=True)
+            (MODULE/'module.prop').write_text('id=AD_Killer_By_NFQUEUE\n')
+            active = json.loads(command('--module-update-install', '1.1'))['job_id']
+            for _ in range(200):
+                if (DATA/'fake-manager-ready').exists():
+                    break
+                time.sleep(.025)
+            else:
+                raise AssertionError('slow manager did not start')
+            time.sleep(.2)  # Exceed the warning threshold with closed stdout.
+            before_uninstall = (DATA/'state.conf').read_bytes()
+            blocked = json.loads(command('--uninstall', success=False))
+            assert blocked['status'] == 'uninstall_busy' and not (MODULE/'.uninstalling').exists(), blocked
+            assert (DATA/'state.conf').read_bytes() == before_uninstall
+            assert json.loads(command('--update-status', active))['phase'] == 'installing'
+            (DATA/'fake-manager-release').touch()
+            for _ in range(200):
+                completed = json.loads(command('--update-status', active))
+                if completed['status'] == 'success':
+                    break
+                assert completed['status'] == 'running', completed
+                time.sleep(.025)
+            else:
+                raise AssertionError('slow manager did not complete')
             assert (DATA/'fake-slow-installed').read_text() == 'completed'
             MANAGER.unlink()
+            shutil.rmtree(MODULE)
             for path, magisk in ((MANAGER, False), (Path('/data/adb/apd'), False), (Path('/data/adb/magisk/magisk'), True)):
                 job('--module-update-download')
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -160,6 +188,12 @@ def main():
             assert json.loads(command('--module-update-status'))['rebootRequired'], 'same-version stable installation must wait for reboot'
             print('real module-update CLI/jobs, channel identity, same-version promotion, tamper rejection, manager argv and reboot state passed')
         finally:
+            # Let our own fake installer finish if an assertion fails; it must
+            # never be left waiting on a fixture removed by the test teardown.
+            if DATA.exists():
+                (DATA/'fake-manager-release').touch()
+            if MODULE.exists():
+                shutil.rmtree(MODULE)
             MANAGER.unlink(missing_ok=True)
             Path('/data/adb/apd').unlink(missing_ok=True)
             Path('/data/adb/magisk/magisk').unlink(missing_ok=True)

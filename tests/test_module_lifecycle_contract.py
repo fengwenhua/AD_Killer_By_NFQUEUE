@@ -40,9 +40,10 @@ def main() -> None:
     )
 
     uninstall = (ROOT / "module/uninstall.sh").read_text(encoding="utf-8")
-    assert "delete_all()" in uninstall
-    assert "ADK_NFQ_ENTRY" in uninstall
-    assert 'delete_all "$tb" -w 5 -t mangle -D OUTPUT -j "$ch"' in uninstall
+    assert '"$BIN" --uninstall' in uninstall
+    assert 'exit "$result"' in uninstall
+    assert 'timeout 3 "$tb" -w 1 -t mangle -S' in uninstall
+    assert 'rm -' not in uninstall and 'kill ' not in uninstall
     for source in (uninstall, (ROOT / "src/iptables.cpp").read_text(encoding="utf-8")):
         for line in source.splitlines():
             if "-D OUTPUT" in line:

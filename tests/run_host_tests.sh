@@ -95,6 +95,10 @@ ${CXX:-c++} $COMPILE_FLAGS \
 "$BUILD_DIR/test_net_policy"
 
 ${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" \
+    "$ROOT/tests/test_safe_tree.cpp" -o "$BUILD_DIR/test_safe_tree"
+"$BUILD_DIR/test_safe_tree"
+
+${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" \
     "$ROOT/tests/test_source_preview.cpp" "$ROOT/src/source_preview.cpp" \
     "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" -lz -o "$BUILD_DIR/test_source_preview"
 "$BUILD_DIR/test_source_preview"
@@ -227,6 +231,7 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fd
     "$ROOT/src/lifecycle.cpp" "$ROOT/src/apply_state.cpp" "$ROOT/src/process_runner.cpp" "$ROOT/src/bounded_log.cpp" \
     $LIFECYCLE_LINK_FLAGS -lz -o "$BUILD_DIR/lifecycle_cli"
 python3 "$ROOT/tests/test_lifecycle_cli.py" "$BUILD_DIR/lifecycle_cli"
+python3 "$ROOT/tests/test_uninstall_script.py"
 
 ${CXX:-c++} $COMPILE_FLAGS -pthread -DADK_AUDIT_DATA_DIR=\""$BUILD_DIR/cleanup-data"\" \
     -include "$ROOT/tests/audit/rebase_paths.h" -I"$ROOT/src" \

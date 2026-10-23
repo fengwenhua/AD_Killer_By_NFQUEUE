@@ -1,47 +1,23 @@
 #!/system/bin/sh
-# ============================================================================
-# AD_Killer_By_NFQUEUE 卸载钩子:确保拦截规则被彻底拔除,防止卸载后断网/失联
-#
-# 安全要点:
-#   1. 先删 OUTPUT 上所有链的跳转(-j 链),再 -F/-X 删链(顺序不可反)
-#   2. 覆盖全部链:稳定入口 + A/B 代际链 + 旧版双缓冲链
-#   3. 只删除可由本模块链名确认归属的规则
-#   4. 全程幂等(重复执行无副作用)
-# ============================================================================
-
+# Upgrades keep data. Uninstall deletes data only after native verification.
 MODDIR="${0%/*}"
-
-delete_all() {
-    count=0
-    while [ "$count" -lt 32 ]; do
-        "$@" 2>/dev/null || break
-        count=$((count + 1))
-    done
-}
-
-# 1. 优先让二进制自己干净卸载(含 .route.lock 互斥)
-if [ -x "$MODDIR/AD_Killer_By_NFQUEUE" ]; then
-    "$MODDIR/AD_Killer_By_NFQUEUE" --stop >/dev/null 2>&1
+BIN="$MODDIR/AD_Killer_By_NFQUEUE"
+if [ -x "$BIN" ]; then
+    "$BIN" --uninstall
+    result=$?
+    if [ "$result" -eq 0 ]; then exit 0; fi
+    echo "AD Killer 卸载未完成，数据可能保留。请检查上方诊断；不会绕过安装屏障或删除活动锁。" >&2
+    # A busy/unknown result must never fall through to manual mutations.
+    if [ "$result" -ne 126 ] && [ "$result" -ne 127 ]; then exit "$result"; fi
 fi
-
-# 2. 手动兜底清理(二进制已删/--stop 失败时仍能拔净)
-CH="ADK_NFQ_ENTRY ADK_NFQ_APPS_A ADK_NFQ_APPS_B ADK_NFQ_OUT_A ADK_NFQ_OUT_B ADK_NFQ_APPS_NEXT ADK_NFQ_APPS_OLD ADK_NFQ_APPS ADK_NFQ_OUT"
-for tb in iptables ip6tables; do
-    # 2.1 先删 OUTPUT 跳转(否则 -X 删链会失败,规则残留)
-    for ch in $CH; do
-        delete_all "$tb" -w 5 -t mangle -D OUTPUT -j "$ch"
+echo "AD Killer 二进制缺失或无法执行，不能核实后台写入者。保留数据并返回失败，请重新安装匹配版本后重试卸载。" >&2
+# Read-only bounded fallback. Never guess a PID or flush another module's rules.
+if command -v timeout >/dev/null 2>&1; then
+    for tb in iptables ip6tables; do
+        echo "[$tb] 只读路由诊断（完整残留检查请参阅 ADB 手册）" >&2
+        timeout 3 "$tb" -w 1 -t mangle -S 2>&1 || echo "[$tb] 查询失败，状态未知" >&2
     done
-    # 2.2 可确认归属的旧 uid jump。匿名 NFQUEUE/DROP 可能属于别的模块，
-    #     不按端口或 queue 编号擅自删除；旧匿名布局须由原版本显式迁移。
-    delete_all "$tb" -w 5 -t mangle -D OUTPUT -m owner --uid-owner 0 -j ADK_NFQ_OUT
-    # 2.3 清链 + 删链
-    for ch in $CH; do
-        "$tb" -w 5 -t mangle -F "$ch" 2>/dev/null
-        "$tb" -w 5 -t mangle -X "$ch" 2>/dev/null
-    done
-done
-
-# 3. 清理守护进程 pid 文件(防残留误判)
-rm -f /data/adb/AD_Killer_By_NFQUEUE/daemon.pid 2>/dev/null
-
-# 数据目录(/data/adb/AD_Killer_By_NFQUEUE)保留,便于重新安装后复用规则。
+else
+    echo "缺少 timeout，跳过路由查询；状态未知。" >&2
+fi
+exit 1
