@@ -197,6 +197,15 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread \
 
 "$BUILD_DIR/test_config_store"
 
+for probe in test_edit_config edit_config_cli; do
+    ${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" \
+        "$ROOT/tests/$probe.cpp" "$ROOT/src/edit_config.cpp" \
+        "$ROOT/src/rules.cpp" "$ROOT/src/rule_stream.cpp" "$ROOT/src/rule_bundle.cpp" \
+        "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" -lz -o "$BUILD_DIR/$probe"
+done
+"$BUILD_DIR/test_edit_config"
+python3 "$ROOT/tests/test_edit_config.py" "$BUILD_DIR/edit_config_cli"
+
 python3 "$ROOT/tests/test_data_paths.py"
 
 ${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" \

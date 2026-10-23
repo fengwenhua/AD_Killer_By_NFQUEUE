@@ -99,6 +99,17 @@ AD_Killer_By_NFQUEUE/
 | `--quic on\|off` | 阻止 QUIC | 通知守护进程重建规则(热重载);输出 `{"block_quic": %s}` |
 | `--autostart on\|off` | 开机自启 | 独立配置，默认关闭；只持久化策略，不启动、停止或重载当前引擎 |
 | `--apps-apply` | 应用名单生效 | 见 §4.3 三级 uid 解析;输出 `applied/deferred + scope` |
+| `--config-read custom\|allow\|intercept` | 安全读取可编辑配置 | JSON 返回内容和 SHA-256 修订号；读取失败不视为空文件 |
+| `--config-save TARGET REVISION` | 安全保存可编辑配置 | 从 stdin 读取 UTF-8，固定目标、语法校验、锁内修订号比较与原子替换 |
+
+配置编辑上限为 1 MiB、20000 行、单行 1024 字节。三个目标只对应
+`custom_rules.txt`、`app_whitelist.txt`、`app_intercept.txt`，不接受路径。
+合法空文件返回 `ok`；不存在、读取失败或编码错误返回非零退出码，WebUI 禁止保存。
+文件不存在时，仅手动 CLI 可显式使用 `missing` 修订号创建；WebUI 应先初始化完整模块。
+保存冲突返回 `conflict`/退出码 2，保留草稿，重新加载并合并后再保存。
+写入先同步临时文件，再 rename 并同步父目录；rename 后目录同步失败返回
+`durability_unknown`（`committed=true`），不能当成“未写入”或盲目重试，须重新读取核对。
+旧后端不支持这个接口时编辑器只读失败关闭，不退回 shell 直接覆盖。
 
 首次安装默认 `autostart=false`、`enabled=false`、`manual_stop=true`。显式
 `--stop` 保存暂停，`--start` 恢复为启用，但两者均不修改 `autostart`。
@@ -360,7 +371,7 @@ WebUI 将 KernelSU/APatch 的原生三参数
 | 模式切换 | `--mode 1\|2` | 保存配置并提交异步重载；`--status` 的 mode 不是实际应用 ACK |
 | 来源管理 | `--sources-list` / `--sources-save` / `--source-test <URL或内置ID>` | 草稿显式保存；测试独立 job，不替换规则，保存成功才重排 |
 | 应用名单 | `base64` 写 scope 对应 app_*.txt → `--apps-apply` | 输出含 `deferred` 则提示启动后生效 |
-| 自定义规则 | `base64` 写 custom_rules.txt → `--reload` | 退出码 0 表示已提交热重载，不冒充实际应用 ACK |
+| 自定义规则 | `--config-read custom` → `--config-save custom REVISION` → `--reload` | 保存与热重载分开；冲突或读取失败不覆盖，退出码 0 仍不冒充应用 ACK |
 | DNS 日志 | `tail -n 200 log/dns_query.log`(1s 轮询增量) | — |
 
 应用页随 `scope` 切换数据文件和文案：scope=0 编辑 `app_whitelist.txt`（名单

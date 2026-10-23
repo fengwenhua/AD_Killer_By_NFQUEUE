@@ -6,9 +6,15 @@ export function useCustomRules(api, feedback) {
   const black = ref(''), white = ref(''), ready = ref(false), saving = ref(false);
   const blackCount = computed(() => lines(black.value).length), whiteCount = computed(() => lines(white.value).length);
   async function load() {
-    const all = lines(await api.readFile(PATHS.custom));
-    black.value = all.filter(s => !s.startsWith('@@')).join('\n');
-    white.value = all.filter(s => s.startsWith('@@')).map(s => s.slice(2).trim()).join('\n'); ready.value = true;
+    ready.value = false;
+    try {
+      const all = lines(await api.readFile(PATHS.custom));
+      black.value = all.filter(s => !s.startsWith('@@')).join('\n');
+      white.value = all.filter(s => s.startsWith('@@')).map(s => s.slice(2).trim()).join('\n'); ready.value = true;
+    } catch (error) {
+      feedback.log('自定义规则未能读取，已禁止保存：' + error.message, 'error');
+      feedback.toast('规则读取失败，原文件未修改');
+    }
   }
   async function save() {
     if (!ready.value || saving.value) return;

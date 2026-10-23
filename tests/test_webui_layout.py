@@ -61,6 +61,14 @@ window.ksu = {
     previewCommands.push(command);
     let text = "", errno = 0;
     if(command.includes(" --version-status")) text = JSON.stringify(previewVersion);
+    else if(command.includes(" --config-read ")) {
+      const target=command.split(' ').pop();
+      text=JSON.stringify({status:'ok',target,revision:'a'.repeat(64),content:target==='custom'?'ads.example.com\n@@safe.example.org\n':''});
+    }
+    else if(command.includes(" --config-save ")) {
+      const target=command.match(/--config-save (custom|allow|intercept)/)[1];
+      text=JSON.stringify({status:'ok',target,revision:'b'.repeat(64)});
+    }
     else if(command.includes(" --module-update-status")) text=JSON.stringify({version:previewModuleReady,rebootRequired:previewModuleReboot});
     else if(command.includes(" --module-release-notes")) {
       previewNativeBusy.push({kind:'notes',busy:document.querySelector('#reloadReleaseNotes')?.getAttribute('aria-busy')==='true'});
@@ -1103,7 +1111,7 @@ def adaptive_regression(browser, screenshots, errors):
     page.locator('nav [data-page="rules"]').click()
     page.locator('#saveRules').click()
     page.wait_for_function("previewCommands.some(c=>c.endsWith(' --reload'))")
-    assert page.evaluate("previewCommands.some(c=>c.includes('base64 -d >') && c.includes('custom_rules.txt') && atob(c.match(/'([A-Za-z0-9+/=]+)'/)[1]).includes('draft.example.org'))")
+    assert page.evaluate("previewCommands.some(c=>c.includes('base64 -d |') && c.includes('--config-save custom') && atob(c.match(/'([A-Za-z0-9+/=]+)'/)[1]).includes('draft.example.org'))")
     page.locator('nav [data-page="home"]').click()
     # Persisting boot policy must never invoke engine controls.
     page.locator('#autostart').check()

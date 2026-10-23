@@ -36,16 +36,22 @@ test('callback timeout is unknown result, not success, with cleanup', async () =
   assert.equal(Object.keys(host).length, 1);
 });
 
-test('Unicode file I/O and source pipe safely quote shell arguments', async () => {
+test('Unicode file I/O uses fixed target CLI, revisions and safely quoted source pipes', async () => {
   assert.equal(decodeText(encodeText('白名单 😀\n@@safe.example.org')), '白名单 😀\n@@safe.example.org');
   assert.equal(shellQuote("a'b"), "'a'\\''b'");
   const commands = [], host = {};
-  host.ksu = { exec(command, _, callback) { commands.push(command); host[callback](0, command.includes('base64 ') ? encodeText('内容') : '', ''); } };
+  host.ksu = { exec(command, _, callback) {
+    commands.push(command);
+    const target = /--config-(?:read|save) (custom|allow|intercept)/.exec(command)?.[1];
+    host[callback](0, target ? JSON.stringify({status:'ok',target,content:'内容',revision:'a'.repeat(64)}) : '', '');
+  } };
   const api = createApi(host);
   assert.equal(await api.readFile(PATHS.custom), '内容');
+  await api.readFile(PATHS.allow);
   await api.writeFile(PATHS.allow, "com.example.app\n");
   await api.saveSources("https://example.org/a'b\n");
-  assert.ok(commands[0].includes("'/data/adb/AD_Killer_By_NFQUEUE/custom_rules.txt'"));
-  assert.ok(commands[1].includes(" > '/data/adb/AD_Killer_By_NFQUEUE/app_whitelist.txt'"));
-  assert.match(commands[2], /base64 -d \| .* --sources-save$/);
+  assert.ok(commands[0].endsWith('--config-read custom'));
+  assert.match(commands[2], /base64 -d \| .* --config-save allow a{64}$/);
+  assert.equal(commands.some(command=>command.includes(' > ')),false);
+  assert.match(commands[3], /base64 -d \| .* --sources-save$/);
 });

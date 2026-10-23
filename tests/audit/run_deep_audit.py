@@ -62,9 +62,8 @@ def main():
                         *(str(ROOT / 'src' / source) for source in sources),
                         *linker, '-lz', '-o', str(engine)], check=True, timeout=120)
         observed += observe([str(engine)])
-        observed += observe(['node', str(AUDIT / 'probe_frontend.mjs')])
-        assert sum(line.startswith('OBSERVED ') for line in observed.splitlines()) == 9
-    print('Audit characterization completed: 9 observations; production logic was not patched.')
+        assert sum(line.startswith('OBSERVED ') for line in observed.splitlines()) == 8
+    print('Audit characterization completed: 8 remaining observations; O02 is a normal frontend regression now.')
 
 
 if __name__ == '__main__':

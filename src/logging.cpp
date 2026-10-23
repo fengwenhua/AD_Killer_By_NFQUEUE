@@ -153,6 +153,23 @@ bool write_file_raw_atomic(const char *path, const std::string &data) {
     return ok;
 }
 
+AtomicWriteResult write_file_durable_atomic(const char *path, const std::string &data) {
+    AtomicWriteResult result;
+    if (!write_file_raw_atomic(path, data)) return result;
+    result.committed = true;
+    const std::string name(path);
+    const size_t slash = name.rfind('/');
+    const std::string parent = slash == std::string::npos ? "." : slash == 0 ? "/" : name.substr(0, slash);
+    // The trusted caller chooses the destination. Normal directory aliases
+    // (notably /tmp -> /private/tmp on macOS) must remain usable here.
+    int fd = open(parent.c_str(), O_RDONLY | O_CLOEXEC | O_DIRECTORY);
+    if (fd < 0) return result;
+    bool ok = fsync(fd) == 0;
+    if (close(fd) != 0) ok = false;
+    result.durable = ok;
+    return result;
+}
+
 // ---------------------------------------------------------------------------
 // state.conf 键值读取(忽略 # 注释;返回空串表示键不存在)
 std::string read_conf_value(const char *path, const char *key) {
@@ -197,7 +214,8 @@ bool write_conf_value_with_lock(const char *path, const char *key,
         }
     }
     if (!found) out << key << "=" << value << "\n";
-    return write_file_atomic(path, out.str());
+    const auto saved = write_file_durable_atomic(path, out.str());
+    return saved.committed && saved.durable;
 }
 
 bool write_conf_value(const char *path, const char *key, const char *value) {

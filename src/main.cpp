@@ -33,6 +33,7 @@
 #include "hagezi_source.h"
 #include "source_preview.h"
 #include "module_update.h"
+#include "edit_config.h"
 
 #include <cstdio>
 #include <cerrno>
@@ -68,16 +69,9 @@ static bool ensure_dirs() {
 
 static bool file_exists(const char *p) { return access(p, F_OK) == 0; }
 
-static bool valid_package_name(const std::string &name) {
-    if (name.empty() || name.size() > 255 || name.front() == '.' ||
-        name.back() == '.' || name.find('.') == std::string::npos)
-        return false;
-    for (unsigned char c : name) {
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-              (c >= '0' && c <= '9') || c == '_' || c == '.'))
-            return false;
-    }
-    return name.find("..") == std::string::npos;
+static bool write_initial_config(const char *path, const std::string &text) {
+    const auto result = write_file_durable_atomic(path, text);
+    return result.committed && result.durable;
 }
 
 static std::string current_metrics_json() {
@@ -138,7 +132,7 @@ static int cmd_install() {
     bool ok = true;
     // 默认 state.conf
     if (!file_exists(FILE_STATE_CONF)) {
-        ok = write_file_atomic(FILE_STATE_CONF,
+        ok = write_initial_config(FILE_STATE_CONF,
                           "version=2\n"
                           "source_defaults_version=1\n"
                           "mode=2\n"
@@ -154,16 +148,16 @@ static int cmd_install() {
         ok = write_file_atomic(FILE_DEV_MODE_ENABLED, "1") && ok;
     }
     if (!file_exists(FILE_ADBLOCK_MODE)) {
-        ok = write_file_atomic(FILE_ADBLOCK_MODE, "mode=2\n") && ok;
+        ok = write_initial_config(FILE_ADBLOCK_MODE, "mode=2\n") && ok;
     }
     if (!file_exists(FILE_CUSTOM_RULES)) {
-        ok = write_file_atomic(FILE_CUSTOM_RULES, "") && ok;
+        ok = write_initial_config(FILE_CUSTOM_RULES, "") && ok;
     }
     if (!file_exists(FILE_APP_WHITELIST)) {
-        ok = write_file_atomic(FILE_APP_WHITELIST, "") && ok;
+        ok = write_initial_config(FILE_APP_WHITELIST, "") && ok;
     }
     if (!file_exists(FILE_APP_INTERCEPT)) {
-        ok = write_file_atomic(FILE_APP_INTERCEPT, "") && ok;
+        ok = write_initial_config(FILE_APP_INTERCEPT, "") && ok;
     }
     // 默认规则源(本地可编辑)
     // Serialize the read/compare/write against both sync and source editing.
@@ -175,13 +169,13 @@ static int cmd_install() {
         }
         const bool migrate=read_conf_value(FILE_STATE_CONF,"source_defaults_version")!="1";
         if (!file_exists(FILE_UPDATE_SOURCES)) {
-            if (!write_file_atomic(FILE_UPDATE_SOURCES, default_rule_sources_text())) return false;
+            if (!write_initial_config(FILE_UPDATE_SOURCES, default_rule_sources_text())) return false;
             return !migrate || write_conf_value(FILE_STATE_CONF,"source_defaults_version","1");
         }
         std::string configured;
         if (!read_file(FILE_UPDATE_SOURCES, configured)) return false;
         auto updated=should_refresh_default_rule_sources(configured) ? default_rule_sources_text() : migrate ? migrate_source_defaults(configured) : configured;
-        if (updated!=configured && !write_file_atomic(FILE_UPDATE_SOURCES,updated)) return false;
+        if (updated!=configured && !write_initial_config(FILE_UPDATE_SOURCES,updated)) return false;
         return !migrate || write_conf_value(FILE_STATE_CONF,"source_defaults_version","1");
     }();
     ok = sources_ok && ok;
@@ -1209,7 +1203,7 @@ static int cmd_sources(bool save) {
             return 1;
         }
         retain_builtin_source(entries, previous);
-        if (!write_file_atomic(FILE_UPDATE_SOURCES, serialize_rule_sources(entries))) return 1;
+        if (!write_initial_config(FILE_UPDATE_SOURCES, serialize_rule_sources(entries))) return 1;
     } else retain_builtin_source(entries);
     printf("{\"status\":\"ok\",\"sources\":[");
     for (size_t i = 0; i < entries.size(); i++) {
@@ -1261,6 +1255,8 @@ static void usage() {
             "AD_Killer_By_NFQUEUE %s - NFQUEUE 全局去广告引擎\n"
             "用法:\n"
             "  AD_Killer_By_NFQUEUE --install          安装初始化\n"
+            "  AD_Killer_By_NFQUEUE --config-read custom|allow|intercept 安全读取配置及修订号\n"
+            "  AD_Killer_By_NFQUEUE --config-save TARGET REVISION 从 stdin 校验并原子保存配置\n"
             "  AD_Killer_By_NFQUEUE --start            启动引擎(守护进程)\n"
             "  AD_Killer_By_NFQUEUE --stop             停止引擎并清理规则\n"
             "  AD_Killer_By_NFQUEUE --prepare-reboot  生命周期停止，不修改暂停或自启策略\n"
@@ -1294,6 +1290,12 @@ static void usage() {
 int main(int argc, char **argv) {
     if (argc < 2) { usage(); return 1; }
     std::string arg = argv[1];
+
+    if (arg == "--config-read" || arg == "--config-save") {
+        const bool saving = arg == "--config-save";
+        if (argc != (saving ? 4 : 3)) { usage(); return 1; }
+        return edit_config::command(DATA_DIR, saving, argv[2], saving ? argv[3] : "");
+    }
 
     if (arg == "--merge-snapshot") {
         if (argc != 4) { usage(); return 1; }

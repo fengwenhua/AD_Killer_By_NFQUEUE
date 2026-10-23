@@ -53,3 +53,11 @@ bool gz_compress_string(const std::string &in, std::string &out);
 
 // 二进制写文件 + 临时文件原子 rename
 bool write_file_raw_atomic(const char *path, const std::string &data);
+
+// A rename can become visible even if the following directory sync fails.
+// Callers must not report that the old file was preserved in this case.
+struct AtomicWriteResult {
+    bool committed = false;
+    bool durable = false;
+};
+AtomicWriteResult write_file_durable_atomic(const char *path, const std::string &data);

@@ -34,6 +34,9 @@ python3 tests/audit/run_deep_audit.py --sanitize
 | `idle-retention` | 读取重组统计不执行回收，显式 prune 后释放 | 无实际等待；结合引擎调用路径判断空闲回收缺口 |
 | `unknown-freezer` | membership/events 读取失败折叠成 false | 使用合成 cgroup 数据，未冻结真实进程 |
 | `badfilter-substring` | 合法黑白域名含 badfilter 子串时被 AdGuard 解析器拒绝 | 同时以普通域名及 Hosts 解析作对照 |
-| `read-failure-save` | 真实前端组合逻辑在读取失败后允许保存，覆盖模拟旧规则为空 | 不修改手机规则 |
+
+O02 的 `read-failure-save` 已修复，从缺陷探针迁移到
+`frontend/tests/config-edit.test.js`，正常 `make test` 验证读取失败后不可保存。
+当前隔离审计保留其余 8 个观测点，不再要求这个已修复的缺陷存在。
 
 最终出现 `Audit characterization completed` 仅表示预期的当前行为已被观测；ASan/UBSan 没有报错也不代表完成安全审计。

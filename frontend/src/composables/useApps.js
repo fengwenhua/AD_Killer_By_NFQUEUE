@@ -15,7 +15,17 @@ export function useApps(api, feedback, scope) {
     const current = scope.value, token = ++epoch;
     loading.value = true;
     let selection = drafts.get(current);
-    if (!selection) selection = new Set((await api.readFile(pathFor(current))).split(/\r?\n/).map(s => s.trim()).filter(isPackage));
+    if (!selection) {
+      try { selection = new Set((await api.readFile(pathFor(current))).split(/\r?\n/).map(s => s.trim()).filter(isPackage)); }
+      catch (error) {
+        if (life.active && token === epoch) {
+          loading.value = false; ready.value = false;
+          feedback.log('应用名单未能读取，已禁止保存：' + error.message, 'error');
+          feedback.toast('名单读取失败，原文件未修改');
+        }
+        return;
+      }
+    }
     if (!life.active || token !== epoch) return;
     selected.value = new Set(selection); drafts.set(current, selected.value);
     let entries = [...selection].map(pkg => ({ pkg, label: pkg }));
