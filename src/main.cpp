@@ -39,6 +39,7 @@
 #include "apply_state.h"
 #include "config_input_lock.h"
 #include "task_context.h"
+#include "operation_gate.h"
 
 #include <cstdio>
 #include <cerrno>
@@ -1209,6 +1210,12 @@ static int cmd_update_start(const std::string &test_url = "", const std::string 
         if (task_lease_fd < 0) _exit(1);
         close(lease.native_fd()); // The duplicate is safe from stdio redirection.
         task_progress_callback = [&](const std::string &phase) {
+            std::unique_ptr<ExclusiveFileLock> install_fence;
+            if (phase == "installing") {
+                install_fence = std::make_unique<ExclusiveFileLock>(DATA_FILE(".job-admission.lock").c_str(), true, 1000);
+                if (!install_fence->ok()) return false;
+            }
+            if (phase != "finished" && operation_closing()) return false;
             state.phase = phase; state.updated_at = now_epoch();
             const auto text = serialize_update_job(state);
             return !text.empty() && write_initial_config(state_path.c_str(), text);
@@ -1234,7 +1241,7 @@ static int cmd_update_start(const std::string &test_url = "", const std::string 
         }
         int result = module_version.empty() ? cmd_update(test_url) : module_update::worker(module_version, install_module, module_preview);
         state.status = result == 0 ? "success" : "failed"; state.exit_code = result;
-        state.reason = result == 0 ? "completed" : "worker_failed";
+        state.reason = result == 0 ? "completed" : operation_closing() ? "uninstall_requested" : "worker_failed";
         if (!task_progress("finished")) _exit(1);
         _exit(result);
     }
@@ -1421,7 +1428,7 @@ static int cmd_version_status() {
 // ---------------------------------------------------------------------------
 // Source management only changes subscriptions, never active rules or boot state.
 static int cmd_sources(bool save) {
-    if (!ensure_dirs()) return 1;
+    if (save && !ensure_dirs()) return 1;
     std::string text, error;
     if (save) {
         char buffer[4096];
@@ -1434,7 +1441,7 @@ static int cmd_sources(bool save) {
             }
         }
         if (ferror(stdin)) return 1;
-    } else if (!read_file(FILE_UPDATE_SOURCES, text)) {
+    } else if (read_regular_bounded(FILE_UPDATE_SOURCES, text, MAX_SOURCE_CONFIG_BYTES) != BoundedRead::OK) {
         fprintf(stderr, "无法读取来源列表\n");
         return 1;
     }
@@ -1549,13 +1556,22 @@ static void usage() {
 int main(int argc, char **argv) {
     if (argc < 2) { usage(); return 1; }
     std::string arg = argv[1];
+    const auto writer = [&](const std::function<int()> &operation) {
+        OperationGate gate(DATA_DIR, MODULE_DIR_BASE "/.uninstalling", operation_executable(argv[0]));
+        if (!gate.ok()) {
+            printf("{\"status\":\"error_maintenance\",\"message\":%s}\n", source_json_string(gate.error()).c_str());
+            return 1;
+        }
+        return operation();
+    };
 
     if (arg == "--config-read" || arg == "--config-save") {
         const bool saving = arg == "--config-save";
         if (argc != (saving ? 4 : 3)) { usage(); return 1; }
-        return edit_config::command(DATA_DIR, saving, argv[2], saving ? argv[3] : "", [](const char *path, const std::string &text) {
+        const auto command = [&] { return edit_config::command(DATA_DIR, saving, argv[2], saving ? argv[3] : "", [](const char *path, const std::string &text) {
             return mark_policy_dirty() ? write_file_durable_atomic(path, text) : AtomicWriteResult{};
-        });
+        }); };
+        return saving ? writer(command) : command();
     }
 
     if (arg == "--merge-snapshot") {
@@ -1563,7 +1579,7 @@ int main(int argc, char **argv) {
         return merge_rule_snapshot(argv[2], argv[3]);
     }
 
-    if (arg == "--install")        return cmd_install();
+    if (arg == "--install")        return writer(cmd_install);
     if (arg == "--module-update-check") {
         if (argc != 3 || (strcmp(argv[2],"stable") != 0 && strcmp(argv[2],"preview") != 0)) { usage(); return 1; }
         return module_update::release_info(strcmp(argv[2],"preview") == 0);
@@ -1579,25 +1595,26 @@ int main(int argc, char **argv) {
             !module_update::upgrade_allowed(argv[2], MODULE_VERSION, MODULE_RELEASE_CHANNEL, argc == 4 ? argv[3] : "stable")) {
             fprintf(stderr,"模块更新需要 root 权限及更新版本，或同版本的预览版升级正式版\n"); return 1;
         }
-        return cmd_update_start("",argv[2],arg == "--module-update-install",argc == 4 && strcmp(argv[3],"preview") == 0);
+        return writer([&] { return cmd_update_start("",argv[2],arg == "--module-update-install",argc == 4 && strcmp(argv[3],"preview") == 0); });
     }
     if (arg == "--start" || arg == "--start-boot") {
         if (argc != 2) { usage(); return 1; }
-        return cmd_start(arg == "--start-boot");
+        if (!am_root()) return cmd_start(arg == "--start-boot"); // su re-enters the root writer gate.
+        return writer([&] { return cmd_start(arg == "--start-boot"); });
     }
-    if (arg == "--stop")           return cmd_stop();
+    if (arg == "--stop")           return writer(cmd_stop);
     if (arg == "--prepare-reboot") {
         if (argc != 2) { usage(); return 1; }
-        return cmd_prepare_reboot();
+        return writer(cmd_prepare_reboot);
     }
     if (arg == "--daemon") {
-        if (argc == 3 && strcmp(argv[2], "--foreground") == 0) return cmd_start(false, true);
+        if (argc == 3 && strcmp(argv[2], "--foreground") == 0) return writer([&] { return cmd_start(false, true); });
         if (argc != 2) { usage(); return 1; }
-        return cmd_daemon();
+        return writer(cmd_daemon);
     }
     if (arg == "--reload") {
-        if (argc == 2) return cmd_reload();
-        if (argc == 4 && strcmp(argv[2], "custom") == 0 && apply_state::valid_revision(argv[3])) return cmd_reload(argv[2], argv[3]);
+        if (argc == 2) return writer([&] { return cmd_reload(); });
+        if (argc == 4 && strcmp(argv[2], "custom") == 0 && apply_state::valid_revision(argv[3])) return writer([&] { return cmd_reload(argv[2], argv[3]); });
         usage(); return 1;
     }
     if (arg == "--apply-status") {
@@ -1605,8 +1622,8 @@ int main(int argc, char **argv) {
         if (argc == 3 && apply_state::valid_revision(argv[2])) return cmd_apply_status(argv[2]);
         usage(); return 1;
     }
-    if (arg == "--update")         return cmd_update();
-    if (arg == "--update-start")   return cmd_update_start();
+    if (arg == "--update")         return writer([&] { return cmd_update(); });
+    if (arg == "--update-start")   return writer([&] { return cmd_update_start(); });
     if (arg == "--jobs-list") { if (argc != 2) { usage(); return 1; } return cmd_jobs_list(); }
     if (arg == "--update-log") {
         if (argc != 3 && argc != 4) { usage(); return 1; }
@@ -1621,10 +1638,10 @@ int main(int argc, char **argv) {
         return cmd_source_preview(argv[2], static_cast<size_t>(characters));
     }
     if (arg == "--sources-list")   return cmd_sources(false);
-    if (arg == "--sources-save")   return cmd_sources(true);
+    if (arg == "--sources-save")   return writer([&] { return cmd_sources(true); });
     if (arg == "--source-test") {
         if (argc != 3 || !argv[2][0]) { usage(); return 1; }
-        return cmd_update_start(argv[2]);
+        return writer([&] { return cmd_update_start(argv[2]); });
     }
     if (arg == "--update-status") {
         if (argc < 3) {
@@ -1643,7 +1660,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "参数错误\n用法: AD_Killer_By_NFQUEUE --mode 1|2\n");
             return 1;
         }
-        return cmd_mode(mode);
+        return writer([&] { return cmd_mode(mode); });
     }
     if (arg == "--scope") {
         if (argc < 3) { usage(); return 1; }
@@ -1652,7 +1669,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "参数错误\n用法: AD_Killer_By_NFQUEUE --scope 0|1\n");
             return 1;
         }
-        return cmd_scope(scope);
+        return writer([&] { return cmd_scope(scope); });
     }
     if (arg == "--dev" || arg == "--quic" || arg == "--autostart") {
         if (argc < 3) { usage(); return 1; }
@@ -1665,12 +1682,12 @@ int main(int argc, char **argv) {
             return 1;
         }
         bool on = valid_on;
-        return cmd_toggle(arg == "--autostart" ? "autostart" :
-                          arg == "--dev" ? "dev_mode" : "block_quic", on);
+        return writer([&] { return cmd_toggle(arg == "--autostart" ? "autostart" :
+                          arg == "--dev" ? "dev_mode" : "block_quic", on); });
     }
     if (arg == "--apps-apply") {
-        if (argc == 2) return cmd_apps_apply();
-        if (argc == 4 && (strcmp(argv[2], "allow") == 0 || strcmp(argv[2], "intercept") == 0) && apply_state::valid_revision(argv[3])) return cmd_apps_apply(argv[2], argv[3]);
+        if (argc == 2) return writer([&] { return cmd_apps_apply(); });
+        if (argc == 4 && (strcmp(argv[2], "allow") == 0 || strcmp(argv[2], "intercept") == 0) && apply_state::valid_revision(argv[3])) return writer([&] { return cmd_apps_apply(argv[2], argv[3]); });
         usage(); return 1;
     }
     usage();

@@ -161,13 +161,14 @@ def main():
             release = Path(str(mode) + '.release')
             engine.wait_for(entered.exists, 'real mutation command holds route lease')
             daemon.kill(); daemon.communicate(timeout=5); daemon = None
-            with (DATA / '.route.lock').open('a') as descriptor:
-                try:
-                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    pass
-                else:
-                    raise AssertionError('crashed daemon dropped its live command ownership lease')
+            for path in (DATA / '.route.lock', DATA.parent / '.AD_Killer_By_NFQUEUE.operations.lock'):
+                with path.open('r+') as descriptor:
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        pass
+                    else:
+                        raise AssertionError(f'crashed daemon dropped its live command lease: {path.name}')
             failed = command('--stop')
             assert failed.returncode != 0 and value(failed)['cleanup']['routes'] == 'unknown'
             assert command('--start').returncode == 0

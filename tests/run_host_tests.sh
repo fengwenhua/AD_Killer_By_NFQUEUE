@@ -208,6 +208,10 @@ ${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" "$ROOT/tests/test_process_runner.cpp" \
     "$ROOT/src/process_runner.cpp" -o "$BUILD_DIR/test_process_runner"
 "$BUILD_DIR/test_process_runner" "$BUILD_DIR/process_fixture"
 
+${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" "$ROOT/tests/test_operation_gate.cpp" \
+    "$ROOT/src/process_runner.cpp" -o "$BUILD_DIR/test_operation_gate"
+"$BUILD_DIR/test_operation_gate" "$BUILD_DIR/process_fixture"
+
 ${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" \
     "$ROOT/tests/test_lifecycle.cpp" "$ROOT/src/lifecycle.cpp" \
     "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" -lz -o "$BUILD_DIR/test_lifecycle"

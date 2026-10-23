@@ -1,4 +1,5 @@
 #include "process_runner.h"
+#include "operation_gate.h"
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -21,7 +22,7 @@ ProcessResult run_process(const std::vector<std::string> &arguments, unsigned ti
         }
         bytes += arg.size();
     }
-    int channels[6] = {-1, -1, -1, -1, -1, -1};
+    int channels[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
     const auto close_channels = [&] { for (int &fd : channels) if (fd >= 0) { close(fd); fd = -1; } };
     for (int i = 0; i < 4; i += 2) {
         if (pipe(channels + i) != 0) { result.error = strerror(errno); close_channels(); return result; }
@@ -36,10 +37,12 @@ ProcessResult run_process(const std::vector<std::string> &arguments, unsigned ti
             }
         }
     }
-    if (inherited_lock >= 0) {
-        channels[4] = fcntl(inherited_lock, F_DUPFD_CLOEXEC, 3);
-        if (channels[4] >= 0) channels[5] = fcntl(inherited_lock, F_DUPFD_CLOEXEC, 3);
-        if (channels[4] < 0 || channels[5] < 0) {
+    const int leases[] = {inherited_lock, operation_lease_fd};
+    for (int slot = 0; slot < 2; ++slot) if (leases[slot] >= 0) {
+        const int at = 4 + slot * 2;
+        channels[at] = fcntl(leases[slot], F_DUPFD_CLOEXEC, 3);
+        if (channels[at] >= 0) channels[at + 1] = fcntl(leases[slot], F_DUPFD_CLOEXEC, 3);
+        if (channels[at] < 0 || channels[at + 1] < 0) {
             result.error = "cannot lease command ownership lock"; close_channels(); return result;
         }
     }
@@ -58,8 +61,8 @@ ProcessResult run_process(const std::vector<std::string> &arguments, unsigned ti
     action(posix_spawn_file_actions_adddup2(&actions, channels[3], STDERR_FILENO));
     // A distinct dup2 target clears CLOEXEC. The child retains this flock lease
     // across exec even if its daemon is SIGKILLed before it can cancel/reap it.
-    if (channels[4] >= 0) action(posix_spawn_file_actions_adddup2(&actions, channels[4], channels[5]));
-    for (int i = 0; i < 5; ++i) if (channels[i] >= 0) action(posix_spawn_file_actions_addclose(&actions, channels[i]));
+    for (int at : {4, 6}) if (channels[at] >= 0) action(posix_spawn_file_actions_adddup2(&actions, channels[at], channels[at + 1]));
+    for (int i : {0, 1, 2, 3, 4, 6}) if (channels[i] >= 0) action(posix_spawn_file_actions_addclose(&actions, channels[i]));
     action(posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP));
     action(posix_spawnattr_setpgroup(&attributes, 0));
     pid_t child = -1;
@@ -68,7 +71,7 @@ ProcessResult run_process(const std::vector<std::string> &arguments, unsigned ti
     if (code) { result.error = strerror(code); close_channels(); return result; }
     close(channels[1]); channels[1] = -1;
     close(channels[3]); channels[3] = -1;
-    for (int i : {4, 5}) if (channels[i] >= 0) { close(channels[i]); channels[i] = -1; }
+    for (int i : {4, 5, 6, 7}) if (channels[i] >= 0) { close(channels[i]); channels[i] = -1; }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
     bool ended = false, owned = true;
     while (true) {
