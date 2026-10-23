@@ -56,6 +56,7 @@ test('update badge survives app restart, channel/version changes invalidate it, 
   let release=fixture(), ready='', checkFails=false;
   const api={command:async command=>{
     commands.push(command);
+    if(command==='--jobs-list') return ok({status:'ok',jobs:[]});
     if(command==='--module-update-status') return ok({version:ready,channel:'stable',rebootRequired:false});
     if(command.startsWith('--module-update-check')) return checkFails ? {code:1,stdout:'',stderr:''} : ok(release);
     if(command.startsWith('--module-update-download')) {ready='1.2.3';return ok({status:'started',job_id:'123-456'});}
@@ -67,8 +68,8 @@ test('update badge survives app restart, channel/version changes invalidate it, 
   scope=effectScope(); model=scope.run(()=>useModuleUpdate(api,info(),{log(){}},storage,1));
   try {
     await model.initialize(); assert.equal(model.available.value,true); assert.equal(model.checkCached.value,true);
-    assert.deepEqual(commands,['--module-update-status']);
-    await model.download(); assert.deepEqual(commands.slice(1,3),['--module-update-check stable','--module-update-download 1.2.3']);
+    assert.deepEqual(commands,['--module-update-status','--jobs-list']);
+    await model.download(); assert.deepEqual(commands.slice(2,5),['--module-update-check stable','--jobs-list','--module-update-download 1.2.3']);
     model.setPreview(true); assert.equal(model.available.value,false);
     model.setPreview(false); assert.equal(model.available.value,true);
     checkFails=true; await model.download(); assert.equal(model.available.value,false);

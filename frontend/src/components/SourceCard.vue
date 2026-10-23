@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { sourceHistory } from '../domain/rules.js';
 import ActionButton from './ActionButton.vue';
-const props = defineProps({ source: Object, index: Number, count: Number, eager: Boolean, history: Array, saving: Boolean, testing: Boolean, testingId: Number, testLogId: Number, testLog: String });
+const props = defineProps({ source: Object, index: Number, count: Number, eager: Boolean, history: Array, saving: Boolean, testing: Boolean, testingId: [Number, String], testLogId: [Number, String], testLog: String });
 defineEmits(['toggle', 'edit', 'test', 'delete', 'preview']);
 const record = computed(() => sourceHistory(props.source, props.history));
 const busy = computed(() => props.saving || props.testingId === props.source.id);

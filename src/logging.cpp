@@ -70,7 +70,7 @@ void log_line(const char *tag, const char *fmt, ...) {
     std::lock_guard<std::mutex> lock(log_mutex);
     if (!process_log_path.empty()) {
         append_bounded_log(process_log_path, std::string(line, bytes),
-                           process_log_max_bytes, process_log_backups);
+                           process_log_max_bytes, process_log_backups, process_log_backups == 0);
     } else {
         fwrite(line, 1, bytes, stdout);
         fflush(stdout);

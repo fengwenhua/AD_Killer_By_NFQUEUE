@@ -90,7 +90,8 @@ async function show(id) {
         <p v-if="updates.checkedAt" class="sync-note update-cache-note">{{ updates.checkCached ? '缓存结果 · ' : '上次检查 · ' }}{{ cacheTime(updates.checkedAt) }}{{ updates.checkCached ? '，下载前会重新核验' : '' }}</p>
         <div class="update-actions">
           <ActionButton id="getUpdate" icon="sync" variant="primary" :busy="updates.checking" :disabled="updates.busy" @click="updates.check">{{ updates.checking ? '检查中…' : '检查更新' }}</ActionButton>
-          <ActionButton v-if="updates.available && !updates.reboot" id="downloadModuleUpdate" icon="download" :busy="updates.busy && !updates.canInstall" :disabled="updates.busy || updates.checking" @click="updates.download">下载并校验</ActionButton>
+          <ActionButton v-if="updates.observerPaused" id="resumeModuleJob" icon="sync" :busy="updates.busy" :disabled="updates.checking" @click="updates.resume">继续查询后台任务</ActionButton>
+          <ActionButton v-if="updates.available && !updates.reboot && !updates.observerPaused" id="downloadModuleUpdate" icon="download" :busy="updates.busy && !updates.canInstall" :disabled="updates.busy || updates.checking" @click="updates.download">下载并校验</ActionButton>
           <ActionButton v-if="updates.canInstall && !updates.confirming" id="installModuleUpdate" icon="download" :busy="updates.busy" :disabled="updates.busy || updates.checking" @click="updates.confirming = true">安装 v{{ updates.ready }}</ActionButton>
         </div>
         <div v-if="updates.confirming" class="update-confirm" role="group" aria-label="确认安装模块">

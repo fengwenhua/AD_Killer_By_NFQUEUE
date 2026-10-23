@@ -1,5 +1,5 @@
 export const HAGEZI_ID = 'builtin:hagezi-pro-minus-fake';
-export const validJob = id => /^[0-9]+-[0-9]+$/.test(id || '');
+export const validJob = id => typeof id === 'string' && id.length <= 96 && /^[0-9]+-[0-9]+$/.test(id);
 export const isPackage = value => /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$/.test(value);
 export const lines = text => String(text || '').split(/\r?\n/).map(s => s.trim()).filter(s => s && !s.startsWith('#') && !s.startsWith('!'));
 export const keyValues = text => Object.fromEntries(String(text || '').trim().split(/\r?\n/)
@@ -13,7 +13,8 @@ export function lastJson(text) {
 }
 
 // --update-status deliberately returns exit 1 for a missing/corrupt job record.
-// Those are authoritative terminal errors, not a transient bridge outage.
+// Keep structured lookup errors separate from a bridge outage. A corrupt or
+// missing record alone does not prove the worker stopped; observers recover.
 export function jobObservation(result) {
   const state = lastJson(result.stdout);
   if (['not_found', 'invalid_state', 'invalid_job'].includes(state?.status)) return state;

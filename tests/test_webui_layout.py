@@ -23,6 +23,10 @@ def luminance(color):
 
 MOCK = r'''
 window.previewCommands = [];
+window.previewJobs = [];
+window.previewJobQueryFails = false;
+window.previewJobDiscoveryFails = false;
+window.previewJobOverrides = {};
 window.previewUpdateFails = false;
 window.previewPartial = false;
 window.previewSaveFails = false;
@@ -73,6 +77,9 @@ window.ksu = {
     previewCommands.push(command);
     let text = "", errno = 0;
     if(command.includes(" --version-status")) text = JSON.stringify(previewVersion);
+    else if(command.includes(" --jobs-list")) {
+      errno=previewJobDiscoveryFails?1:0;text=JSON.stringify(errno?{status:'unverified'}:{status:'ok',jobs:previewJobs});
+    }
     else if(command.includes(" --config-read ")) {
       const target=command.split(' ').pop();
       text=JSON.stringify({status:'ok',target,revision:'a'.repeat(64),content:target==='custom'?'ads.example.com\n@@safe.example.org\n':''});
@@ -138,8 +145,18 @@ window.ksu = {
     }
     else if(command.includes(" --source-test")) text = '{"status":"started","job_id":"777-888"}';
     else if(command.includes(" --update-start")) text = '{"status":"started","job_id":"123-456"}';
-    else if(command.includes(" --update-status")) text = (command.includes("777-888")?previewTestFails:previewUpdateFails) ?
-      '{"status":"failed","exit_code":1}' : '{"status":"success","exit_code":0}';
+    else if(command.includes(" --update-status")) {
+      const id=command.match(/--update-status ([0-9-]+)/)[1], failed=id==='777-888'?previewTestFails:previewUpdateFails;
+      errno=previewJobQueryFails?1:0;
+      text=JSON.stringify(errno?{status:'unverified',job_id:id}:previewJobOverrides[id]||{status:failed?'failed':'success',exit_code:failed?1:0,job_id:id,
+        type:id==='777-888'?'source':id==='987-654'?'download':id==='987-655'?'install':'rules'});
+    }
+    else if(command.includes(" --update-log")) {
+      const match=command.match(/--update-log '([0-9-]+)'(?: '([^']*)')?/), id=match[1], cursor=match[2]||'';
+      const body=id==='777-888'?'来源接受:Hosts 0 / AdGuard 12 / 拒绝 2\n来源测试通过；仅测试下载和解析，未替换规则或启动引擎':id==='123-456'?(previewUpdateFails?'[12:00:00] [更新] staging 规则无法被引擎加载,保留旧规则\n':'[12:00:00] [更新] 规则 generation 999-111 已原子发布\n'):'模块下载/安装已结束';
+      const encoded=btoa(unescape(encodeURIComponent(body))), end='preview-'+id+':'+new TextEncoder().encode(body).length;
+      text=JSON.stringify({status:'ok',data_base64:cursor===end?'':encoded,cursor:end,reset:!cursor||cursor==='tail',reset_reason:cursor==='tail'?'tail':'begin',more:false,omitted_bytes:0});
+    }
     else if(command.includes("base64 ")) {
       if(command.includes("rule_stats.conf")) text=previewRulesEmpty?'':btoa("black=185695\nwhite=1062\n");
       else if(command.includes("source_stats.conf")) text=btoa("updated_at=1792410474\njob_id=123-456\npublish_status=published\ngeneration=999-111\nsource_count=2\naccepted_sources="+(previewPartial?1:2)+"\nunique_total=209084\nunique_white=119\nduplicate_lines=73170\n\n[source_0]\nurl=https://anti-ad.net/easylist.txt\nstatus="+(previewPartial?"download_error\nreason=network_timeout":"accepted")+"\nchecked_at=1792410460\naccepted_adguard=96641\nrejected_unsupported=97\n\n[source_1]\nurl=https://example.org/b\nstatus=accepted\naccepted_adguard=185613\nrejected_unsupported=798\n");
@@ -217,6 +234,60 @@ def apply_health_regression(browser, errors):
         expect(page.locator('#startBtn')).to_be_disabled()
         expect(page.locator('#verifyHealthBtn')).to_be_visible()
         page.close()
+
+
+def background_job_recovery_regression(browser, errors):
+    for theme in ('light', 'dark'):
+        page = browser.new_page(viewport={'width': 320, 'height': 852}, color_scheme=theme, reduced_motion='reduce')
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.add_init_script(mock_script() + r'''
+Object.defineProperty(window,'localStorage',{get(){throw new Error('storage denied')}});
+previewModuleReady='9.0';
+previewJobs=[{job_id:'777-888',type:'source',status:'running',target:'https://unsaved.example.org/'+('long'.repeat(80))+'?x=<img/src=x/onerror=alert(1)>'},
+ {job_id:'987-654',type:'download',status:'running',target:'9.0',channel:'stable'}];
+''')
+        page.goto((ROOT / 'module/webroot/index.html').as_uri())
+        page.locator('nav [data-page="rules"]').click()
+        page.locator('#sourcesDetails > summary').click()
+        expect(page.locator('.source-history').filter(has_text='恢复的来源测试：')).to_have_count(1)
+        expect(page.locator('[aria-label="恢复的来源测试日志"]')).to_contain_text('来源测试通过')
+        assert page.locator('#sourceList .source-item').count() == 3, 'recovery added an unsaved test URL to configured sources'
+        assert page.locator('#rules img').count() == 0
+        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
+        page.locator('nav [data-page="settings"]').click()
+        page.locator('[data-settings-entry="updates"]').click()
+        expect(page.locator('#moduleUpdateStatus')).to_contain_text('下载完成')
+        assert not page.evaluate("previewCommands.some(c=>/ --(?:update-start|source-test|module-update-download|module-update-install)\b/.test(c))")
+        assert page.evaluate("previewCommands.some(c=>c.includes(' --update-log '))")
+        page.close()
+
+    page = browser.new_page(viewport={'width': 320, 'height': 852}, reduced_motion='reduce')
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.add_init_script(mock_script() + '\npreviewJobDiscoveryFails=true;previewModuleReady="9.0";')
+    page.goto((ROOT / 'module/webroot/index.html').as_uri())
+    expect(page.locator('#syncLabel')).to_have_text('继续查询同步')
+    page.locator('#syncBtn').click()
+    expect(page.locator('#syncBtn')).to_have_attribute('aria-busy', 'false')
+    assert not page.evaluate("previewCommands.some(c=>c.endsWith(' --update-start'))")
+    page.locator('nav [data-page="rules"]').click()
+    page.locator('#sourcesDetails > summary').click()
+    expect(page.locator('#resumeSourceTest')).to_be_visible()
+    page.locator('#resumeSourceTest').click()
+    page.locator('nav [data-page="settings"]').click()
+    page.locator('[data-settings-entry="updates"]').click()
+    expect(page.locator('#resumeModuleJob')).to_be_visible()
+    assert page.locator('#installModuleUpdate').count() == 0
+    page.locator('#resumeModuleJob').click()
+    assert not page.evaluate("previewCommands.some(c=>/ --(?:source-test|module-update-download|module-update-install)\b/.test(c))")
+    page.evaluate('previewJobDiscoveryFails=false')
+    page.locator('nav [data-page="home"]').click()
+    page.locator('#syncBtn').click()
+    expect(page.locator('#syncLabel')).to_have_text('同步开源规则')
+    assert not page.evaluate("previewCommands.some(c=>c.endsWith(' --update-start'))"), 'read-only recovery silently created a task'
+    page.locator('#syncBtn').click()
+    expect(page.locator('#updateStatus')).to_have_attribute('data-kind', 'success')
+    assert page.evaluate("previewCommands.filter(c=>c.endsWith(' --update-start')).length") == 1
+    page.close()
 
 
 def freezer_health_regression(browser, errors):
@@ -1251,6 +1322,7 @@ def main():
             freezer_health_regression(browser, errors)
             cleanup_health_regression(browser, errors)
             apply_health_regression(browser, errors)
+            background_job_recovery_regression(browser, errors)
             quic_setting_regression(browser, errors)
             preview_regression(browser, errors, args.screenshots)
             source_editor_dialog_regression(browser, errors, args.screenshots)

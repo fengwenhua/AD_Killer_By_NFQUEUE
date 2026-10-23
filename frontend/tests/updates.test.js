@@ -35,6 +35,7 @@ test('same-version stable download, explicit install and reboot resume retain ch
   let ready='', reboot=false;
   const api={command:async command=>{
     commands.push(command);
+    if(command==='--jobs-list') return ok({status:'ok',jobs:[]});
     if(command.startsWith('--module-update-check')) return ok(fixture('1.2.2'));
     if(command==='--module-update-status') return ok({version:ready,channel:'stable',rebootRequired:reboot});
     if(command.startsWith('--module-update-download')) {ready='1.2.2';return ok({status:'started',job_id:'123-456'});}
@@ -63,6 +64,7 @@ test('preview download preserves selected channel and unknown cached channel can
   let ready='', channel='preview';
   const api={command:async command=>{
     commands.push(command);
+    if(command==='--jobs-list') return ok({status:'ok',jobs:[]});
     if(command.startsWith('--module-update-check')) return ok(fixture('1.2.2',true));
     if(command==='--module-update-status') return ok({version:ready,channel,rebootRequired:false});
     if(command.startsWith('--module-update-download')) {ready='1.2.2';return ok({status:'started',job_id:'123-456'});}
@@ -100,6 +102,7 @@ test('manual check, verified download, explicit install, status and background r
   let ready = '', reboot = false, install = false;
   const api = { command: async command => {
     commands.push(command);
+    if(command==='--jobs-list') return ok({status:'ok',jobs:[]});
     if (command.startsWith('--module-update-check')) return ok(fixture());
     if (command === '--module-update-status') return ok({version:ready,rebootRequired:reboot});
     if (command.startsWith('--module-update-download')) { ready='1.2'; return ok({status:'started',job_id:'123-456'}); }
@@ -140,7 +143,7 @@ test('late responses are discarded after disposal and failed jobs never enable i
   const pending=model.check(); await Promise.resolve(); scope.stop(); resolve(ok(fixture())); await pending;
   assert.equal(model.release.value,null);
   const other=effectScope();
-  const failed=other.run(()=>useModuleUpdate({command:async cmd=>cmd.startsWith('--module-update-check')?ok(fixture()):cmd.startsWith('--module-update-download')?ok({status:'started',job_id:'1-2'}):ok({status:'failed',exit_code:1}),readJob:async()=> 'SHA mismatch'},info(),{log(){}},null,1));
+  const failed=other.run(()=>useModuleUpdate({command:async cmd=>cmd==='--jobs-list'?ok({status:'ok',jobs:[]}):cmd.startsWith('--module-update-check')?ok(fixture()):cmd.startsWith('--module-update-download')?ok({status:'started',job_id:'1-2'}):ok({status:'failed',exit_code:1}),readJob:async()=> 'SHA mismatch'},info(),{log(){}},null,1));
   try { await failed.check(); await failed.download(); assert.equal(failed.canInstall.value,false); assert.equal(failed.kind.value,'error'); }
   finally { other.stop(); }
 });
@@ -148,9 +151,13 @@ test('late responses are discarded after disposal and failed jobs never enable i
 test('missing persisted job is cleared and recovered package remains explicitly installable', async () => {
   const scope=effectScope(), values=new Map([['ad-killer-by-nfqueue-module-update',JSON.stringify({id:'1-2',version:'1.2',install:false})]]);
   const storage={getItem:k=>values.get(k),removeItem:k=>values.delete(k)};
-  const api={command:async cmd=>cmd==='--module-update-status'?ok({version:'1.2',rebootRequired:false}):{code:1,stdout:'{"status":"not_found"}',stderr:''}};
+  const api={command:async cmd=>cmd==='--jobs-list'?ok({status:'ok',jobs:[]}):cmd==='--module-update-status'?ok({version:'1.2',rebootRequired:false}):{code:1,stdout:'{"status":"not_found"}',stderr:''}};
   const model=scope.run(()=>useModuleUpdate(api,info(),{log(){}},storage,1));
-  try { await model.resume(); assert.equal(values.size,0); assert.equal(model.busy.value,false); assert.match(model.message.value,/记录已不存在/); }
+  try {
+    await model.resume(); assert.equal(values.size,0); assert.equal(model.busy.value,false); assert.match(model.message.value,/记录已不存在/);
+    assert.equal(model.observerPaused.value,true); assert.equal(model.canInstall.value,false);
+    await model.resume(); assert.equal(model.observerPaused.value,false); assert.equal(model.canInstall.value,true);
+  }
   finally { scope.stop(); }
 });
 
@@ -167,11 +174,11 @@ test('release notes use only the latest published entry, no local history or ass
 test('automatic checks are opt-in, persisted, run once on open, and never download/install', async () => {
   const values=new Map(), commands=[];
   const storage={getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v),removeItem:k=>values.delete(k)};
-  const api={command:async cmd=>{commands.push(cmd); return cmd==='--module-update-status'?ok({version:'',rebootRequired:false}):ok(fixture());}};
+  const api={command:async cmd=>{commands.push(cmd); return cmd==='--jobs-list'?ok({status:'ok',jobs:[]}):cmd==='--module-update-status'?ok({version:'',rebootRequired:false}):ok(fixture());}};
   const scope=effectScope(), model=scope.run(()=>useModuleUpdate(api,info(),{log(){}},storage));
   try {
     await model.initialize(); await model.initialize();
-    assert.deepEqual(commands,['--module-update-status']);
+    assert.deepEqual(commands,['--module-update-status','--jobs-list']);
     model.setAutoCheck(true); await Promise.resolve();
     assert.equal(model.autoCheck.value,true);
     assert.equal(commands.filter(c=>c.startsWith('--module-update-check')).length,1);

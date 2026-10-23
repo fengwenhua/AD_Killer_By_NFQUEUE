@@ -53,7 +53,7 @@ export function createApi(host = globalThis.window) {
   return {
     command, readFile, writeFile,
     saveSources: text => bridge.run(`printf '%s' '${encodeText(text)}' | base64 -d | ${BIN} --sources-save`),
-    readJob: id => readFile(`${PATHS.jobs}/update-${id}.log`),
+    readJobChunk: (id, cursor = '') => command(`--update-log ${shellQuote(id)}${cursor ? ' ' + shellQuote(cursor) : ''}`),
     readDns: () => bridge.run(`tail -n 200 ${shellQuote(PATHS.dns)} 2>/dev/null`),
     packageManager: bridge.packageManager,
   };

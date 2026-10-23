@@ -30,6 +30,16 @@ UpdateJobLife update_job_life(const UpdateJobState &state, const std::string &id
 UpdateJobObservation observe_update_job(const std::string &directory, const std::string &id,
     const std::string &proc = "/proc");
 
+struct UpdateJobLogPage {
+    std::string status = "error", data_base64, cursor, reset_reason;
+    bool reset = false, more = false;
+    uint64_t omitted_bytes = 0;
+};
+// Byte pages are base64 so split UTF-8 or hostile installer bytes cannot break
+// JSON. The frontend uses a streaming TextDecoder. No full-log bridge copies.
+UpdateJobLogPage read_update_job_log(const std::string &directory, const std::string &id,
+    const std::string &cursor = "", size_t limit = 16384);
+
 bool valid_update_job_id(const std::string &job_id);
 bool parse_update_job_state(const std::string &text, UpdateJobState &state);
 std::string running_update_job_state(int pid);

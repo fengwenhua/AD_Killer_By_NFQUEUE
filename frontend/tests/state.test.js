@@ -20,7 +20,7 @@ test('source CRUD, immutable builtin, stable toggle/test order, failed and succe
   let saveFails = true, submitted;
   const fixture = [{ url: 'https://off.org', enabled: false }, { url: 'https://on.org', enabled: true }, { url: HAGEZI_ID, enabled: false }];
   const api = {
-    command: async args => { commands.push(args); return args === '--sources-list' ? ok({ status: 'ok', sources: fixture }) : args.startsWith('--source-test') ? ok({ status: 'started', job_id: '123-456' }) : ok({ status: 'success', exit_code: 0 }); },
+    command: async args => { commands.push(args); return args === '--jobs-list' ? ok({ status: 'ok', jobs: [] }) : args === '--sources-list' ? ok({ status: 'ok', sources: fixture }) : args.startsWith('--source-test') ? ok({ status: 'started', job_id: '123-456' }) : ok({ status: 'success', exit_code: 0 }); },
     readFile: async () => '', readJob: async () => 'test only',
     saveSources: async text => { submitted = text; return saveFails ? { code: 2, stdout: '', stderr: 'busy' } : ok({ status: 'ok' }); },
   };
@@ -150,7 +150,7 @@ test('unique update task publication, partial sources, resume, logs and observer
   const scope = effectScope(), history = ref([]), storage = memory(), commands = [];
   let refreshed = 0;
   const api = {
-    command: async args => { commands.push(args); return args === '--update-start' ? ok({ status: 'started', job_id: '123-456' }) : ok({ status: 'success', exit_code: 0 }); },
+    command: async args => { commands.push(args); return args === '--jobs-list' ? ok({ status: 'ok', jobs: [] }) : args === '--update-start' ? ok({ status: 'started', job_id: '123-456' }) : ok({ status: 'success', exit_code: 0 }); },
     readJob: async () => 'generation 999-111 已原子发布',
     readFile: async () => 'job_id=123-456\npublish_status=published\ngeneration=999-111\nsource_count=2\naccepted_sources=1\n\n[source_0]\nurl=https://a.org\nstatus=accepted\n',
   };
@@ -172,7 +172,7 @@ test('diagnostic buffer is bounded and feedback treats hostile text as text', ()
 
 test('interrupted publishing is unknown, never a promise that the old pointer survived', async () => {
   const scope = effectScope();
-  const api = { command: async command => command === '--update-start'
+  const api = { command: async command => command === '--jobs-list' ? ok({ status: 'ok', jobs: [] }) : command === '--update-start'
     ? ok({ status: 'started', job_id: '123-456' }) : ok({ status: 'interrupted', exit_code: 255 }),
   readFile: async () => '', readJob: async () => 'generation 已原子发布' };
   const sync = scope.run(() => useSync(api, feedback(), ref([]), async () => {}, memory()));
@@ -188,7 +188,7 @@ test('WebView denied localStorage getter does not prevent source loading or sync
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage'), scope = effectScope();
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new Error('SecurityError'); } });
   const api = {
-    command: async args => args === '--sources-list' ? ok({ status: 'ok', sources: [] }) : args === '--update-start' ? ok({ status: 'started', job_id: '123-456' }) : ok({ status: 'success', exit_code: 0 }),
+    command: async args => args === '--jobs-list' ? ok({ status: 'ok', jobs: [] }) : args === '--sources-list' ? ok({ status: 'ok', sources: [] }) : args === '--update-start' ? ok({ status: 'started', job_id: '123-456' }) : ok({ status: 'success', exit_code: 0 }),
     readFile: async () => '', readJob: async () => '',
   };
   try {
@@ -202,12 +202,12 @@ test('WebView denied localStorage getter does not prevent source loading or sync
   }
 });
 
-test('missing persisted jobs finish with recoverable error, not an endless busy spinner', async () => {
+test('missing persisted jobs pause mutation until explicit backend recovery, without an endless spinner', async () => {
   const scope = effectScope(), storage = memory();
   storage.setItem('ad-killer-by-nfqueue-update-job', '123-456');
   storage.setItem('ad-killer-by-nfqueue-source-test', JSON.stringify({ id: '987-654', url: HAGEZI_ID }));
   const api = {
-    command: async args => args === '--sources-list' ? ok({ status: 'ok', sources: [{ url: HAGEZI_ID }] }) : { code: 1, stdout: '{"status":"not_found"}', stderr: '' },
+    command: async args => args === '--jobs-list' ? ok({ status: 'ok', jobs: [] }) : args === '--sources-list' ? ok({ status: 'ok', sources: [{ url: HAGEZI_ID }] }) : { code: 1, stdout: '{"status":"not_found"}', stderr: '' },
     readFile: async () => '', readJob: async () => '',
   };
   const sources = scope.run(() => useSources(api, feedback(), storage));
@@ -215,8 +215,11 @@ test('missing persisted jobs finish with recoverable error, not an endless busy 
   try {
     await sources.load(); await sync.resume();
     for (let i = 0; i < 10; i++) await nextTick();
-    assert.equal(sources.testing.value, false); assert.equal(sources.kind.value, 'error');
+    assert.equal(sources.testPaused.value, true); assert.equal(sources.kind.value, 'warning');
     assert.equal(sync.busy.value, false); assert.match(sync.message.value, /任务记录不存在/);
     assert.equal(storage.getItem('ad-killer-by-nfqueue-update-job'), undefined); assert.equal(storage.getItem('ad-killer-by-nfqueue-source-test'), undefined);
+    assert.equal(sync.uncertain.value, true);
+    await sources.resumeTest(); await sync.resume();
+    assert.equal(sources.testing.value, false); assert.equal(sync.uncertain.value, false);
   } finally { scope.stop(); }
 });

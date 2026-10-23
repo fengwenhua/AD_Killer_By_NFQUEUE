@@ -1119,6 +1119,15 @@ static int cmd_jobs_list() {
     printf("{\"status\":\"ok\",\"jobs\":[%s]}\n", jobs.c_str()); return 0;
 }
 
+static int cmd_update_log(const std::string &id, const std::string &cursor) {
+    const auto page = read_update_job_log(DIR_UPDATE_JOBS, id, cursor);
+    printf("{\"status\":%s,\"data_base64\":%s,\"cursor\":%s,\"reset\":%s,\"reset_reason\":%s,\"more\":%s,\"omitted_bytes\":%llu}\n",
+        source_json_string(page.status).c_str(), source_json_string(page.data_base64).c_str(),
+        source_json_string(page.cursor).c_str(), page.reset ? "true" : "false", source_json_string(page.reset_reason).c_str(),
+        page.more ? "true" : "false", static_cast<unsigned long long>(page.omitted_bytes));
+    return page.status == "ok" || page.status == "not_ready" ? 0 : 1;
+}
+
 // 由后端创建唯一任务并脱离 WebUI exec 会话。状态和日志均按 job_id 隔离。
 static int cmd_update_start(const std::string &test_url = "", const std::string &module_version = "", bool install_module = false, bool module_preview = false) {
     std::string error;
@@ -1512,6 +1521,7 @@ static void usage() {
             "  AD_Killer_By_NFQUEUE --update-start     创建后台更新 job\n"
             "  AD_Killer_By_NFQUEUE --update-status ID 查询更新 job 状态\n"
             "  AD_Killer_By_NFQUEUE --jobs-list        只读发现最近/活动后台任务\n"
+            "  AD_Killer_By_NFQUEUE --update-log ID [CURSOR|tail] 有界增量读取任务日志\n"
             "  AD_Killer_By_NFQUEUE --module-update-check stable|preview 检查模块 Release\n"
             "  AD_Killer_By_NFQUEUE --module-release-notes 读取 GitHub 最新发布日志\n"
             "  AD_Killer_By_NFQUEUE --module-update-download VERSION [stable|preview] 后台下载并校验模块\n"
@@ -1598,6 +1608,10 @@ int main(int argc, char **argv) {
     if (arg == "--update")         return cmd_update();
     if (arg == "--update-start")   return cmd_update_start();
     if (arg == "--jobs-list") { if (argc != 2) { usage(); return 1; } return cmd_jobs_list(); }
+    if (arg == "--update-log") {
+        if (argc != 3 && argc != 4) { usage(); return 1; }
+        return cmd_update_log(argv[2], argc == 4 ? argv[3] : "");
+    }
     if (arg == "--source-preview") {
         int characters = SOURCE_PREVIEW_DEFAULT;
         if ((argc != 3 && argc != 4) || (argc == 4 && (!parse_integer_arg(argv[3], characters) ||

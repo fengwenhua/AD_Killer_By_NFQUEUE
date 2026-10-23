@@ -5,6 +5,7 @@ import { useLifetime } from './useLifetime.js';
 import { getStorage } from '../services/storage.js';
 import { afterPaint } from '../services/paint.js';
 import { NOTES_CACHE_KEY, CHECK_CACHE_KEY, NOTES_CACHE_TTL, CHECK_CACHE_TTL, readCache, writeCache, dropCache } from '../services/updateCache.js';
+import { discoverJobs, observeJob } from '../domain/jobs.js';
 
 const KEY = 'ad-killer-by-nfqueue-module-update';
 const AUTO_KEY = 'ad-killer-by-nfqueue-auto-update-check';
@@ -14,6 +15,8 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
   const save = (key, value) => { try { storage?.setItem(key, String(value)); } catch { /* session-only preference */ } };
   const life = useLifetime(), preview = ref(saved(PREVIEW_KEY)), autoCheck = ref(saved(AUTO_KEY));
   const checking = ref(false), busy = ref(false);
+  const observerPaused = ref(false);
+  let rememberedTask;
   const notesLoading = ref(false), latestRelease = ref(null), notesError = ref('');
   const notesUpdatedAt = ref(0), notesCached = ref(false), checkedAt = ref(0), checkCached = ref(false);
   const release = ref(null), ready = ref(''), readyChannel = ref('unknown'), reboot = ref(false), confirming = ref(false);
@@ -24,7 +27,7 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
   const checkKey = channel => `${CHECK_CACHE_KEY}-${channel ? 'preview' : 'stable'}`;
   const checkContext = () => [info.version.value, info.versionCode?.value ?? '', installedChannel()].join('|');
   const available = computed(() => supported.value && upgradeAllowed(release.value,info.version.value,installedChannel()));
-  const canInstall = computed(() => supported.value && !!ready.value && versionParts(ready.value) &&
+  const canInstall = computed(() => supported.value && !observerPaused.value && !!ready.value && versionParts(ready.value) &&
     readyChannel.value !== 'unknown' &&
     upgradeAllowed({version:ready.value,preview:readyChannel.value==='preview'},info.version.value,installedChannel()) && !reboot.value);
   const status = (text, type = '') => { message.value = text; kind.value = type; };
@@ -44,7 +47,7 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
     release.value=cached.value; checkedAt.value=cached.savedAt; checkCached.value=true;
     describeRelease(true);
   }
-  const remember = task => { try { task ? storage?.setItem(KEY,JSON.stringify(task)) : storage?.removeItem(KEY); } catch { /* unavailable storage */ } };
+  const remember = task => { rememberedTask = task; try { task ? storage?.setItem(KEY,JSON.stringify(task)) : storage?.removeItem(KEY); } catch { /* unavailable storage */ } };
   const failure = (result, fallback) => {
     const detail = lastJson(result.stdout)?.message;
     return typeof detail === 'string' && detail.trim() ? detail.slice(0, 500) : fallback;
@@ -111,40 +114,32 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
     finally { await finishFeedback(started); checking.value = false; }
   }
   async function observe(task) {
-    let errors = 0;
-    while (life.active) {
-      try {
-        const result = await api.command(`--update-status ${task.id}`);
-        if (!life.active) return;
-        const value = lastJson(result.stdout);
-        if (value?.status === 'not_found') {
-          remember(null);
-          throw Object.assign(new Error('后台任务记录已不存在，请重新下载或查看根管理器中的安装状态。'),{terminal:true});
-        }
-        if (result.code || !value || !['running','success','failed','interrupted'].includes(value.status)) throw new Error('任务状态暂时不可用');
-        errors = 0;
-        if (value.status === 'running') { await life.wait(pollMs); continue; }
-        remember(null);
-        const log = await api.readJob(task.id);
-        if (!life.active) return;
-        if (log) feedback.log(log,value.status === 'success' ? 'ok' : 'error');
-        if (value.status !== 'success' || value.exit_code !== 0) throw Object.assign(new Error('模块更新任务失败或中断，请查看诊断日志后重试。'),{terminal:true});
-        await state();
-        if (task.install ? !reboot.value : ready.value !== task.version) throw Object.assign(new Error('任务结束，但安装包或安装状态未核实，请重新读取状态。'),{terminal:true});
-        if (task.channel && readyChannel.value !== task.channel) throw Object.assign(new Error('下载包渠道与所选发布不一致，请重新下载。'),{terminal:true});
-        status(task.install ? '安装成功，请手动重启设备。重启前继续使用当前版本。' : `v${ready.value} 下载完成，SHA-256 校验通过。`,'success');
-        return;
-      } catch (error) {
-        if (!life.active) return;
-        if (error.terminal || ++errors >= 5) {
-          status(error.message + (errors >= 5 ? ' 任务可能仍在后台运行，重新打开页面可恢复查询。' : ''),'error');
-          return;
-        }
-        await life.wait(pollMs);
-      }
+    rememberedTask = task; observerPaused.value = false;
+    const outcome = await observeJob(api, task.id, life, {
+      interval: pollMs, types: ['download', 'install'],
+      onLog: chunk => { if (chunk.delta) feedback.log(chunk.delta); },
+      onRetry: () => status('后台任务状态未能核实，正在退避重试；不会重新下载或安装。','warning'),
+    });
+    if (!life.active || outcome.kind === 'cancelled') return;
+    if (outcome.kind === 'unknown') {
+      observerPaused.value = true;
+      status('任务结果未确认，已暂停自动查询。任务可能仍在后台运行；点击“继续查询后台任务”，不会重新派发。','warning'); return;
     }
+    if (outcome.kind === 'unavailable') {
+      remember(null); observerPaused.value = true;
+      status('后台任务记录已不存在，下载或安装结果未确认；请继续查询后端任务，或核查根管理器状态。','warning'); return;
+    }
+    remember(null);
+    const value = outcome.state;
+    if (value.status !== 'success' || value.exit_code !== 0) { status('模块更新任务失败或中断，请查看诊断日志及管理器状态后重试。','error'); return; }
+    await state();
+    if (!life.active) return;
+    if (task.install ? !reboot.value : ready.value !== task.version) throw new Error('任务结束，但安装包或安装状态未核实，请重新读取状态。');
+    if (task.channel && readyChannel.value !== task.channel) throw new Error('下载包渠道与所选发布不一致，请重新下载。');
+    status((task.install ? '安装成功，请手动重启设备。重启前继续使用当前版本。' : `v${ready.value} 下载完成，SHA-256 校验通过。`) + (outcome.logError ? ' 日志片段未能完整读取。' : ''),'success');
   }
   async function start(install) {
+    if (observerPaused.value) return resume();
     if (busy.value || checking.value || !supported.value || (install ? !canInstall.value : !available.value)) return;
     if (!install && checkCached.value) {
       await check();
@@ -154,6 +149,14 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
     busy.value = true; confirming.value = false;
     status(install ? '正在安装模块，请等待管理器返回结果…' : '正在后台下载并校验安装包…');
     try {
+      const found = await discoverJobs(api, life, ['download', 'install']);
+      if (!life.active || found.cancelled) return;
+      if (found.unknown) { observerPaused.value = true; status('后台任务未能核实，请继续查询；不会重复下载或安装。','warning'); return; }
+      if (found.job && ['running','unverified','invalid_state','not_found'].includes(found.job.status)) {
+        const task = backendTask(found.job);
+        if (!task) { observerPaused.value = true; status('后台任务目标或渠道未能核实，请查看管理器与诊断日志。','warning'); return; }
+        remember(task); await observe(task); return;
+      }
       const channel = install ? readyChannel.value : release.value.preview ? 'preview' : 'stable';
       const result = await api.command(`--module-update-${install ? 'install' : 'download'} ${version}${channel==='preview' ? ' preview' : ''}`);
       if (!life.active) return;
@@ -161,8 +164,12 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
       if (result.code || value?.status !== 'started' || !validJobId(value.job_id)) throw new Error(result.stderr || '无法创建模块更新任务，请检查当前版本或 root 权限。');
       const task = { id: value.job_id, version, install, channel };
       remember(task); await observe(task);
-    } catch (error) { if (life.active) status(error.message,'error'); }
+    } catch (error) { if (life.active) { observerPaused.value = true; status(error.message + ' 请先继续查询结果，勿重复派发。','warning'); } }
     finally { busy.value = false; }
+  }
+  function backendTask(job) {
+    return validJobId(job.job_id) && versionParts(job.target) && ['stable','preview'].includes(job.channel)
+      ? { id: job.job_id, version: job.target, install: job.type === 'install', channel: job.channel } : null;
   }
   async function resume() {
     if (busy.value || !supported.value) return;
@@ -170,23 +177,35 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
     try {
       await state();
       let task;
-      try { task = JSON.parse(storage?.getItem(KEY) || 'null'); } catch { remember(null); }
+      try { task = rememberedTask || JSON.parse(storage?.getItem(KEY) || 'null'); } catch { remember(null); }
+      const found = await discoverJobs(api, life, ['download', 'install']);
+      if (!life.active || found.cancelled) return;
+      if (found.job && ['running','unverified','invalid_state','not_found'].includes(found.job.status)) {
+        task = backendTask(found.job);
+        if (!task) { observerPaused.value = true; status('后台任务目标或渠道未能核实，请查看诊断日志。','warning'); return; }
+        remember(task);
+      }
       if (task && validJobId(task.id) && versionParts(task.version) && typeof task.install === 'boolean') {
         status('正在恢复后台模块更新任务…'); await observe(task);
-      } else if (reboot.value) status('模块已安装，等待手动重启设备。','success');
-      else if (ready.value && readyChannel.value==='unknown') status('旧下载缓存未记录渠道，请重新检查并下载后再安装。','warning');
-      else if (ready.value) status(`已恢复 v${ready.value}${readyChannel.value==='preview' ? ' 预览版' : ' 正式版'}安装包，SHA-256 校验通过。`,'success');
-    } catch (error) { if (life.active) status(error.message,'error'); }
+      } else if (found.unknown) { observerPaused.value = true; status('后台任务索引未能核实，请继续查询；不会下载或安装。','warning'); }
+      else {
+        observerPaused.value = false;
+        if (reboot.value) status('模块已安装，等待手动重启设备。','success');
+        else if (ready.value && readyChannel.value==='unknown') status('旧下载缓存未记录渠道，请重新检查并下载后再安装。','warning');
+        else if (ready.value) status(`已恢复 v${ready.value}${readyChannel.value==='preview' ? ' 预览版' : ' 正式版'}安装包，SHA-256 校验通过。`,'success');
+      }
+    } catch (error) { if (life.active) { observerPaused.value = true; status(error.message,'error'); } }
     finally { busy.value = false; }
   }
   async function initialize() {
     if (initialized) return;
     initialized = true;
     await resume();
-    if (!reboot.value && kind.value!=='error') restoreCheck();
-    if (life.active && autoCheck.value && !reboot.value && kind.value !== 'error') await check();
+    if (!life.active) return;
+    if (!reboot.value && !observerPaused.value && kind.value!=='error') restoreCheck();
+    if (life.active && !observerPaused.value && autoCheck.value && !reboot.value && kind.value !== 'error') await check();
   }
-  return { preview,autoCheck,checking,busy,release,ready,readyChannel,reboot,confirming,message,kind,supported,available,canInstall,
+  return { preview,autoCheck,checking,busy,observerPaused,release,ready,readyChannel,reboot,confirming,message,kind,supported,available,canInstall,
     notesLoading,latestRelease,notesError,notesUpdatedAt,notesCached,checkedAt,checkCached,loadReleaseNotes,setPreview,setAutoCheck,
     check,download: () => start(false),install: () => start(true),resume,initialize };
 }

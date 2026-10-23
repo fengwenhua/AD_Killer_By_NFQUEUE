@@ -43,6 +43,8 @@ function remove(row) { if (confirm('删除这个来源？当前已加载规则�
           </div>
           <div class="row source-controls"><ActionButton id="addSource" aria-haspopup="dialog" aria-controls="sourceEditorDialog" :disabled="!sources.ready || sources.saving || sources.ordinaryCount >= 64" @click="edit(null, $event.currentTarget)">新增来源</ActionButton><ActionButton id="saveSources" variant="primary" :busy="sources.saving" :disabled="!sources.ready || sources.testing || !sources.dirty" @click="sources.save">{{ sources.saving ? '正在保存…' : '保存来源' }}</ActionButton></div>
           <p id="sourcesStatus" class="sync-note" :data-kind="sources.kind" role="status">{{ sources.message }}</p>
+          <ActionButton v-if="sources.testPaused" id="resumeSourceTest" icon="sync" :busy="sources.recoveringTest" @click="sources.resumeTest">继续查询测试</ActionButton>
+          <div v-if="sources.orphanTest" class="source-history"><p class="subtle">恢复的来源测试：{{ sources.orphanTest }}（不加入来源配置）</p><pre class="source-result" aria-label="恢复的来源测试日志">{{ sources.testLog }}</pre></div>
           <p class="subtle">普通来源支持 Hosts、域名及模块可识别的 AdGuard 网络规则。HaGeZi Pro − Fake 为不可编辑/删除的固定配方。测试只下载和解析，不替换规则或启动引擎。</p>
         </div>
       </details>

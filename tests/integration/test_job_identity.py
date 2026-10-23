@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real CLI worker identities/recovery/dedup. Disposable Linux/root only."""
 from concurrent.futures import ThreadPoolExecutor
+import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -84,6 +85,14 @@ def main():
         complete = wait(id, 'success')
         assert complete['phase'] == 'finished' and complete['reason'] == 'completed'
         assert complete['updated_at'] >= complete['started_at'] > 0
+        saved_state = state_path.read_bytes()
+        log = command('--update-log', id)
+        assert log['status'] == 'ok' and log['reset'] is True and log['reset_reason'] == 'begin'
+        assert len(base64.b64decode(log['data_base64'])) <= 16384
+        assert '仅测试下载和解析' in base64.b64decode(log['data_base64']).decode()
+        assert command('--update-log', id, log['cursor'])['data_base64'] == ''
+        assert command('--update-log', id, '../bad', success=False)['status'] == 'invalid_cursor'
+        assert state_path.read_bytes() == saved_state, 'log queries must not rewrite task state'
 
         # Synthetic PID reuse/reboot/renamed job records never signal a process
         # or become running merely because that PID currently exists.

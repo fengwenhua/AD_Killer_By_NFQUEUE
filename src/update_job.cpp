@@ -14,6 +14,8 @@
 #include <unordered_map>
 #include <sstream>
 #include <ctime>
+#include <cstring>
+#include "common.h"
 
 namespace {
 
@@ -174,6 +176,97 @@ UpdateJobObservation observe_update_job(const std::string &directory, const std:
     }
     else { observed.status = "unverified"; observed.reason = "owner_or_descendant_unverified"; }
     return observed;
+}
+
+namespace {
+bool valid_log_epoch(const std::string &value) {
+    return !value.empty() && value.size() <= 128 && value.find_first_not_of("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-") == std::string::npos;
+}
+std::string job_log_base64(const std::string &data) {
+    constexpr char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    for (size_t i = 0; i < data.size(); i += 3) {
+        const auto a = static_cast<unsigned char>(data[i]);
+        const auto b = i + 1 < data.size() ? static_cast<unsigned char>(data[i + 1]) : 0;
+        const auto c = i + 2 < data.size() ? static_cast<unsigned char>(data[i + 2]) : 0;
+        out += alphabet[a >> 2]; out += alphabet[((a & 3) << 4) | (b >> 4)];
+        out += i + 1 < data.size() ? alphabet[((b & 15) << 2) | (c >> 6)] : '=';
+        out += i + 2 < data.size() ? alphabet[c & 63] : '=';
+    }
+    return out;
+}
+ssize_t job_log_pread(int fd, void *data, size_t size, off_t offset) {
+    ssize_t count;
+    do { count = pread(fd, data, size, offset); } while (count < 0 && errno == EINTR);
+    return count;
+}
+}
+
+UpdateJobLogPage read_update_job_log(const std::string &directory, const std::string &id,
+                                    const std::string &cursor, size_t limit) {
+    UpdateJobLogPage page;
+    if (!valid_update_job_id(id)) { page.status = "invalid_job"; return page; }
+    std::string requested_epoch; uint64_t offset = 0;
+    const bool tail = cursor == "tail";
+    if (!cursor.empty() && !tail) {
+        const auto colon = cursor.find(':');
+        if (cursor.size() > 150 || colon == std::string::npos ||
+            !valid_log_epoch(cursor.substr(0, colon)) || !parse_u64(cursor.substr(colon + 1), offset)) {
+            page.status = "invalid_cursor"; return page;
+        }
+        requested_epoch = cursor.substr(0, colon);
+    }
+    limit = std::min<size_t>(16384, limit);
+    if (!limit) { page.status = "invalid_limit"; return page; }
+    const auto path = directory + "/update-" + id + ".log";
+    const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (fd < 0) { page.status = errno == ENOENT ? "not_ready" : "error"; return page; }
+    struct stat info {};
+    if (fstat(fd, &info) || !S_ISREG(info.st_mode) || info.st_uid != geteuid() || info.st_nlink != 1 ||
+        info.st_size < 0 || static_cast<uint64_t>(info.st_size) > UPDATE_LOG_MAX_BYTES) { close(fd); return page; }
+    char header[160];
+    const auto count = job_log_pread(fd, header, sizeof(header), 0);
+    if (count < 0) { close(fd); return page; }
+    std::string first(header, static_cast<size_t>(count));
+    const std::string prefix = "# ADK_JOB_LOG=";
+    std::string epoch = "legacy-" + std::to_string(static_cast<uint64_t>(info.st_dev)) + "-" + std::to_string(static_cast<uint64_t>(info.st_ino));
+    uint64_t begin = 0;
+    if (first.compare(0, prefix.size(), prefix) == 0) {
+        const auto newline = first.find('\n');
+        if (newline == std::string::npos || !valid_log_epoch(first.substr(prefix.size(), newline - prefix.size()))) {
+            close(fd); page.status = "not_ready"; return page;
+        }
+        epoch = first.substr(prefix.size(), newline - prefix.size()); begin = newline + 1;
+    }
+    const uint64_t end = static_cast<uint64_t>(info.st_size);
+    if (begin > end) { close(fd); page.status = "not_ready"; return page; }
+    if (tail) {
+        offset = end > limit && end - limit > begin ? end - limit : begin;
+        page.reset = true; page.reset_reason = "tail"; page.omitted_bytes = offset - begin;
+    } else if (cursor.empty() || epoch != requested_epoch || offset < begin || offset > end) {
+        offset = begin; page.reset = true;
+        page.reset_reason = cursor.empty() ? "begin" : epoch != requested_epoch ? "rotated" : "truncated";
+    }
+    const size_t wanted = static_cast<size_t>(std::min<uint64_t>(limit, end - offset));
+    std::string data(wanted, '\0'); size_t read = 0;
+    while (read < wanted) {
+        const auto received = job_log_pread(fd, &data[read], wanted - read, static_cast<off_t>(offset + read));
+        if (received <= 0) { close(fd); page.status = "not_ready"; return page; }
+        read += static_cast<size_t>(received);
+    }
+    // An in-place rotation during the read must not advance a mixed cursor.
+    if (begin) {
+        char again[160];
+        const auto got = job_log_pread(fd, again, static_cast<size_t>(begin), 0);
+        if (got != static_cast<ssize_t>(begin) || memcmp(again, first.data(), static_cast<size_t>(begin))) {
+            close(fd); page.status = "not_ready"; return page;
+        }
+    }
+    if (close(fd)) return page;
+    page.status = "ok"; page.data_base64 = job_log_base64(data);
+    page.cursor = epoch + ":" + std::to_string(offset + read);
+    page.more = offset + read < end;
+    return page;
 }
 
 std::string running_update_job_state(int pid) {
