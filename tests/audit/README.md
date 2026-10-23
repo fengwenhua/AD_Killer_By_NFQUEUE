@@ -17,7 +17,6 @@ python3 tests/audit/run_deep_audit.py --sanitize
 
 - 测试源码保存在本目录；编译产物和全部磁盘数据使用独占临时目录，结束后由 `TemporaryDirectory` 清理。
 - 强制包含 `rebase_paths.h`，先加载公共宏，再将所有参与编译单元的 `DATA_DIR` 改到临时目录。生产头文件不修改。这个测试头不能用于生产构建。
-- CLI 探针直接包含实际 `main.cpp`，只调用被测静态函数；进程迁移、daemon、日志、配置读写和防火墙依赖使用桩。测试只进行自身 PID 的信号 0 查询，不发送终止信号。
 - 引擎探针直接包含实际 `engine.cpp`，运行真实 `hot_reload()`、规则加载/匹配与重组代码；防火墙安装/清理使用故障注入桩，真实 `run_daemon()` 不执行。macOS 的 `prctl` 编译适配仅在本目录生效。
 - 未使用网络请求、ADB、root 安装、真实 NFQUEUE、防火墙或 cgroup 迁移。冻结状态检查使用合成文件读取回调，前端只使用模拟 bridge 和内存数据。
 - 依赖未调用函数的编译/链接消除，因此这不是完整 Android 二进制或真实内核集成测试。不要将 probe 二进制刷入手机。
@@ -26,7 +25,6 @@ python3 tests/audit/run_deep_audit.py --sanitize
 
 | 标记 | 观测内容 | 证据边界 |
 | --- | --- | --- |
-| `unrelated-pid` | 用探针自身 PID 模拟被复用的旧任务 PID，查询仍为 running | 未强制内核复用 PID |
 | `idle-retention` | 读取重组统计不执行回收，显式 prune 后释放 | 无实际等待；结合引擎调用路径判断空闲回收缺口 |
 
 O02 的 `read-failure-save` 已修复，从缺陷探针迁移到
@@ -53,6 +51,10 @@ O03 的 `mixed-generation` 已迁移到 `test_engine_failure.cpp`、`test_policy
 `frontend/tests/apply*.test.js` 和 `test_webui_layout.py` 验证精确修订号观察、
 旧策略呈现、核验失败不显示健康、显式重试不重启及关闭后无隐藏写入。
 这些主机/浏览器/Linux 回归不替代 Android 真机长稳和压力验收。
-当前隔离审计保留其余 2 个观测点，不再要求这些已修复的缺陷存在。
+O04 的 `unrelated-pid` 已迁移至 `test_job_identity.cpp` 与真实 CLI
+`integration/test_job_identity.py`：按任务 ID、boot/PID/启动时间与可执行映像核验，
+旧版 PID-only 记录不再算运行；查询不发送信号。任务记录与索引持久化、并发去重、
+所有者崩溃、未知后代写入者和安装阶段不确定性另有正式回归。
+原 CLI 缺陷探针已移除，当前隔离审计只保留 1 个 `idle-retention` 观测点。
 
 最终出现 `Audit characterization completed` 仅表示预期的当前行为已被观测；ASan/UBSan 没有报错也不代表完成安全审计。

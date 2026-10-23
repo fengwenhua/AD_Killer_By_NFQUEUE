@@ -286,6 +286,13 @@ ${CXX:-c++} $COMPILE_FLAGS \
 
 "$BUILD_DIR/test_update_job"
 
+${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" \
+    "$ROOT/tests/test_job_identity.cpp" "$ROOT/src/update_job.cpp" -o "$BUILD_DIR/test_job_identity"
+"$BUILD_DIR/test_job_identity"
+
+${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" "$ROOT/tests/test_task_lease.cpp" -o "$BUILD_DIR/test_task_lease"
+"$BUILD_DIR/test_task_lease"
+
 ${CXX:-c++} $COMPILE_FLAGS \
     -I"$ROOT/src" \
     "$ROOT/tests/test_bounded_log.cpp" \

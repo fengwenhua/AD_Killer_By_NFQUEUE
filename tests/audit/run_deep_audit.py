@@ -45,15 +45,7 @@ def main():
             flags.extend(['-O1', '-g', '-fno-omit-frame-pointer', '-fsanitize=address,undefined',
                           '-fno-sanitize-recover=all'])
         linker = ['-Wl,-dead_strip'] if sys.platform == 'darwin' else ['-Wl,--gc-sections']
-        cli = directory / 'probe_cli'
-        subprocess.run([*compiler, *flags, str(AUDIT / 'probe_cli.cpp'),
-                        str(ROOT / 'src/update_job.cpp'), str(ROOT / 'src/process_runner.cpp'), *linker, '-o', str(cli)], check=True, timeout=120)
         observed = ''
-        for operation in ('unrelated-pid',):
-            output = observe([str(cli), operation])
-            observed += output
-            if operation == 'unrelated-pid':
-                assert '"status": "running"' in output
         engine = directory / 'probe_engine'
         sources = ['rules.cpp', 'rule_stream.cpp', 'rule_bundle.cpp', 'logging.cpp',
                    'bounded_log.cpp', 'tcp_reassembly.cpp', 'dns_tcp_reassembly.cpp', 'packet.cpp',
@@ -62,8 +54,8 @@ def main():
                         *(str(ROOT / 'src' / source) for source in sources),
                         *linker, '-lz', '-o', str(engine)], check=True, timeout=120)
         observed += observe([str(engine)])
-        assert sum(line.startswith('OBSERVED ') for line in observed.splitlines()) == 2
-    print('Audit characterization completed: 2 remaining observations; fixed faults have normal regressions now.')
+        assert sum(line.startswith('OBSERVED ') for line in observed.splitlines()) == 1
+    print('Audit characterization completed: 1 remaining observation; fixed faults have normal regressions now.')
 
 
 if __name__ == '__main__':

@@ -10,17 +10,16 @@
 #include <vector>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/file.h>
+#include <unordered_map>
+#include <sstream>
+#include <ctime>
 
 namespace {
 
 bool parse_nonnegative_int(const std::string &text, int &value) {
-    if (text.empty()) return false;
-    errno = 0;
-    char *end = nullptr;
-    long parsed = strtol(text.c_str(), &end, 10);
-    if (errno == ERANGE || end == text.c_str() || *end != '\0' ||
-        parsed < 0 || parsed > INT_MAX)
-        return false;
+    uint64_t parsed = 0;
+    if (!parse_u64(text, parsed) || parsed > INT_MAX) return false;
     value = static_cast<int>(parsed);
     return true;
 }
@@ -37,6 +36,38 @@ bool valid_update_job_id(const std::string &job_id) {
 
 bool parse_update_job_state(const std::string &text, UpdateJobState &state) {
     state = UpdateJobState{};
+    if (text.size() > 8192) return false;
+    if (text.compare(0, 10, "ADK_JOB_2\n") == 0) {
+        if (text.size() > 8192 || text.back() != '\n' || text.find('\0') != std::string::npos) return false;
+        std::unordered_map<std::string, std::string> fields;
+        std::istringstream input(text.substr(10)); std::string line;
+        while (std::getline(input, line)) {
+            const auto at = line.find('=');
+            if (at == std::string::npos || !at || !fields.emplace(line.substr(0, at), line.substr(at + 1)).second) return false;
+        }
+        if (fields.size() != 16) return false;
+        for (const char *key : {"id", "type", "target", "channel", "phase", "reason", "status", "pid", "exit", "boot", "started", "device", "inode", "created", "updated", "format"})
+            if (!fields.count(key)) return false;
+        state.legacy = false; state.id = fields["id"]; state.type = fields["type"];
+        state.target = fields["target"]; state.channel = fields["channel"]; state.phase = fields["phase"];
+        state.reason = fields["reason"]; state.status = fields["status"];
+        if (!valid_update_job_id(state.id) || fields["format"] != "2" ||
+            (state.type != "rules" && state.type != "source" && state.type != "download" && state.type != "install") ||
+            (state.channel != "stable" && state.channel != "preview") || state.target.size() > 4096 ||
+            state.phase.empty() || state.phase.size() > 64 || state.reason.size() > 512) return false;
+        for (const auto &value : {state.target, state.phase, state.reason})
+            for (unsigned char ch : value) if (ch < 32 || ch == 127) return false;
+        if (!parse_nonnegative_int(fields["pid"], state.pid) || !state.pid ||
+            !parse_u64(fields["started"], state.owner.started) || !parse_u64(fields["device"], state.executable_device) ||
+            !parse_u64(fields["inode"], state.executable_inode) || !state.executable_inode ||
+            !parse_u64(fields["created"], state.created_at) || !state.created_at ||
+            !parse_u64(fields["updated"], state.updated_at) || !state.updated_at) return false;
+        state.owner.pid = state.pid; state.owner.boot = fields["boot"];
+        if (!state.owner.valid()) return false;
+        if (state.status == "running") return fields["exit"] == "-1";
+        if (state.status != "success" && state.status != "failed") return false;
+        return parse_nonnegative_int(fields["exit"], state.exit_code) && (state.status == "success") == (state.exit_code == 0);
+    }
     std::string value = text;
     while (!value.empty() &&
            (value.back() == '\n' || value.back() == '\r' || value.back() == ' '))
@@ -58,6 +89,93 @@ bool parse_update_job_state(const std::string &text, UpdateJobState &state) {
     return false;
 }
 
+std::string serialize_update_job(const UpdateJobState &state) {
+    const auto text = "ADK_JOB_2\nid=" + state.id + "\ntype=" + state.type + "\ntarget=" + state.target +
+        "\nchannel=" + state.channel + "\nphase=" + state.phase + "\nreason=" + state.reason + "\nstatus=" + state.status +
+        "\npid=" + std::to_string(state.owner.pid) + "\nexit=" + std::to_string(state.exit_code) + "\nboot=" + state.owner.boot +
+        "\nstarted=" + std::to_string(state.owner.started) + "\ndevice=" + std::to_string(state.executable_device) +
+        "\ninode=" + std::to_string(state.executable_inode) + "\ncreated=" + std::to_string(state.created_at) +
+        "\nupdated=" + std::to_string(state.updated_at) + "\nformat=2\n";
+    UpdateJobState checked;
+    return parse_update_job_state(text, checked) ? text : "";
+}
+
+bool capture_update_job_owner(UpdateJobState &state, int pid, const std::string &proc) {
+    state.owner = process_identity(pid, proc); state.pid = pid;
+    struct stat executable {};
+    const auto path = proc + "/" + std::to_string(pid) + "/exe";
+    if (!state.owner.valid() || stat(path.c_str(), &executable) || !S_ISREG(executable.st_mode)) return false;
+    state.executable_device = static_cast<uint64_t>(executable.st_dev);
+    state.executable_inode = static_cast<uint64_t>(executable.st_ino);
+    return state.executable_inode && process_identity(pid, proc) == state.owner;
+}
+
+UpdateJobLife update_job_life(const UpdateJobState &state, const std::string &id, const std::string &proc) {
+    if (state.status != "running") return UpdateJobLife::FINISHED;
+    // Legacy PID-only records can never prove an active worker. No signals
+    // are sent, including when the PID points to another process.
+    if (state.legacy || state.id != id || !state.owner.valid()) return UpdateJobLife::INTERRUPTED;
+    std::string boot;
+    if (read_regular_bounded(proc + "/sys/kernel/random/boot_id", boot, 64) != BoundedRead::OK) return UpdateJobLife::UNKNOWN;
+    if (!boot.empty() && boot.back() == '\n') boot.pop_back();
+    if (!ProcessIdentity{1, boot, 1}.valid()) return UpdateJobLife::UNKNOWN;
+    if (boot != state.owner.boot) return UpdateJobLife::INTERRUPTED;
+    const auto process = proc + "/" + std::to_string(state.pid);
+    struct stat info {};
+    if (lstat(process.c_str(), &info)) return errno == ENOENT ? UpdateJobLife::INTERRUPTED : UpdateJobLife::UNKNOWN;
+    const auto actual = process_identity(state.pid, proc);
+    if (!actual.valid()) return UpdateJobLife::UNKNOWN;
+    if (!(actual == state.owner)) return UpdateJobLife::INTERRUPTED;
+    if (stat((process + "/exe").c_str(), &info)) return UpdateJobLife::UNKNOWN;
+    if (!S_ISREG(info.st_mode) || static_cast<uint64_t>(info.st_dev) != state.executable_device ||
+        static_cast<uint64_t>(info.st_ino) != state.executable_inode) return UpdateJobLife::INTERRUPTED;
+    return process_identity(state.pid, proc) == state.owner ? UpdateJobLife::ALIVE : UpdateJobLife::UNKNOWN;
+}
+
+UpdateJobObservation observe_update_job(const std::string &directory, const std::string &id, const std::string &proc) {
+    UpdateJobObservation observed;
+    if (!valid_update_job_id(id)) { observed.status = "invalid_job"; return observed; }
+    const auto base = directory + "/update-" + id;
+    std::string raw;
+    const auto read = read_regular_bounded(base + ".state", raw, 8192);
+    if (read != BoundedRead::OK) { observed.status = read == BoundedRead::MISSING ? "not_found" : "unverified"; return observed; }
+    if (!parse_update_job_state(raw, observed.state) || (!observed.state.legacy && observed.state.id != id)) return observed;
+    const int fd = open((base + ".lease").c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    struct stat info {};
+    if (fd >= 0) {
+        if (!fstat(fd, &info) && S_ISREG(info.st_mode) && info.st_uid == geteuid() && info.st_nlink == 1) {
+            if (!flock(fd, LOCK_EX | LOCK_NB)) observed.lease = 0;
+            else if (errno == EWOULDBLOCK || errno == EAGAIN) observed.lease = 1;
+        }
+        close(fd);
+    } else if (errno == ENOENT && observed.state.legacy) observed.lease = 0;
+    observed.life = update_job_life(observed.state, id, proc);
+    // An installer may intentionally close inherited descriptors. Once it was
+    // dispatched, disappearance of its owner is not proof it finished. Only a
+    // terminal journal or a verified later boot makes this stage quiescent.
+    if (!observed.state.legacy && observed.state.status == "running" && observed.state.phase == "installing" &&
+        observed.life != UpdateJobLife::ALIVE) {
+        std::string boot;
+        const bool readable = read_regular_bounded(proc + "/sys/kernel/random/boot_id", boot, 64) == BoundedRead::OK;
+        if (!boot.empty() && boot.back() == '\n') boot.pop_back();
+        if (!readable || !ProcessIdentity{1, boot, 1}.valid() || boot == observed.state.owner.boot) {
+            observed.status = "unverified"; observed.reason = "installer_completion_unconfirmed"; return observed;
+        }
+    }
+    if (observed.life == UpdateJobLife::FINISHED) {
+        if (observed.lease == 0) observed.status = observed.state.status;
+        else if (observed.lease == 1) { observed.status = "running"; observed.state.phase = "finishing"; }
+        else observed.status = "unverified";
+    }
+    else if (observed.life == UpdateJobLife::ALIVE && observed.lease == 1) observed.status = "running";
+    else if (observed.life == UpdateJobLife::INTERRUPTED && observed.lease == 0) {
+        observed.status = "interrupted";
+        observed.reason = observed.state.legacy ? "legacy_pid_only_record" : "worker_identity_no_longer_matches";
+    }
+    else { observed.status = "unverified"; observed.reason = "owner_or_descendant_unverified"; }
+    return observed;
+}
+
 std::string running_update_job_state(int pid) {
     return pid > 0 ? "running:" + std::to_string(pid) + "\n" : "";
 }
@@ -68,15 +186,33 @@ std::string finished_update_job_state(int exit_code) {
            std::to_string(exit_code) + "\n";
 }
 
-size_t prune_update_jobs(const std::string &directory, size_t keep) {
+size_t prune_update_jobs(const std::string &directory, size_t keep, const std::string &proc) {
     struct FinishedJob {
         std::string id;
         time_t modified = 0;
     };
     std::vector<FinishedJob> finished;
-    DIR *dir = opendir(directory.c_str());
-    if (!dir) return 0;
-    while (dirent *entry = readdir(dir)) {
+    const int directory_fd = open(directory.c_str(), O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW);
+    struct stat root {};
+    if (directory_fd < 0) return 0;
+    if (fstat(directory_fd, &root) || root.st_uid != geteuid() || (root.st_mode & 0022)) { close(directory_fd); return 0; }
+    DIR *dir = fdopendir(directory_fd);
+    if (!dir) { close(directory_fd); return 0; }
+    std::vector<std::string> protected_ids;
+    for (const char *family : {"rules", "module"}) {
+        std::string id;
+        const auto result = read_regular_bounded(directory + "/.active-" + family, id, 128);
+        if (result == BoundedRead::MISSING) continue;
+        if (!id.empty() && id.back() == '\n') id.pop_back();
+        if (result != BoundedRead::OK || !valid_update_job_id(id)) { closedir(dir); return 0; }
+        protected_ids.push_back(id);
+    }
+    size_t entries = 0;
+    while (true) {
+        errno = 0;
+        dirent *entry = readdir(dir);
+        if (!entry) { if (errno) { closedir(dir); return 0; } break; }
+        if (++entries > 4096) { closedir(dir); return 0; }
         std::string name = entry->d_name;
         const std::string prefix = "update-";
         const std::string suffix = ".state";
@@ -87,21 +223,17 @@ size_t prune_update_jobs(const std::string &directory, size_t keep) {
         std::string id = name.substr(prefix.size(),
                                      name.size() - prefix.size() - suffix.size());
         if (!valid_update_job_id(id)) continue;
+        if (std::find(protected_ids.begin(), protected_ids.end(), id) != protected_ids.end()) continue;
         std::string state_path = directory + "/" + name;
-        std::ifstream input(state_path, std::ios::binary);
-        std::string raw((std::istreambuf_iterator<char>(input)),
-                        std::istreambuf_iterator<char>());
-        UpdateJobState state;
-        if (!parse_update_job_state(raw, state)) continue;
-        bool done = state.status == "success" || state.status == "failed";
-        if (state.status == "running") {
-            errno = 0;
-            done = kill(state.pid, 0) != 0 && errno == ESRCH;
-        }
-        if (!done) continue;
-        struct stat info;
-        time_t modified = lstat(state_path.c_str(), &info) == 0 ? info.st_mtime : 0;
-        finished.push_back({id, modified});
+        const auto observed = observe_update_job(directory, id, proc);
+        if (observed.lease != 0 || (observed.status != "success" && observed.status != "failed" && observed.status != "interrupted")) continue;
+        struct stat info {};
+        if (lstat(state_path.c_str(), &info) || !S_ISREG(info.st_mode) || info.st_uid != geteuid() || info.st_nlink != 1) continue;
+        // Old PID-only records are no longer reported alive. Give an old
+        // version's untracked worker a migration grace period before pruning.
+        if (observed.state.legacy && observed.state.status == "running" &&
+            (time(nullptr) <= info.st_mtime || time(nullptr) - info.st_mtime < 24 * 60 * 60)) continue;
+        finished.push_back({id, info.st_mtime});
     }
     closedir(dir);
     std::sort(finished.begin(), finished.end(), [](const FinishedJob &left,
@@ -112,8 +244,16 @@ size_t prune_update_jobs(const std::string &directory, size_t keep) {
     size_t removed = 0;
     for (size_t i = keep; i < finished.size(); i++) {
         std::string base = directory + "/update-" + finished[i].id;
-        if (unlink((base + ".state").c_str()) == 0) removed++;
-        unlink((base + ".log").c_str());
+        const auto observed = observe_update_job(directory, finished[i].id, proc);
+        if (observed.lease != 0) continue;
+        bool safe = true;
+        for (const char *suffix : {".state", ".log", ".lease"}) {
+            struct stat info {};
+            if (lstat((base + suffix).c_str(), &info)) { if (errno != ENOENT) safe = false; }
+            else if (!S_ISREG(info.st_mode) || info.st_uid != geteuid() || info.st_nlink != 1) safe = false;
+        }
+        if (!safe || unlink((base + ".state").c_str())) continue;
+        ++removed; unlink((base + ".log").c_str()); unlink((base + ".lease").c_str());
     }
     return removed;
 }

@@ -6,6 +6,7 @@
 #include "source_config.h"
 #include "sha256.h"
 #include "module_package.h"
+#include "task_context.h"
 
 #include <array>
 #include <cerrno>
@@ -81,6 +82,7 @@ std::string install_package(const std::string &path) {
     pid_t child = fork();
     if (child < 0) { close(output[0]); close(output[1]); return "无法启动安装器"; }
     if (child == 0) {
+        if (!inherit_task_lease()) _exit(127);
         setpgid(0,0);
         close(output[0]);
         dup2(output[1], STDOUT_FILENO); dup2(output[1], STDERR_FILENO); close(output[1]);
@@ -247,12 +249,14 @@ int worker(const std::string &version, bool install, bool preview) {
     if (!private_directory(DIRECTORY)) return 1;
     ExclusiveFileLock lock(DATA_DIR "/.module-update.lock");
     if (!lock.ok()) { log_line("模块更新","已有下载或安装正在运行"); return 1; }
+    if (!task_progress(install ? "verifying" : "downloading")) return 1;
     std::string error;
     if (install) {
         if (ready_version(DIRECTORY) != version) error = "安装包未下载或校验失败，请重新下载";
         else if (ready_channel(DIRECTORY) != channel) error = "安装包渠道未核实或与请求不一致，请重新下载";
         else {
             error = validate_module_identity(std::string(DIRECTORY)+"/package.zip",version,channel,MODULE_VERSION_CODE);
+            if (error.empty() && !task_progress("installing")) error = "无法记录安装阶段，未派发安装器";
             if (error.empty()) error = install_package(std::string(DIRECTORY)+"/package.zip");
         }
         if (error.empty() && !write_file_atomic((std::string(DIRECTORY)+"/installed").c_str(),version))

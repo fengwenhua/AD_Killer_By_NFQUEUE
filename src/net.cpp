@@ -8,6 +8,7 @@
 #include "net_policy.h"
 #include "logging.h"
 #include "common.h"
+#include "task_context.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -268,6 +269,7 @@ bool run_download_command(const std::vector<std::string> &arguments) {
     pid_t child = fork();
     if (child < 0) return false;
     if (child == 0) {
+        if (!inherit_task_lease()) _exit(127);
         struct rlimit file_limit;
         file_limit.rlim_cur = MAX_RULE_DOWNLOAD_BYTES;
         file_limit.rlim_max = MAX_RULE_DOWNLOAD_BYTES;
@@ -426,6 +428,7 @@ std::string prefix_exec(const std::string &url, PrefixContext &context) {
     const pid_t child = fork();
     if (child < 0) { close(descriptors[0]); close(descriptors[1]); return "无法创建预览进程"; }
     if (child == 0) {
+        if (!inherit_task_lease()) _exit(127);
         close(descriptors[0]);
         dup2(descriptors[1], STDOUT_FILENO); close(descriptors[1]);
         int null_fd = open("/dev/null", O_RDWR);

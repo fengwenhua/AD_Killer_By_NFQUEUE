@@ -38,6 +38,7 @@
 #include "process_runner.h"
 #include "apply_state.h"
 #include "config_input_lock.h"
+#include "task_context.h"
 
 #include <cstdio>
 #include <cerrno>
@@ -916,6 +917,7 @@ static int cmd_update(const std::string &test_url = "") {
     };
 
     for (auto &url : urls) {
+        if (!task_progress("downloading")) return 1;
         SourceUpdateReport report;
         report.url = url;
         SourceFormat format = recipe_source_format(url);
@@ -995,6 +997,7 @@ static int cmd_update(const std::string &test_url = "") {
     }
 
     // 两个 gzip 先进入不可见 staging,用真实规则加载器校验后只切换一次指针。
+    if (!task_progress("validating")) return 1;
     deduplicate_rule_text(hosts_rules);
     deduplicate_rule_text(adguard_rules);
     std::string gz_hosts, gz_adguard;
@@ -1038,6 +1041,7 @@ static int cmd_update(const std::string &test_url = "") {
         return 1;
     }
     bool committed = [&] {
+        if (!task_progress("publishing")) { stage_error = "任务阶段无法持久化，未发布"; return false; }
         ConfigInputLock inputs(DATA_DIR);
         if (!inputs.ok() || !mark_policy_dirty()) { stage_error = "配置保存或生效回执不可用，暂未发布"; return false; }
         if (!commit_rule_bundle(FILE_RULESET_CURRENT, staged, &stage_error)) return false;
@@ -1086,6 +1090,35 @@ static std::string update_job_path(const std::string &job_id, const char *suffix
     return std::string(DIR_UPDATE_JOBS) + "/update-" + job_id + suffix;
 }
 
+static std::string update_job_json(const std::string &id, const UpdateJobObservation &job) {
+    const auto &state = job.state;
+    const bool terminal = job.status == "success" || job.status == "failed" || job.status == "interrupted";
+    return "{\"status\": " + source_json_string(job.status) + ", \"job_id\": " + source_json_string(id) +
+        ", \"exit_code\": " + (terminal ? std::to_string(job.status == "interrupted" ? 255 : state.exit_code) : "null") +
+        ",\"type\":" + source_json_string(state.type) + ",\"phase\":" + source_json_string(state.phase) +
+        ",\"target\":" + source_json_string(state.target) + ",\"channel\":" + source_json_string(state.channel) +
+        ",\"started_at\":" + std::to_string(state.created_at) + ",\"updated_at\":" + std::to_string(state.updated_at) +
+        ",\"reason\":" + source_json_string(job.reason.empty() ? state.reason : job.reason) +
+        ",\"lease_active\":" + (job.lease < 0 ? "null" : job.lease ? "true" : "false") + "}";
+}
+
+static int cmd_jobs_list() {
+    std::string jobs;
+    for (const char *family : {"rules", "module"}) {
+        std::string id;
+        const auto result = read_regular_bounded(std::string(DIR_UPDATE_JOBS) + "/.active-" + family, id, 128);
+        if (result == BoundedRead::MISSING) continue;
+        if (!id.empty() && id.back() == '\n') id.pop_back();
+        if (result != BoundedRead::OK || !valid_update_job_id(id)) {
+            puts("{\"status\":\"unverified\",\"message\":\"任务索引无法核实\"}"); return 1;
+        }
+        const auto observed = observe_update_job(DIR_UPDATE_JOBS, id);
+        if (!jobs.empty()) jobs += ',';
+        jobs += update_job_json(id, observed);
+    }
+    printf("{\"status\":\"ok\",\"jobs\":[%s]}\n", jobs.c_str()); return 0;
+}
+
 // 由后端创建唯一任务并脱离 WebUI exec 会话。状态和日志均按 job_id 隔离。
 static int cmd_update_start(const std::string &test_url = "", const std::string &module_version = "", bool install_module = false, bool module_preview = false) {
     std::string error;
@@ -1097,6 +1130,27 @@ static int cmd_update_start(const std::string &test_url = "", const std::string 
         printf("{\"status\": \"error_storage\"}\n");
         return 1;
     }
+    ExclusiveFileLock admission(DATA_FILE(".job-admission.lock").c_str(), true, 1000);
+    if (!admission.ok()) { puts("{\"status\":\"busy\",\"message\":\"任务入口正在使用\"}"); return 2; }
+    const std::string type = module_version.empty() ? test_url.empty() ? "rules" : "source" : install_module ? "install" : "download";
+    const std::string target = module_version.empty() ? test_url : module_version;
+    const std::string channel = module_preview ? "preview" : "stable";
+    const std::string index = std::string(DIR_UPDATE_JOBS) + (module_version.empty() ? "/.active-rules" : "/.active-module");
+    std::string existing;
+    const auto index_read = read_regular_bounded(index, existing, 128);
+    if (!existing.empty() && existing.back() == '\n') existing.pop_back();
+    if (index_read == BoundedRead::ERROR || (index_read == BoundedRead::OK && !valid_update_job_id(existing))) {
+        puts("{\"status\":\"unverified\",\"message\":\"任务索引损坏，请先核查\"}"); return 1;
+    }
+    if (index_read == BoundedRead::OK) {
+        const auto old = observe_update_job(DIR_UPDATE_JOBS, existing);
+        if (old.lease != 0 || old.life == UpdateJobLife::ALIVE || old.status == "unverified" || old.status == "invalid_state") {
+            if (old.status == "running" && old.state.type == type && old.state.target == target && old.state.channel == channel) {
+                printf("{\"status\":\"started\",\"job_id\":%s,\"reused\":true}\n", source_json_string(existing).c_str()); return 0;
+            }
+            printf("{\"status\":\"busy\",\"job_id\":%s,\"message\":\"已有任务或后代写入者尚未退出，请先核查\"}\n", source_json_string(existing).c_str()); return 2;
+        }
+    }
     prune_update_jobs(DIR_UPDATE_JOBS, UPDATE_JOB_KEEP_COUNT);
     long long clock = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -1104,6 +1158,17 @@ static int cmd_update_start(const std::string &test_url = "", const std::string 
                          std::to_string((long long)getpid());
     std::string state_path = update_job_path(job_id, ".state");
     std::string log_path = update_job_path(job_id, ".log");
+    for (const char *suffix : {".state", ".log", ".lease"}) {
+        struct stat collision {};
+        if (!lstat(update_job_path(job_id, suffix).c_str(), &collision) || errno != ENOENT) {
+            puts("{\"status\":\"error_storage\",\"message\":\"任务 ID 已存在或无法核实，未覆盖旧任务\"}"); return 1;
+        }
+    }
+    ExclusiveFileLock lease(update_job_path(job_id, ".lease").c_str());
+    if (!lease.ok()) { puts("{\"status\":\"error_storage\"}"); return 1; }
+    struct sigaction ignore_pipe {};
+    ignore_pipe.sa_handler = SIG_IGN;
+    if (sigemptyset(&ignore_pipe.sa_mask) || sigaction(SIGPIPE, &ignore_pipe, nullptr)) return 1;
 
     int gate[2];
     if (pipe(gate) != 0) {
@@ -1118,6 +1183,7 @@ static int cmd_update_start(const std::string &test_url = "", const std::string 
         return 1;
     }
     if (child == 0) {
+        close(admission.native_fd()); // The parent alone owns admission, never LOCK_UN.
         close(gate[1]);
         char start = 0;
         ssize_t received;
@@ -1126,6 +1192,19 @@ static int cmd_update_start(const std::string &test_url = "", const std::string 
         } while (received < 0 && errno == EINTR);
         close(gate[0]);
         if (received != 1 || start != '1') _exit(1);
+
+        UpdateJobState state;
+        std::string journal;
+        if (read_regular_bounded(state_path, journal, 8192) != BoundedRead::OK || !parse_update_job_state(journal, state)) _exit(1);
+        task_lease_fd = fcntl(lease.native_fd(), F_DUPFD_CLOEXEC, 3);
+        if (task_lease_fd < 0) _exit(1);
+        close(lease.native_fd()); // The duplicate is safe from stdio redirection.
+        task_progress_callback = [&](const std::string &phase) {
+            state.phase = phase; state.updated_at = now_epoch();
+            const auto text = serialize_update_job(state);
+            return !text.empty() && write_initial_config(state_path.c_str(), text);
+        };
+        if (!task_progress("running")) _exit(1);
 
         setsid();
         int null_fd = open("/dev/null", O_RDWR | O_CLOEXEC);
@@ -1140,24 +1219,37 @@ static int cmd_update_start(const std::string &test_url = "", const std::string 
         auto isolated = isolate_daemon_cgroups();
         if (!isolated.ok) {
             log_line("错误", "后台任务无法脱离调用方冻结组：%s", isolated.error.c_str());
-            write_file_atomic(state_path.c_str(), finished_update_job_state(1));
+            state.status = "failed"; state.exit_code = 1; state.reason = "cgroup_isolation_failed";
+            task_progress("finished");
             _exit(1);
         }
         int result = module_version.empty() ? cmd_update(test_url) : module_update::worker(module_version, install_module, module_preview);
-        write_file_atomic(state_path.c_str(), finished_update_job_state(result));
+        state.status = result == 0 ? "success" : "failed"; state.exit_code = result;
+        state.reason = result == 0 ? "completed" : "worker_failed";
+        if (!task_progress("finished")) _exit(1);
         _exit(result);
     }
 
     close(gate[0]);
-    bool state_ready = write_file_atomic(
-        state_path.c_str(), running_update_job_state(static_cast<int>(child)));
+    UpdateJobState state;
+    state.legacy = false; state.id = job_id; state.type = type; state.target = target; state.channel = channel;
+    state.status = "running"; state.phase = "queued"; state.created_at = state.updated_at = now_epoch();
+    bool state_ready = capture_update_job_owner(state, static_cast<int>(child));
+    const auto journal = state_ready ? serialize_update_job(state) : "";
+    state_ready = state_ready && !journal.empty() && write_initial_config(state_path.c_str(), journal) &&
+        write_initial_config(index.c_str(), job_id + "\n");
     char start = state_ready ? '1' : '0';
-    ssize_t ignored = write(gate[1], &start, 1);
-    (void)ignored;
+    ssize_t dispatched;
+    do { dispatched = write(gate[1], &start, 1); } while (dispatched < 0 && errno == EINTR);
     close(gate[1]);
-    if (!state_ready) {
-        kill(child, SIGKILL);
-        waitpid(child, nullptr, 0);
+    if (!state_ready || dispatched != 1) {
+        // The gate is closed and this child was never authorized to work.
+        // Do not hang the CLI if the inherited calling cgroup was frozen.
+        for (unsigned attempt = 0; attempt < 100; ++attempt) {
+            const auto waited = waitpid(child, nullptr, WNOHANG);
+            if (waited == child || (waited < 0 && errno != EINTR)) break;
+            usleep(10000);
+        }
         printf("{\"status\": \"error\"}\n");
         return 1;
     }
@@ -1167,35 +1259,9 @@ static int cmd_update_start(const std::string &test_url = "", const std::string 
 }
 
 static int cmd_update_status(const std::string &job_id) {
-    if (!valid_update_job_id(job_id)) {
-        printf("{\"status\": \"invalid_job\"}\n");
-        return 1;
-    }
-    std::string raw;
-    if (!read_file(update_job_path(job_id, ".state").c_str(), raw)) {
-        printf("{\"status\": \"not_found\", \"job_id\": \"%s\"}\n",
-               job_id.c_str());
-        return 1;
-    }
-    UpdateJobState state;
-    if (!parse_update_job_state(raw, state)) {
-        printf("{\"status\": \"invalid_state\", \"job_id\": \"%s\"}\n",
-               job_id.c_str());
-        return 1;
-    }
-    if (state.status == "running") {
-        if (kill(state.pid, 0) != 0 && errno == ESRCH) {
-            printf("{\"status\": \"interrupted\", \"job_id\": \"%s\", "
-                   "\"exit_code\": 255}\n", job_id.c_str());
-        } else {
-            printf("{\"status\": \"running\", \"job_id\": \"%s\", "
-                   "\"exit_code\": null}\n", job_id.c_str());
-        }
-        return 0;
-    }
-    printf("{\"status\": \"%s\", \"job_id\": \"%s\", \"exit_code\": %d}\n",
-           state.status.c_str(), job_id.c_str(), state.exit_code);
-    return 0;
+    const auto job = observe_update_job(DIR_UPDATE_JOBS, job_id);
+    puts(update_job_json(job_id, job).c_str());
+    return job.status == "running" || job.status == "success" || job.status == "failed" || job.status == "interrupted" ? 0 : 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -1445,6 +1511,7 @@ static void usage() {
             "  AD_Killer_By_NFQUEUE --update           拉取规则源更新\n"
             "  AD_Killer_By_NFQUEUE --update-start     创建后台更新 job\n"
             "  AD_Killer_By_NFQUEUE --update-status ID 查询更新 job 状态\n"
+            "  AD_Killer_By_NFQUEUE --jobs-list        只读发现最近/活动后台任务\n"
             "  AD_Killer_By_NFQUEUE --module-update-check stable|preview 检查模块 Release\n"
             "  AD_Killer_By_NFQUEUE --module-release-notes 读取 GitHub 最新发布日志\n"
             "  AD_Killer_By_NFQUEUE --module-update-download VERSION [stable|preview] 后台下载并校验模块\n"
@@ -1530,6 +1597,7 @@ int main(int argc, char **argv) {
     }
     if (arg == "--update")         return cmd_update();
     if (arg == "--update-start")   return cmd_update_start();
+    if (arg == "--jobs-list") { if (argc != 2) { usage(); return 1; } return cmd_jobs_list(); }
     if (arg == "--source-preview") {
         int characters = SOURCE_PREVIEW_DEFAULT;
         if ((argc != 3 && argc != 4) || (argc == 4 && (!parse_integer_arg(argv[3], characters) ||
