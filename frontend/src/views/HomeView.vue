@@ -19,13 +19,14 @@ defineProps({ engine: Object, sync: Object, apps: Object, feedback: Object, modu
           <div class="guard-emblem" aria-hidden="true"><span v-if="engine.running" class="guard-halo" /><span class="guard-core"><UiIcon :name="engine.running ? 'shield' : 'shield-idle'" /></span></div>
         </div>
         <p id="stateDesc" class="subtle">{{ engine.description }}</p>
+        <ActionButton v-if="engine.healthUnknown" id="verifyHealthBtn" icon="sync" :busy="engine.checking" :disabled="!!engine.action" @click="engine.verifyHealth">重新核实状态</ActionButton>
         <div v-if="engine.running" class="blocked-summary" aria-label="本次守护规则命中统计">
           <div class="blocked-heading"><span>累计拦截</span><span class="blocked-period">本次守护</span></div>
           <div class="blocked-value"><b id="blockedTotal" :class="{ 'is-long': engine.blockedTotal >= 1000000000 }">{{ engine.blockedTotal === null ? '—' : engine.blockedTotal.toLocaleString() }}</b><span v-if="engine.blockedTotal !== null" class="blocked-unit">次</span></div>
           <small :data-stale="engine.metricsStale">{{ engine.metricsStale ? '统计暂不可用，保留上次记录' : engine.blockedTotal === null ? '等待统计数据' : '规则命中次数 · 守护重启后重新累计' }}</small>
         </div>
         <div class="action-grid">
-          <ActionButton id="startBtn" :variant="engine.running ? undefined : 'primary'" icon="play" :busy="engine.action === 'start'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || engine.running" @click="engine.control('start')"><span id="startLabel">{{ engine.action === 'start' ? '启动中…' : '启动守护' }}</span></ActionButton>
+          <ActionButton id="startBtn" :variant="engine.running ? undefined : 'primary'" icon="play" :busy="engine.action === 'start'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || engine.running || engine.healthUnknown" @click="engine.control('start')"><span id="startLabel">{{ engine.action === 'start' ? '启动中…' : '启动守护' }}</span></ActionButton>
           <ActionButton id="stopBtn" :variant="engine.running ? 'primary' : undefined" icon="pause" :busy="engine.action === 'stop'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || (!engine.state?.running && !engine.state?.enabled)" @click="engine.control('stop')"><span id="stopLabel">{{ engine.action === 'stop' ? '暂停中…' : '暂停守护' }}</span></ActionButton>
         </div>
       </section>

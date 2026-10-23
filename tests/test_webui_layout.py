@@ -40,6 +40,7 @@ window.previewReleaseNotesFails = false;
 window.previewRulesEmpty = false;
 window.previewEngineState = "stopped";
 window.previewRoutingActive = true;
+window.previewFreezerState = 'normal';
 window.previewDaemonImageCurrent = true;
 window.previewStartFails = true;
 window.previewStartDelay = 0;
@@ -86,6 +87,7 @@ window.ksu = {
     else if(command.includes(" --status")) text = JSON.stringify({
       iptables_active:previewEngineState==="running" && previewRoutingActive, running:previewEngineState==="running",
       daemon_image_current:previewDaemonImageCurrent,
+      freezer_state:previewFreezerState,frozen:previewFreezerState==='unknown'?null:previewFreezerState==='frozen',
       runtime:previewEngineState, last_error:previewEngineState==="error"?previewEngineError:"",
       enabled:previewEngineState!=="stopped", metrics:previewMetrics, ...previewSettings});
     else if(command.endsWith(" --start")) {
@@ -166,6 +168,25 @@ def fixture_regression(browser, errors):
             assert page.locator('.source-item[data-builtin="true"]').count() == 1
             assert page.evaluate('previewSources.length') == 5
         page.close()
+
+
+def freezer_health_regression(browser, errors):
+    page = browser.new_page(viewport={'width': 320, 'height': 740}, reduced_motion='reduce')
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.add_init_script(mock_script() + "\npreviewEngineState='running'; previewFreezerState='unknown';")
+    page.goto((ROOT / 'module/webroot/index.html').as_uri())
+    expect(page.locator('#stateBadge')).to_have_text('状态未核实')
+    expect(page.locator('#startBtn')).to_be_disabled()
+    expect(page.locator('#blockedTotal')).to_have_count(0)
+    page.evaluate("previewCommands.length=0")
+    page.locator('#verifyHealthBtn').click()
+    expect(page.locator('#verifyHealthBtn')).to_have_attribute('aria-busy', 'false')
+    assert page.evaluate("previewCommands.every(c=>c.includes('--status') || c.includes('rule_stats.conf'))")
+    page.evaluate("previewFreezerState='normal'")
+    page.locator('#verifyHealthBtn').click()
+    expect(page.locator('#stateBadge')).to_have_text('正在守护')
+    expect(page.locator('#verifyHealthBtn')).to_have_count(0)
+    page.close()
 
 
 def preview_regression(browser, errors, screenshots=None):
@@ -1163,6 +1184,7 @@ def main():
         errors = []
         try:
             fixture_regression(browser, errors)
+            freezer_health_regression(browser, errors)
             quic_setting_regression(browser, errors)
             preview_regression(browser, errors, args.screenshots)
             source_editor_dialog_regression(browser, errors, args.screenshots)

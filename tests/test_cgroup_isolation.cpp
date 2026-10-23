@@ -41,10 +41,44 @@ int main() {
         if (found == files.end()) return false;
         value = found->second; return true;
     };
-    assert(frozen_cgroup_process(7258, read));
-    assert(!frozen_cgroup_process(-1, read));
+    const auto status = [&] { return inspect_cgroup_process(7258, read).state; };
+    assert(status() == FreezerState::FROZEN);
+    assert(inspect_cgroup_process(-1, read).state == FreezerState::UNKNOWN);
     files["/sys/fs/cgroup/apps/uid_10391/pid_5034/cgroup.events"] = "populated 1\nfrozen 0\n";
-    assert(!frozen_cgroup_process(7258, read));
+    assert(status() == FreezerState::NORMAL);
+    const auto events = "/sys/fs/cgroup/apps/uid_10391/pid_5034/cgroup.events";
+    for (const auto &invalid : {"", "populated 1\n", "frozen nope\n", "frozen 0 1\n", "frozen 0\nfrozen 1\n"}) {
+        files[events] = invalid;
+        const auto failed = inspect_cgroup_process(7258, read);
+        assert(failed.state == FreezerState::UNKNOWN && !failed.error.empty());
+    }
+    files.erase(events);
+    assert(status() == FreezerState::UNKNOWN); // missing events is not thawed
+    files[events] = "populated 1\nfrozen 0\n";
+    for (const auto &denied : {"/proc/7258/cgroup", "/proc/7258/mountinfo", events}) {
+        const auto failed = inspect_cgroup_process(7258,
+            [&](const std::string &path, std::string &out) { return path != denied && read(path, out); });
+        assert(failed.state == FreezerState::UNKNOWN && !failed.error.empty());
+    }
+    for (const auto &changed : {"/proc/7258/cgroup", "/proc/7258/mountinfo"}) {
+        unsigned calls = 0;
+        auto result = inspect_cgroup_process(7258, [&](const std::string &path, std::string &out) {
+            if (!read(path, out)) return false;
+            if (path == changed && ++calls == 2) out += "\n";
+            return true;
+        });
+        assert(result.state == FreezerState::UNKNOWN && result.error.find("changed") != std::string::npos);
+    }
+    unsigned reads = 0;
+    const auto exited = inspect_cgroup_process(7258, [&](const std::string &path, std::string &out) {
+        if (path == "/proc/7258/cgroup" && ++reads == 2) return false;
+        return read(path, out);
+    });
+    assert(exited.state == FreezerState::UNKNOWN && exited.error.find("exited") != std::string::npos);
+    auto original = files["/proc/7258/mountinfo"];
+    files["/proc/7258/mountinfo"] = "1 2 0:3 /apps /bound rw - cgroup2 none rw\n";
+    assert(status() == FreezerState::UNKNOWN); // only subtree mounts: not verified
+    files["/proc/7258/mountinfo"] = original;
     unsigned moves = 0;
     auto migrate = [&](const FreezerHierarchy &group, int pid, std::string &) {
         assert(pid == 7258 && group.unified && group.mount == "/sys/fs/cgroup");
@@ -57,7 +91,7 @@ int main() {
     };
     auto result = isolate_freezer_hierarchies(7258, read, migrate);
     assert(result.ok && result.moved == 1 && moves == 1);
-    assert(!frozen_cgroup_process(7258, read));
+    assert(status() == FreezerState::NORMAL);
     result = isolate_freezer_hierarchies(7258, read, migrate);
     assert(result.ok && result.moved == 0 && moves == 1); // idempotent
     files["/proc/7258/cgroup"] = membership;
@@ -80,9 +114,13 @@ int main() {
 
     files["/proc/7258/cgroup"] = "2:cpu:/background\n5:freezer:/apps/manager\n";
     files["/dev/freezer/apps/manager/freezer.state"] = "FROZEN\n";
-    assert(frozen_cgroup_process(7258, read));
+    assert(status() == FreezerState::FROZEN);
     files["/dev/freezer/apps/manager/freezer.state"] = "FREEZING\n";
-    assert(frozen_cgroup_process(7258, read));
+    assert(status() == FreezerState::FROZEN);
+    files["/dev/freezer/apps/manager/freezer.state"] = "invalid\n";
+    assert(status() == FreezerState::UNKNOWN);
+    files["/dev/freezer/apps/manager/freezer.state"] = "THAWED\n";
+    assert(status() == FreezerState::NORMAL);
     result = isolate_freezer_hierarchies(7258, read,
         [&](const FreezerHierarchy &group, int pid, std::string &) {
             assert(pid == 7258 && !group.unified && group.mount == "/dev/freezer");
@@ -90,6 +128,6 @@ int main() {
             return true;
         });
     assert(result.ok && result.moved == 1);
-    assert(!frozen_cgroup_process(7258, read));
+    assert(status() == FreezerState::NORMAL);
     std::cout << "cgroup v2/v1 freezer discovery, self-only migration, verification, failure and frozen status tests passed\n";
 }

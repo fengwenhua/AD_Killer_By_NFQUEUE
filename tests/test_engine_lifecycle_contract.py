@@ -48,7 +48,8 @@ def main() -> None:
     assert start.index('"error_rules_empty"') < start.index('write_conf_value(FILE_STATE_CONF, "enabled"') < start.index("pid_t pid = fork()")
     assert start.index("prepare_daemon_cgroups()") < start.index("export ADK_NFQ_START_DISPATCHED")
     assert '"cgroup_isolation_failed"' in main_source
-    assert "daemon_cgroup_frozen(old)" in start
+    assert "daemon_cgroup_status(old)" in start
+    assert 'error_health_unknown' in start
     recovery = start.split('if (read_runtime_state() == "running")', 1)[1].split(
         "if (!dispatched && old <= 0)", 1
     )[0]
@@ -69,8 +70,8 @@ def main() -> None:
     )
     for name, end in (("cmd_status", "// --status-fast"), ("cmd_status_fast", "// --version-status")):
         status = main_source.split(f"static int {name}()", 1)[1].split(end, 1)[0]
-        assert "bool running = pid > 0 && !frozen" in status
-        assert "engine_diagnostics_json(frozen)" in status
+        assert "freezer.state != FreezerState::FROZEN" in status
+        assert "engine_diagnostics_json(freezer, pid > 0)" in status
         assert 'iptables_remove_all()' not in status, 'status must be read-only even after SIGKILL'
     fast = main_source.split('static int cmd_status_fast()', 1)[1].split('// --version-status', 1)[0]
     assert 'iptables_entry_attached()' in fast

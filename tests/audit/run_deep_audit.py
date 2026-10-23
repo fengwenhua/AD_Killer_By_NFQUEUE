@@ -62,8 +62,8 @@ def main():
                         *(str(ROOT / 'src' / source) for source in sources),
                         *linker, '-lz', '-o', str(engine)], check=True, timeout=120)
         observed += observe([str(engine)])
-        assert sum(line.startswith('OBSERVED ') for line in observed.splitlines()) == 7
-    print('Audit characterization completed: 7 remaining observations; O02/O18 have normal regressions now.')
+        assert sum(line.startswith('OBSERVED ') for line in observed.splitlines()) == 6
+    print('Audit characterization completed: 6 remaining observations; O02/O17/O18 have normal regressions now.')
 
 
 if __name__ == '__main__':

@@ -17,6 +17,11 @@ struct CgroupIsolationResult {
 };
 using CgroupRead = std::function<bool(const std::string &, std::string &)>;
 using CgroupMove = std::function<bool(const FreezerHierarchy &, int, std::string &)>;
+enum class FreezerState { NORMAL, FROZEN, UNKNOWN };
+struct FreezerStatus {
+    FreezerState state = FreezerState::UNKNOWN;
+    std::string error;
+};
 
 // Pure discovery and injectable I/O support fixtures without touching host groups.
 bool discover_freezer_hierarchies(const std::string &membership,
@@ -25,8 +30,8 @@ bool discover_freezer_hierarchies(const std::string &membership,
                                  std::string &error);
 CgroupIsolationResult isolate_freezer_hierarchies(
     int pid, const CgroupRead &read, const CgroupMove &move);
-bool frozen_cgroup_process(int pid, const CgroupRead &read);
+FreezerStatus inspect_cgroup_process(int pid, const CgroupRead &read);
 
 // Production entry points never accept a target PID for migration: only self.
 CgroupIsolationResult isolate_daemon_cgroups();
-bool daemon_cgroup_frozen(int pid);
+FreezerStatus daemon_cgroup_status(int pid);

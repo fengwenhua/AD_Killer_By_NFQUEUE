@@ -175,28 +175,54 @@ CgroupIsolationResult isolate_freezer_hierarchies(
     return result;
 }
 
-bool frozen_cgroup_process(int pid, const CgroupRead &read) {
-    if (pid <= 0) return false;
+FreezerStatus inspect_cgroup_process(int pid, const CgroupRead &read) {
+    const auto unknown = [](const std::string &error) { return FreezerStatus{FreezerState::UNKNOWN, error}; };
+    if (pid <= 0) return unknown("invalid process PID");
     const std::string proc = "/proc/" + std::to_string(pid);
     std::string membership, mounts, error;
     std::vector<FreezerHierarchy> groups;
-    if (!read(proc + "/cgroup", membership) || !read(proc + "/mountinfo", mounts) ||
-        !discover_freezer_hierarchies(membership, mounts, groups, error)) return false;
+    if (!read(proc + "/cgroup", membership)) return unknown("cannot read process cgroup membership");
+    if (!read(proc + "/mountinfo", mounts) || mounts.empty()) return unknown("cannot read process mountinfo");
+    if (!discover_freezer_hierarchies(membership, mounts, groups, error)) return unknown(error);
+    bool frozen = false;
     for (const auto &group : groups) {
         if (group.membership == "/") continue;
         std::string content;
         const std::string path = group.mount + group.membership;
         if (group.unified) {
-            if (!read(path + "/cgroup.events", content)) continue;
-            std::istringstream values(content);
-            std::string key, value;
-            while (values >> key >> value) if (key == "frozen" && value == "1") return true;
+            if (!read(path + "/cgroup.events", content)) { error = "cannot read " + path + "/cgroup.events"; continue; }
+            std::istringstream rows(content);
+            std::string row;
+            unsigned fields = 0;
+            bool valid = true, group_frozen = false;
+            while (std::getline(rows, row)) {
+                std::istringstream values(row);
+                std::string key, value, extra;
+                values >> key;
+                if (key != "frozen") continue;
+                ++fields;
+                if (!(values >> value) || (values >> extra) || (value != "0" && value != "1")) valid = false;
+                group_frozen = value == "1";
+            }
+            if (fields != 1 || !valid) error = "invalid or missing frozen event in " + path;
+            else frozen = frozen || group_frozen;
         } else {
-            if (read(path + "/freezer.state", content) &&
-                (content == "FROZEN\n" || content == "FREEZING\n")) return true;
+            if (!read(path + "/freezer.state", content)) { error = "cannot read " + path + "/freezer.state"; continue; }
+            const size_t begin = content.find_first_not_of(" \t\r\n");
+            const std::string value = begin == std::string::npos ? "" :
+                content.substr(begin, content.find_last_not_of(" \t\r\n") - begin + 1);
+            if (value == "FROZEN" || value == "FREEZING") frozen = true;
+            else if (value != "THAWED") error = "invalid freezer state in " + path;
         }
     }
-    return false;
+    // Exit/migration or a mount change during the observation invalidates it.
+    std::string after, mounts_after;
+    if (!read(proc + "/cgroup", after) || !read(proc + "/mountinfo", mounts_after))
+        return unknown("process exited or cgroup observation became unavailable");
+    if (after != membership || mounts_after != mounts) return unknown("cgroup membership or mounts changed during observation");
+    if (frozen) return {FreezerState::FROZEN, ""};
+    if (!error.empty()) return unknown(error);
+    return {FreezerState::NORMAL, ""};
 }
 
 CgroupIsolationResult isolate_daemon_cgroups() {
@@ -206,6 +232,6 @@ CgroupIsolationResult isolate_daemon_cgroups() {
     return {true, 0, ""};
 #endif
 }
-bool daemon_cgroup_frozen(int pid) {
-    return frozen_cgroup_process(pid, read_bounded);
+FreezerStatus daemon_cgroup_status(int pid) {
+    return inspect_cgroup_process(pid, read_bounded);
 }

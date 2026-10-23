@@ -80,8 +80,12 @@ static std::string current_metrics_json() {
                             ? parse_metrics(content) : MetricsSnapshot{});
 }
 
-static std::string engine_diagnostics_json(bool frozen) {
-    return "\"frozen\":" + std::string(frozen ? "true" : "false") +
+static std::string engine_diagnostics_json(const FreezerStatus &status, bool present) {
+    const bool frozen = present && status.state == FreezerState::FROZEN;
+    const bool unknown = present && status.state == FreezerState::UNKNOWN;
+    return "\"frozen\":" + std::string(unknown ? "null" : frozen ? "true" : "false") +
+           ",\"freezer_state\":" + source_json_string(!present ? "not_running" : unknown ? "unknown" : frozen ? "frozen" : "normal") +
+           ",\"freezer_error\":" + source_json_string(unknown ? status.error : "") +
            ",\"runtime\":" + source_json_string(frozen ? "error" : read_runtime_state()) +
            ",\"last_error\":" + source_json_string(frozen
                ? "守护进程被后台冻结，网络队列无法处理。请暂停并升级模块后重新启动。"
@@ -282,7 +286,12 @@ static int cmd_start() {
 
     int old = find_daemon_pid();
     if (!dispatched && old > 0) {
-        if (daemon_cgroup_frozen(old)) {
+        const auto freezer = daemon_cgroup_status(old);
+        if (freezer.state == FreezerState::UNKNOWN) {
+            printf("{\"status\":\"error_health_unknown\",\"message\":\"未能核实守护冻结状态，请刷新状态与排查权限；未自动停止或解冻进程\"}\n");
+            return 1;
+        }
+        if (freezer.state == FreezerState::FROZEN) {
             printf("{\"status\":\"error_daemon_frozen\",\"message\":\"守护已被冻结，请先暂停再重新启动\"}\n");
             return 1;
         }
@@ -1057,8 +1066,8 @@ static int cmd_update_status(const std::string &job_id) {
 // --status:WebUI 状态 JSON
 static int cmd_status() {
     int pid = read_daemon_pid();
-    bool frozen = daemon_cgroup_frozen(pid);
-    bool running = pid > 0 && !frozen;
+    const auto freezer = pid > 0 ? daemon_cgroup_status(pid) : FreezerStatus{};
+    bool running = pid > 0 && freezer.state != FreezerState::FROZEN;
 
     // 配置读取
     EngineConfig engine_cfg = load_engine_config();
@@ -1097,7 +1106,7 @@ static int cmd_status() {
            (autostart == "true" || autostart == "1") ? "true" : "false",
            black, white, updated,
            engine_cfg.block_quic ? "true" : "false", metrics.c_str(), pid > 0 ? pid : 0,
-           daemon_image_current(pid) ? "true" : "false", engine_diagnostics_json(frozen).c_str());
+           daemon_image_current(pid) ? "true" : "false", engine_diagnostics_json(freezer, pid > 0).c_str());
     return 0;
 }
 
@@ -1106,8 +1115,8 @@ static int cmd_status() {
 // route_check=entry 不代表完整代际布局校验；异常时 WebUI 再调用 --status。
 static int cmd_status_fast() {
     int pid = find_daemon_pid();
-    bool frozen = daemon_cgroup_frozen(pid);
-    bool running = pid > 0 && !frozen;
+    const auto freezer = pid > 0 ? daemon_cgroup_status(pid) : FreezerStatus{};
+    bool running = pid > 0 && freezer.state != FreezerState::FROZEN;
     int mode = MODE_HOSTS_ADGUARD;
     {
         std::string m = read_conf_value(FILE_STATE_CONF, "mode");
@@ -1152,7 +1161,7 @@ static int cmd_status_fast() {
            (autostart == "true" || autostart == "1") ? "true" : "false",
            black, white, updated,
            quic_on ? "true" : "false", metrics.c_str(), pid > 0 ? pid : 0,
-           daemon_image_current(pid) ? "true" : "false", engine_diagnostics_json(frozen).c_str());
+           daemon_image_current(pid) ? "true" : "false", engine_diagnostics_json(freezer, pid > 0).c_str());
     return 0;
 }
 

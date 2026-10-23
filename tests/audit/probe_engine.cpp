@@ -47,20 +47,4 @@ int main() {
     assert(reassembler.stats().flows == 0);
     puts("OBSERVED idle-retention: memory releases on explicit prune, not on stats reads");
 
-    const CgroupRead unavailable = [](const std::string &, std::string &) { return false; };
-    assert(!frozen_cgroup_process(123, unavailable));
-    const CgroupRead frozen = [](const std::string &path, std::string &out) {
-        if (path == "/proc/123/cgroup") out = "0::/audit\n";
-        else if (path == "/proc/123/mountinfo") out = "1 0 0:1 / /synthetic rw - cgroup2 cgroup rw\n";
-        else if (path == "/synthetic/audit/cgroup.events") out = "populated 1\nfrozen 1\n";
-        else return false;
-        return true;
-    };
-    assert(frozen_cgroup_process(123, frozen));
-    const CgroupRead missing_events = [&](const std::string &path, std::string &out) {
-        return path != "/synthetic/audit/cgroup.events" && frozen(path, out);
-    };
-    assert(!frozen_cgroup_process(123, missing_events));
-    puts("OBSERVED unknown-freezer: failed membership/events reads collapse to false, like not frozen");
-
 }
