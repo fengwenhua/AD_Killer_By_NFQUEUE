@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,7 +24,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
-            if self.path in ("/redirect", "/loop", "/file"):
+            if self.path.startswith('/cancel-'):
+                self.send_response(200)
+                self.send_header('Content-Length', '1000')
+                self.end_headers()
+                self.wfile.flush()
+                self.server.transfer_started.set()
+                self.server.release_transfer.wait(10)
+            elif self.path in ("/redirect", "/loop", "/file"):
                 self.send_response(302)
                 self.send_header("Location", {"/redirect": "/ok", "/loop": "/loop",
                                              "/file": "file:///etc/passwd"}[self.path])
@@ -83,6 +91,8 @@ def main():
         try:
             for tls in (False, True):
                 server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+                server.transfer_started = threading.Event()
+                server.release_transfer = threading.Event()
                 if tls:
                     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
                     context.load_cert_chain(cert, key)
@@ -111,10 +121,39 @@ def main():
                     expected = b"ads.example.com\n" if success else b"old rules\n"
                     assert target.read_bytes() == expected, (binary.name, path, "old rules replaced")
                     assert not list(base.glob("rules.txt.tmp.*")), "download temp leaked"
+                # An idle response has no write callbacks: cancellation must
+                # use libcurl progress or the owned exec child's polling loop.
+                for action in ('file', 'prefix'):
+                    server = servers[0]
+                    server.transfer_started.clear()
+                    server.release_transfer.clear()
+                    marker = base / 'closing'
+                    marker.unlink(missing_ok=True)
+                    target = base / 'rules.txt'
+                    target.write_bytes(b'old rules\n')
+                    child = subprocess.Popen([str(binary), f'http://127.0.0.1:{server.server_port}/cancel-{action}',
+                                              str(target), str(marker), action], env=env,
+                                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    try:
+                        assert server.transfer_started.wait(5), (binary.name, action, 'request not started')
+                        started = time.monotonic()
+                        marker.write_text('uninstall requested\n')
+                        stdout, stderr = child.communicate(timeout=5)
+                        assert child.returncode == 1 and '卸载' in stderr, (binary.name, action, stdout, stderr)
+                        assert time.monotonic() - started < 5
+                        assert target.read_bytes() == b'old rules\n'
+                        assert not list(base.glob('rules.txt.tmp.*'))
+                    finally:
+                        server.release_transfer.set()
+                        marker.unlink(missing_ok=True)
+                        if child.poll() is None:
+                            child.kill()
+                            child.wait()
             print("real libcurl/exec curl HTTP redirects, errors, TLS rejection, "
-                  "64 MiB limits and atomic old-file preservation tests passed")
+                  "64 MiB limits, idle cancellation and atomic old-file preservation tests passed")
         finally:
             for server in servers:
+                server.release_transfer.set()
                 server.shutdown()
                 server.server_close()
             for thread in threads:

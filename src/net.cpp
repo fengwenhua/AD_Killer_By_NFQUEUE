@@ -9,6 +9,7 @@
 #include "logging.h"
 #include "common.h"
 #include "task_context.h"
+#include "owned_child.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -61,6 +62,10 @@ enum {
     CURLOPT_LOW_SPEED_TIME_ = 20,
     CURLOPT_USERAGENT_ = 10018,
     CURLOPT_FAILONERROR_ = 45,
+    CURLOPT_NOPROGRESS_ = 43,
+    CURLOPT_PROGRESSFUNCTION_ = 20056,
+    CURLOPT_XFERINFODATA_ = 10057,
+    CURLOPT_XFERINFOFUNCTION_ = 20219,
     CURLOPT_FOLLOWLOCATION_ = 52,
     CURLOPT_SSL_VERIFYPEER_ = 64,
     CURLOPT_MAXREDIRS_ = 68,
@@ -138,15 +143,47 @@ void net_curl_shutdown() {
 
 namespace {
 
+// A failed termination poisons the rest of this process's downloads: never
+// reuse a temp name or start another backend under an unconfirmed writer.
+thread_local bool unconfirmed_download_writer = false;
+struct TransferCancellation {
+    bool enabled = !operation_marker_path.empty(), cancelled = false;
+    std::chrono::steady_clock::time_point checked {};
+    bool check() {
+        if (!enabled || cancelled) return cancelled;
+        const auto now = std::chrono::steady_clock::now();
+        if (checked.time_since_epoch().count() && now - checked < std::chrono::milliseconds(100)) return false;
+        checked = now; cancelled = operation_closing(); return cancelled;
+    }
+};
+int cancel_transfer(void *user, int64_t, int64_t, int64_t, int64_t) {
+    return static_cast<TransferCancellation *>(user)->check() ? 1 : 0;
+}
+int cancel_transfer_legacy(void *user, double, double, double, double) {
+    return static_cast<TransferCancellation *>(user)->check() ? 1 : 0;
+}
+int configure_transfer_cancellation(void *easy, TransferCancellation &cancel) {
+    if (!cancel.enabled) return 0;
+    int code = p_easy_setopt(easy, CURLOPT_XFERINFOFUNCTION_, cancel_transfer);
+    // XFERINFO appeared in 7.32.0; keep the exact legacy callback ABI for old
+    // system libraries rather than silently dropping idle cancellation.
+    if (code) code = p_easy_setopt(easy, CURLOPT_PROGRESSFUNCTION_, cancel_transfer_legacy);
+    if (!code) code = p_easy_setopt(easy, CURLOPT_XFERINFODATA_, &cancel);
+    if (!code) code = p_easy_setopt(easy, CURLOPT_NOPROGRESS_, 0L);
+    return code;
+}
+
 struct DownloadContext {
     FILE *file = nullptr;
     size_t bytes = 0;
     bool too_large = false;
     bool write_failed = false;
+    TransferCancellation cancellation;
 };
 
 size_t write_download(char *data, size_t size, size_t count, void *userdata) {
     auto *context = static_cast<DownloadContext *>(userdata);
+    if (context->cancellation.check()) return 0;
     if (count != 0 && size > SIZE_MAX / count) {
         context->too_large = true;
         return 0;
@@ -201,6 +238,7 @@ std::string download_via_libcurl(const std::string &url,
     context.file = file;
     char error_buffer[256] = {0};
     int option_error = 0;
+    option_error |= configure_transfer_cancellation(easy, context.cancellation);
     option_error |= p_easy_setopt(easy, CURLOPT_URL_, url.c_str());
     // CURLOPT_WRITEFUNCTION takes a function pointer, not an object pointer.
     // Passing the exact callback type matters for the variadic API ABI.
@@ -246,7 +284,8 @@ std::string download_via_libcurl(const std::string &url,
     if (success) return "";
 
     std::string reason;
-    if (context.too_large) reason = "响应超过 64 MiB";
+    if (context.cancellation.cancelled || operation_closing()) reason = "卸载已请求，下载已安全取消";
+    else if (context.too_large) reason = "响应超过 64 MiB";
     else if (response_code != 0 && (response_code < 200 || response_code >= 300))
         reason = "HTTP 状态码 " + std::to_string(response_code);
     else if (!effective_valid) reason = "重定向目标非法: " + effective_error;
@@ -265,15 +304,18 @@ const char *find_executable(const char *const *paths, size_t count) {
 }
 
 bool run_download_command(const std::vector<std::string> &arguments) {
-    if (arguments.empty()) return false;
+    if (arguments.empty() || unconfirmed_download_writer || operation_closing()) return false;
+    std::vector<char *> argv;
+    for (const auto &argument : arguments) argv.push_back(const_cast<char *>(argument.c_str()));
+    argv.push_back(nullptr);
     pid_t child = fork();
     if (child < 0) return false;
     if (child == 0) {
-        if (!inherit_task_lease()) _exit(127);
+        if (setpgid(0, 0) || !inherit_task_lease()) _exit(127);
         struct rlimit file_limit;
         file_limit.rlim_cur = MAX_RULE_DOWNLOAD_BYTES;
         file_limit.rlim_max = MAX_RULE_DOWNLOAD_BYTES;
-        setrlimit(RLIMIT_FSIZE, &file_limit);
+        if (setrlimit(RLIMIT_FSIZE, &file_limit)) _exit(127);
 
         int null_fd = open("/dev/null", O_RDWR | O_CLOEXEC);
         if (null_fd >= 0) {
@@ -283,36 +325,25 @@ bool run_download_command(const std::vector<std::string> &arguments) {
             if (null_fd > STDERR_FILENO) close(null_fd);
         }
 
-        std::vector<char *> argv;
-        argv.reserve(arguments.size() + 1);
-        for (const auto &argument : arguments)
-            argv.push_back(const_cast<char *>(argument.c_str()));
-        argv.push_back(nullptr);
         execv(argv[0], argv.data());
         _exit(127);
     }
 
-    struct timespec started;
-    clock_gettime(CLOCK_MONOTONIC, &started);
-    int status = 0;
+    setpgid(child, child);
+    const bool group_owned = getpgid(child) == child;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(305);
+    bool owned = true, interrupted = false;
     while (true) {
-        pid_t result = waitpid(child, &status, WNOHANG);
-        if (result == child) break;
-        if (result < 0 && errno != EINTR) {
-            kill(child, SIGKILL);
-            waitpid(child, nullptr, 0);
-            return false;
-        }
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        if (now.tv_sec - started.tv_sec > 305) {
-            kill(child, SIGKILL);
-            waitpid(child, nullptr, 0);
-            return false;
-        }
+        siginfo_t info {};
+        const int result = waitid(P_PID, child, &info, WEXITED | WNOHANG | WNOWAIT);
+        if (result == 0 && info.si_pid == child) break;
+        if (result < 0 && errno != EINTR) { owned = false; interrupted = true; break; }
+        if (operation_closing() || std::chrono::steady_clock::now() >= deadline) { interrupted = true; break; }
         usleep(100 * 1000);
     }
-    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    const auto finished = finish_owned_child(child, owned, group_owned);
+    if (!finished.reaped || !finished.group_gone) unconfirmed_download_writer = true;
+    return !interrupted && finished.reaped && finished.group_gone && finished.exit_code == 0;
 }
 
 bool try_exec_backend(const std::vector<std::string> &arguments,
@@ -321,7 +352,7 @@ bool try_exec_backend(const std::vector<std::string> &arguments,
     if (fd < 0) return false;
     close(fd);
     bool success = run_download_command(arguments) && valid_download_file(temp_path);
-    if (!success) unlink(temp_path.c_str());
+    if (!success && !unconfirmed_download_writer) unlink(temp_path.c_str());
     return success;
 }
 
@@ -340,6 +371,8 @@ std::string download_via_exec(const std::string &url,
                              temp_path))
             return "";
     }
+    if (unconfirmed_download_writer) return "无法确认下载进程退出，保留临时文件并停止后续下载";
+    if (operation_closing()) return "卸载已请求，下载已安全取消";
 
     // BusyBox wget has no --max-redirect option and its internal TLS backend
     // need not validate certificates. Do not silently use it as a secure
@@ -359,10 +392,14 @@ std::string download_via_exec(const std::string &url,
 }  // namespace
 
 namespace {
-struct PrefixContext { std::string bytes; size_t limit = 4096; bool limited = false; long http_status = 0; };
+struct PrefixContext {
+    std::string bytes; size_t limit = 4096; bool limited = false; long http_status = 0;
+    TransferCancellation cancellation;
+};
 
 size_t write_prefix(char *data, size_t size, size_t count, void *user) {
     auto &context = *static_cast<PrefixContext *>(user);
+    if (context.cancellation.check()) return 0;
     if (count && size > SIZE_MAX / count) return 0;
     const size_t incoming = size * count;
     const size_t take = std::min(incoming, context.limit - context.bytes.size());
@@ -377,7 +414,7 @@ size_t write_prefix(char *data, size_t size, size_t count, void *user) {
 std::string prefix_libcurl(const std::string &url, PrefixContext &context) {
     void *easy = p_easy_init();
     if (!easy) return "curl 初始化失败";
-    int options = 0;
+    int options = configure_transfer_cancellation(easy, context.cancellation);
     options |= p_easy_setopt(easy, CURLOPT_URL_, url.c_str());
     const std::string range = "0-" + std::to_string(context.limit - 1);
     options |= p_easy_setopt(easy, CURLOPT_RANGE_, range.c_str());
@@ -403,6 +440,7 @@ std::string prefix_libcurl(const std::string &url, PrefixContext &context) {
     const bool valid = info && effective && validate_download_url(effective) && status >= 200 && status < 300;
     context.http_status = status;
     p_easy_cleanup(easy);
+    if (context.cancellation.cancelled || operation_closing()) return "卸载已请求，预览已安全取消";
     if (!options && valid && (performed == 0 || (performed == 23 && context.limited))) return "";
     return "预览 HTTP/TLS 请求失败（状态 " + std::to_string(status) + "）";
 }
@@ -423,20 +461,23 @@ std::string prefix_exec(const std::string &url, PrefixContext &context) {
         // Small prefixes must reach the pipe without waiting for a stdio block
         // to fill (the server may deliberately stream the tail very slowly).
         "--include", "--suppress-connect-headers", "--no-buffer", "--output", "-", "--", url};
+    std::vector<char *> argv;
+    for (auto &argument : arguments) argv.push_back(const_cast<char *>(argument.c_str()));
+    argv.push_back(nullptr);
     int descriptors[2];
     if (pipe(descriptors) != 0) return "无法创建预览管道";
     const pid_t child = fork();
     if (child < 0) { close(descriptors[0]); close(descriptors[1]); return "无法创建预览进程"; }
     if (child == 0) {
-        if (!inherit_task_lease()) _exit(127);
+        if (setpgid(0, 0) || !inherit_task_lease()) _exit(127);
         close(descriptors[0]);
         dup2(descriptors[1], STDOUT_FILENO); close(descriptors[1]);
         int null_fd = open("/dev/null", O_RDWR);
         if (null_fd >= 0) { dup2(null_fd, STDIN_FILENO); dup2(null_fd, STDERR_FILENO); if (null_fd > 2) close(null_fd); }
-        std::vector<char *> argv;
-        for (auto &argument : arguments) argv.push_back(const_cast<char *>(argument.c_str()));
-        argv.push_back(nullptr); execv(program, argv.data()); _exit(127);
+        execv(program, argv.data()); _exit(127);
     }
+    setpgid(child, child);
+    const bool group_owned = getpgid(child) == child;
     close(descriptors[1]);
     fcntl(descriptors[0], F_SETFL, O_NONBLOCK);
     timespec start {}; clock_gettime(CLOCK_MONOTONIC, &start);
@@ -444,6 +485,7 @@ std::string prefix_exec(const std::string &url, PrefixContext &context) {
     size_t header_bytes = 0;
     bool body = false, ended = false;
     while (!ended && error.empty() && !context.limited) {
+        if (context.cancellation.check()) { error = "卸载已请求，预览已安全取消"; break; }
         timespec now {}; clock_gettime(CLOCK_MONOTONIC, &now);
         if (now.tv_sec - start.tv_sec >= 20) { error = "预览请求超时"; break; }
         pollfd descriptor {descriptors[0], POLLIN | POLLHUP, 0};
@@ -479,10 +521,24 @@ std::string prefix_exec(const std::string &url, PrefixContext &context) {
         if (body && error.empty()) write_prefix(chunk.data(), 1, chunk.size(), &context);
     }
     close(descriptors[0]);
-    if (!ended || !error.empty()) kill(child, SIGKILL);
-    int status = 0;
-    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
-    if (error.empty() && (!body || (!context.limited && (!WIFEXITED(status) || WEXITSTATUS(status) != 0))))
+    // EOF may precede the child's final exit. Reserve its PID with WNOWAIT
+    // while allowing a short normal exit, then terminate only this owned group.
+    bool owned = true;
+    const auto exit_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+    while (true) {
+        siginfo_t info {};
+        const int result = waitid(P_PID, child, &info, WEXITED | WNOHANG | WNOWAIT);
+        if (result == 0 && info.si_pid == child) break;
+        if (result < 0 && errno != EINTR) { owned = false; break; }
+        if (!ended || !error.empty() || context.limited || std::chrono::steady_clock::now() >= exit_deadline) break;
+        usleep(1000);
+    }
+    const auto finished = finish_owned_child(child, owned, group_owned);
+    if (!finished.reaped || !finished.group_gone) {
+        unconfirmed_download_writer = true;
+        return "无法确认预览进程退出，停止后续下载";
+    }
+    if (error.empty() && (!body || (!context.limited && finished.exit_code != 0)))
         error = "预览 HTTP/TLS 请求失败";
     return error;
 }
@@ -496,6 +552,8 @@ std::string download_prefix(const std::string &url, std::string &prefix, bool &l
 std::string download_prefix_status(const std::string &url, std::string &prefix, bool &limited, size_t byte_limit, long &http_status) {
     http_status = 0;
     prefix.clear(); limited = false;
+    if (unconfirmed_download_writer) return "先前下载进程尚未确认退出";
+    if (operation_closing()) return "卸载已请求，未开始预览";
     if (byte_limit == 0 || byte_limit > 32768) return "预览字节限制非法";
     std::string error;
     if (!validate_download_url(url, &error)) return error;
@@ -512,6 +570,8 @@ std::string download_prefix_status(const std::string &url, std::string &prefix, 
 }
 
 std::string download_file(const std::string &url, const std::string &path) {
+    if (unconfirmed_download_writer) return "先前下载进程尚未确认退出";
+    if (operation_closing()) return "卸载已请求，未开始下载";
     std::string policy_error;
     if (!validate_download_url(url, &policy_error)) return policy_error;
 
@@ -527,13 +587,21 @@ std::string download_file(const std::string &url, const std::string &path) {
         log_line("libcurl", "系统未找到可用 libcurl,尝试无 shell 后端");
     }
 
+    if (operation_closing()) {
+        unlink(temp_path.c_str());
+        return "卸载已请求，下载已安全取消";
+    }
     if (!valid_download_file(temp_path)) {
         unlink(temp_path.c_str());
         error = download_via_exec(url, temp_path);
     }
     if (!error.empty()) {
-        unlink(temp_path.c_str());
+        if (!unconfirmed_download_writer) unlink(temp_path.c_str());
         return error;
+    }
+    if (operation_closing()) {
+        unlink(temp_path.c_str());
+        return "卸载已请求，下载结果未发布";
     }
     if (!valid_download_file(temp_path)) {
         unlink(temp_path.c_str());

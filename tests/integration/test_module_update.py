@@ -63,6 +63,7 @@ def main():
             subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-O1', '-pthread', '-Wall', '-Wextra', '-Werror',
                         f'-DMODULE_VERSION="{version}"', f'-DMODULE_VERSION_CODE={code}', f'-DMODULE_RELEASE_CHANNEL="{channel}"',
                         '-DADK_NFQ_TEST_CURL_LIBRARY="libcurl.so.4"', '-DADK_NFQ_TEST_CURL_PROGRAM="/usr/bin/curl"',
+                        '-DADK_NFQ_TEST_INSTALL_WARNING_MS=100',
                         f'-DADK_NFQ_TEST_RELEASE_REPO="{base}"', f'-DADK_NFQ_TEST_RELEASE_API="{base}/api"',
                         '-I'+str(ROOT/'src'), *map(str, sorted((ROOT/'src').glob('*.cpp'))), '-ldl', '-lz', '-o', str(target)], check=True)
         build(binary, '1.0', 100, 'stable')
@@ -123,6 +124,13 @@ def main():
             MANAGER.chmod(0o700)
             job('--module-update-install', success=False)
             assert not json.loads(command('--module-update-status'))['rebootRequired']
+            MANAGER.unlink()
+            # A slow manager closes its output and exceeds the warning budget.
+            # Keep waiting for its normal exit; never kill an installing module.
+            MANAGER.write_text('#!/bin/sh\nexec 1>&- 2>&-\nsleep 1\nprintf completed > /data/adb/AD_Killer_By_NFQUEUE/fake-slow-installed\n')
+            MANAGER.chmod(0o700)
+            job('--module-update-install')
+            assert (DATA/'fake-slow-installed').read_text() == 'completed'
             MANAGER.unlink()
             for path, magisk in ((MANAGER, False), (Path('/data/adb/apd'), False), (Path('/data/adb/magisk/magisk'), True)):
                 job('--module-update-download')

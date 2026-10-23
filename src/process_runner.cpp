@@ -1,5 +1,6 @@
 #include "process_runner.h"
 #include "operation_gate.h"
+#include "owned_child.h"
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -113,28 +114,10 @@ ProcessResult run_process(const std::vector<std::string> &arguments, unsigned ti
         pollfd descriptors[2] = {{channels[0], POLLIN | POLLHUP, 0}, {channels[2], POLLIN | POLLHUP, 0}};
         if (poll(descriptors, 2, 10) < 0 && errno != EINTR) { result.error = strerror(errno); break; }
     }
-    if (owned) {
-        // The unreaped leader still reserves this PID/group ID. Also contain
-        // background descendants that closed their pipes before the leader.
-        kill(-child, SIGKILL); kill(child, SIGKILL);
-    }
     close_channels();
-    const auto reap_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
-    int status = 0;
-    result.reaped = false;
-    while (owned) {
-        const auto waited = waitpid(child, &status, WNOHANG);
-        if (waited == child) { result.reaped = true; break; }
-        if (waited < 0 && errno != EINTR) break;
-        if (std::chrono::steady_clock::now() >= reap_deadline) break;
-        usleep(1000);
-    }
-    if (result.reaped) result.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : -1;
-    else if (result.error.empty()) result.error = "command termination not confirmed";
-    // Signal 0 only after reaping: never send another terminating signal once
-    // the PID could be reused. Even an unreaped grandchild remains unknown.
-    errno = 0;
-    result.group_gone = result.reaped && kill(-child, 0) < 0 && errno == ESRCH;
+    const auto finished = finish_owned_child(child, owned);
+    result.reaped = finished.reaped; result.group_gone = finished.group_gone; result.exit_code = finished.exit_code;
+    if (!result.reaped && result.error.empty()) result.error = "command termination not confirmed";
     if (!result.group_gone && result.error.empty()) result.error = "command group release not confirmed";
     return result;
 }

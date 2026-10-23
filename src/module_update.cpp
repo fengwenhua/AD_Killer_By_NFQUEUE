@@ -95,27 +95,37 @@ std::string install_package(const std::string &path) {
     close(output[1]);
     setpgid(child,child);
     fcntl(output[0], F_SETFL, O_NONBLOCK);
-    auto deadline = std::chrono::steady_clock::now()+std::chrono::minutes(5);
+#if defined(ADK_NFQ_TEST_INSTALL_WARNING_MS)
+    const auto deadline = std::chrono::steady_clock::now()+std::chrono::milliseconds(ADK_NFQ_TEST_INSTALL_WARNING_MS);
+#else
+    const auto deadline = std::chrono::steady_clock::now()+std::chrono::minutes(5);
+#endif
     int result = 0;
-    bool finished = false;
-    while (std::chrono::steady_clock::now() < deadline) {
+    bool finished = false, warned = false, pipe_open = true;
+    while (true) {
         char buffer[2048];
-        ssize_t count = read(output[0], buffer, sizeof(buffer)-1);
+        ssize_t count = pipe_open ? read(output[0], buffer, sizeof(buffer)-1) : 0;
         if (count > 0) { buffer[count] = 0; log_line("模块安装", "%s", buffer); }
+        if (pipe_open && (count == 0 || (count < 0 && errno != EINTR && errno != EAGAIN))) {
+            close(output[0]); pipe_open = false;
+        }
         if (!finished) {
             pid_t waited = waitpid(child, &result, WNOHANG);
             if (waited == child) finished = true;
             else if (waited < 0 && errno != EINTR) break;
         }
         if (finished && count <= 0) break;
-        pollfd descriptor{output[0], POLLIN, 0};
-        poll(&descriptor,1,100);
+        if (!warned && std::chrono::steady_clock::now() >= deadline) {
+            warned = true;
+            log_line("模块安装", "安装器运行时间较长，继续等待管理器完成；不会自动终止安装或清理安装包");
+        }
+        pollfd descriptor{pipe_open ? output[0] : -1, POLLIN, 0};
+        poll(&descriptor, 1, 100);
     }
-    close(output[0]);
+    if (pipe_open) close(output[0]);
     if (!finished) {
-        kill(-child,SIGKILL); kill(child,SIGKILL);
-        while (waitpid(child,&result,0) < 0 && errno == EINTR) {}
-        return "安装器超时或中断，请检查管理器中的安装状态";
+        task_installer_completion_unknown = true;
+        return "无法确认安装器是否完成，保留安装阶段和安装包，请检查管理器状态";
     }
     return WIFEXITED(result) && WEXITSTATUS(result)==0 ? "" : "管理器安装失败，请查看任务日志";
 }

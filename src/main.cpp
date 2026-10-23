@@ -1240,6 +1240,7 @@ static int cmd_update_start(const std::string &test_url = "", const std::string 
             _exit(1);
         }
         int result = module_version.empty() ? cmd_update(test_url) : module_update::worker(module_version, install_module, module_preview);
+        if (task_installer_completion_unknown) _exit(1); // Preserve installing journal; never claim a safe terminal state.
         state.status = result == 0 ? "success" : "failed"; state.exit_code = result;
         state.reason = result == 0 ? "completed" : operation_closing() ? "uninstall_requested" : "worker_failed";
         if (!task_progress("finished")) _exit(1);
