@@ -23,3 +23,14 @@ foo-.example.com	0	-	-
 @@||advertising.civitai.	0	-	-
 ||example.com.^	0	-	-
 example.com.	0	-	-
+||badfilter.example.com^	1	black_suffix	badfilter.example.com
+@@||badfilter.example.com^	1	white_suffix	badfilter.example.com
+BadFilter.Example.Com	1	black_exact	badfilter.example.com
+@@prefix-badfilter.example.com	1	white_exact	prefix-badfilter.example.com
+*.BADFILTER.example.com	1	black_suffix	badfilter.example.com
+@@*.prefixbadfilter.example.com	1	white_suffix	prefixbadfilter.example.com
+||badfilter.example.com^$badfilter	0	-	-
+@@||badfilter.example.com^$badfilter	0	-	-
+||example.com^$BADFILTER	0	-	-
+@@example.com$badfilter	0	-	-
+||badfilter.example.com^$important	0	-	-

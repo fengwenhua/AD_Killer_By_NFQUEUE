@@ -62,8 +62,8 @@ def main():
                         *(str(ROOT / 'src' / source) for source in sources),
                         *linker, '-lz', '-o', str(engine)], check=True, timeout=120)
         observed += observe([str(engine)])
-        assert sum(line.startswith('OBSERVED ') for line in observed.splitlines()) == 8
-    print('Audit characterization completed: 8 remaining observations; O02 is a normal frontend regression now.')
+        assert sum(line.startswith('OBSERVED ') for line in observed.splitlines()) == 7
+    print('Audit characterization completed: 7 remaining observations; O02/O18 have normal regressions now.')
 
 
 if __name__ == '__main__':

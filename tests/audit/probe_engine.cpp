@@ -63,10 +63,4 @@ int main() {
     assert(!frozen_cgroup_process(123, missing_events));
     puts("OBSERVED unknown-freezer: failed membership/events reads collapse to false, like not frozen");
 
-    ParsedDomainRule rule;
-    assert(parse_adguard_rule("||tracker.example.com^", rule));
-    assert(!parse_adguard_rule("||badfilter.example.com^", rule));
-    assert(!parse_adguard_rule("@@||badfilter.example.com^", rule));
-    assert(parse_hosts_rule("badfilter.example.com", rule));
-    puts("OBSERVED badfilter-substring: valid black/white domains containing badfilter are rejected by AdGuard parser");
 }

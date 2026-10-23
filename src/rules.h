@@ -4,7 +4,7 @@
 // 规则语法与匹配语义:
 //   - 存储:排序后的 FNV-1a 64 位哈希数组(精确匹配)+ 后缀数组(||domain 形态)
 //   - AdGuard 域名级语法:@@(白名单)、||(后缀)、*. (通配域名)、末尾 ^
-//   - URL/路径、正则、请求级 $ 修饰符、cosmetic/scriptlet 和 badfilter 均跳过
+//   - URL/路径、正则、请求级 $ 修饰符(含 $badfilter)、cosmetic/scriptlet 均跳过
 //   - DNS 查询日志四态判定文案:PASS(whitelist) / BLOCK(suffix) /
 //     BLOCK(exact) / PASS(default)
 // ============================================================================

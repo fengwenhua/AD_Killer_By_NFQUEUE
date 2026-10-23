@@ -59,7 +59,7 @@ def parse_adguard_line(line):
     is_white = s.startswith("@@")
     if is_white:
         s = s[2:].lstrip(" \t")
-    if not s or "badfilter" in s:
+    if not s:
         return None
     suffix = s.startswith(("*.", "||"))
     if suffix:

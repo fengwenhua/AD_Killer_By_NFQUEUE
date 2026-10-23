@@ -232,9 +232,6 @@ bool parse_adguard_rule(const std::string &raw, ParsedDomainRule &rule) {
         b = line.find_first_not_of(" \t");
         if (b != std::string::npos) line = line.substr(b);
     }
-    // 请求级修饰符无法在域名层准确表达。
-    if (line.find("badfilter") != std::string::npos) return 0;
-
     // 通配符域名:*.example.com → 后缀规则
     bool suffix = false;
     if (line.compare(0, 2, "*.") == 0) {
@@ -250,6 +247,8 @@ bool parse_adguard_rule(const std::string &raw, ParsedDomainRule &rule) {
 
     // 只允许域名锚点末尾的单个 ^；其它分隔符代表路径、正则或条件规则。
     if (!line.empty() && line.back() == '^') line.pop_back();
+    // Modifiers (including $badfilter) are unsupported syntax. A domain label
+    // containing the word "badfilter" is not a modifier and remains valid.
     if (line.find_first_of("^$*/| \t") != std::string::npos) return 0;
 
     // 小写归一

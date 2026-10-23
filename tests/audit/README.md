@@ -33,10 +33,11 @@ python3 tests/audit/run_deep_audit.py --sanitize
 | `fault-state` | 回滚失败后 `g_stop=true`，`g_fault=false` | 不声称执行了完整 daemon 退出路径 |
 | `idle-retention` | 读取重组统计不执行回收，显式 prune 后释放 | 无实际等待；结合引擎调用路径判断空闲回收缺口 |
 | `unknown-freezer` | membership/events 读取失败折叠成 false | 使用合成 cgroup 数据，未冻结真实进程 |
-| `badfilter-substring` | 合法黑白域名含 badfilter 子串时被 AdGuard 解析器拒绝 | 同时以普通域名及 Hosts 解析作对照 |
 
 O02 的 `read-failure-save` 已修复，从缺陷探针迁移到
 `frontend/tests/config-edit.test.js`，正常 `make test` 验证读取失败后不可保存。
-当前隔离审计保留其余 8 个观测点，不再要求这个已修复的缺陷存在。
+O18 的 `badfilter-substring` 已迁移至 `tests/rule_cases.tsv`，由实际 C++
+解析器及 Python 合并工具共同验证黑白、精确/后缀和真正的 `$` 修饰符。
+当前隔离审计保留其余 7 个观测点，不再要求这些已修复的缺陷存在。
 
 最终出现 `Audit characterization completed` 仅表示预期的当前行为已被观测；ASan/UBSan 没有报错也不代表完成安全审计。
