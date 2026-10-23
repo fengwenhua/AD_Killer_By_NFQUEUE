@@ -44,6 +44,18 @@ def state() -> str:
     return path.read_text().strip() if path.exists() else ""
 
 
+def reload_command(*args):
+    # A route can already match while workers are still draining the cutover
+    # epoch. Only use this helper for commands expected to apply successfully;
+    # the pending O03 ACK API must replace this test-only log boundary later.
+    log = DATA / 'log/engine.log'
+    previous = log.read_text().count('热重载已完成:') if log.exists() else 0
+    result = command(BINARY, *args)
+    wait_for(lambda: log.exists() and log.read_text().count('热重载已完成:') > previous,
+             'completed policy cutover after ' + ' '.join(args))
+    return result
+
+
 def dns_query(host: str) -> bytes:
     labels = b"".join(bytes([len(label)]) + label.encode() for label in host.split("."))
     return struct.pack("!6H", 1, 0x100, 1, 0, 0, 0) + labels + b"\0\0\1\0\1"
@@ -219,21 +231,21 @@ def main() -> None:
             # routes without requiring an explicit --quic on first.
             quic_rejection(family)
 
-        command(BINARY, "--quic", "on")
+        reload_command("--quic", "on")
         wait_for(lambda: json.loads(command(BINARY, "--status").splitlines()[-1])["iptables_active"],
                  "QUIC routing enabled")
         for family in (socket.AF_INET, socket.AF_INET6):
             quic_rejection(family)
-        command(BINARY, "--quic", "off")
+        reload_command("--quic", "off")
         wait_for(lambda: json.loads(command(BINARY, "--status").splitlines()[-1])["iptables_active"],
                  "QUIC routing disabled")
 
-        command(BINARY, "--scope", "1")
+        reload_command("--scope", "1")
         wait_for(lambda: json.loads(command(BINARY, "--status").splitlines()[-1])
                  ["iptables_active"], "per-app selector generation")
         # Empty per-app selector must bypass even a matching domain.
         udp_dns(socket.AF_INET, "ads.example.com", True)
-        command(BINARY, "--scope", "0")
+        reload_command("--scope", "0")
         wait_for(lambda: json.loads(command(BINARY, "--status").splitlines()[-1])
                  ["iptables_active"], "global generation restored")
 

@@ -686,6 +686,15 @@ static int cmd_apps_apply() {
         printf("{\"status\": \"error_storage\"}\n");
         return 1;
     }
+    // Same order as the daemon's candidate capture. Keep selected packages,
+    // scope and the generated UID cache from different saves from interleaving.
+    ExclusiveFileLock apps(DATA_FILE(".apps.lock").c_str(), true, 1000);
+    ExclusiveFileLock editable(DATA_FILE(".editable.lock").c_str(), true, 1000);
+    ExclusiveFileLock state(STATE_LOCK_FILE, true, 1000);
+    if (!apps.ok() || !editable.ok() || !state.ok()) {
+        printf("{\"status\":\"busy\",\"message\":\"配置正在保存，请稍后重试\"}\n");
+        return 2;
+    }
     int scope = 0;
     {
         std::string s = read_conf_value(FILE_STATE_CONF, "scope");

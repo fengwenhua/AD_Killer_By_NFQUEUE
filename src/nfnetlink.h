@@ -107,6 +107,7 @@ struct NfqReceiveReport {
     uint32_t sequence = 0;
     uint16_t request_type = 0;
     uint64_t stale_verdicts = 0;
+    bool idle = false; // recvmsg observed EAGAIN, not EINTR or an ACK-only frame
 };
 // Thread-local receive diagnostics, including non-fatal expired packet IDs.
 NfqReceiveReport &nfq_receive_report();

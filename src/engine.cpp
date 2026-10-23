@@ -11,6 +11,8 @@
 #include "startup_status.h"
 #include "queue_ownership.h"
 #include "fast_response.h"
+#include "policy_barrier.h"
+#include "exclusive_file_lock.h"
 
 #include <atomic>
 #include <chrono>
@@ -36,6 +38,9 @@ static volatile sig_atomic_t g_signal_reload = 0;
 static HandshakeReassembler g_handshakes;
 static DnsTcpReassembler g_dns_tcp;
 static DataPlaneMetrics g_metrics;
+static PolicyBarrier g_policy;
+static bool g_workers_started = false; // owner thread only
+static bool g_applied_block_quic = false; // protected by policy read/write leases
 // Each worker owns its separate, bounded-timeout CTNETLINK request socket.
 static int g_ct_fds[2] = {-1, -1};
 static FastResponseSender g_response_senders[2];
@@ -157,6 +162,8 @@ static bool dev_mode_now() {
 static bool on_dns_packet(const NfqPacket &pkt, void *ud) {
     int fd = (int)(intptr_t)ud;
     g_metrics.record_packet(true);
+    PolicyBarrier::Read policy(g_policy);
+    if (!policy.active()) return send_verdict(fd, QUEUE_DNS, pkt.id, NF_ACCEPT_);
     bool counted_truncated = pkt.truncated;
     if (counted_truncated) g_metrics.record_truncated();
     TransportView v;
@@ -237,11 +244,16 @@ static bool on_dns_packet(const NfqPacket &pkt, void *ud) {
 static bool on_tls_packet(const NfqPacket &pkt, void *ud) {
     int fd = (int)(intptr_t)ud;
     g_metrics.record_packet(false);
+    PolicyBarrier::Read policy(g_policy);
+    if (!policy.active()) return send_verdict(fd, QUEUE_TLS_HTTP, pkt.id, NF_ACCEPT_);
     bool counted_truncated = pkt.truncated;
     if (counted_truncated) g_metrics.record_truncated();
     TransportView v;
     const bool decoded = decode_ip_transport(pkt.payload, pkt.payload_len, pkt.hw_proto, v);
     if (decoded && v.protocol == TransportProtocol::UDP && v.dst_port == 443) {
+        // A datagram admitted by the previous routes may arrive after QUIC was
+        // disabled. It must not be rejected under the new effective policy.
+        if (!g_applied_block_quic) return send_verdict(fd, QUEUE_TLS_HTTP, pkt.id, NF_ACCEPT_);
         if (send_fast_response(QUEUE_TLS_HTTP, udp_unreachable_packet(pkt.payload, pkt.payload_len, pkt.hw_proto), pkt.outdev)) {
             g_metrics.record_quic_reject();
             return send_verdict(fd, QUEUE_TLS_HTTP, pkt.id, NF_DROP_);
@@ -374,9 +386,11 @@ static void recv_loop(int fd, int queue_num, NfqPacketCb cb) {
     int idle = 0;
     while (!g_stop.load(std::memory_order_relaxed)) {
         int n = -1;
+        const uint64_t policy_epoch = g_policy.epoch();
         try {
             n = nfq_recv_packets(fd, cb, (void *)(intptr_t)fd);
             g_metrics.record_stale_verdicts(nfq_receive_report().stale_verdicts);
+            if (nfq_receive_report().idle) g_policy.observe_idle(queue_num, policy_epoch);
         } catch (const std::exception &error) {
             record_engine_error("packet_callback_exception", "队列 " + std::to_string(queue_num) +
                                 " 处理异常：" + error.what());
@@ -510,46 +524,91 @@ EngineConfig load_engine_config() {
     return cfg;
 }
 
-// 热重载:规则重建 + iptables 重放(QUIC/应用名单变更同步生效)
-static void hot_reload() {
-    log_line("系统", "收到热重载信号,重建 FNV-1a 64位哈希池...");
-    // 文件读取、解压和哈希池构建均在私有候选对象上完成。队列线程在此期间继续
-    // 使用旧的不可变快照；候选完整有效后才通过一次原子 store 发布。
-    auto candidate = std::make_shared<RuleDB>();
-    load_all_rules(*candidate);
-    if (!candidate->load_valid) {
-        log_line("错误", "热重载失败,已保留旧规则与路由: %s", candidate->load_error.c_str());
-        return;
-    } else {
-        save_rule_stats(*candidate);
-        publish_rules_snapshot(candidate);
-        log_line("规则", "已加载:黑 %zu / 白 %zu (mode %d)",
-                 candidate->black.size(), candidate->white.size(), candidate->mode);
+// Snapshot writers participate in the same lock order: apps -> editable ->
+// state. In particular, do not read the rule mode, then read routing settings
+// again after a slow gzip load. rules.current selects immutable bundle files
+// once; generation collection must respect readers (see O01).
+static bool load_candidate(EngineConfig &cfg, RuleDB &rules, std::string &error) {
+    ExclusiveFileLock apps(DATA_FILE(".apps.lock").c_str(), true, 1000);
+    ExclusiveFileLock editable(DATA_FILE(".editable.lock").c_str(), true, 1000);
+    ExclusiveFileLock state(STATE_LOCK_FILE, true, 1000);
+    if (!apps.ok() || !editable.ok() || !state.ok()) {
+        error = "配置正在保存，暂未应用；请稍后重试";
+        return false;
     }
-    // 清除旧规则判定留下的短期 blocked 流，避免白名单热更新后继续沿用旧结论。
-    g_handshakes.clear();
-    g_dns_tcp.clear();
-    EngineConfig cfg = load_engine_config();
+    cfg = load_engine_config();
+    load_all_rules(rules);
+    if (!rules.load_valid) { error = rules.load_error; return false; }
+    if (cfg.mode != rules.mode) { error = "候选规则与路由的模式不一致"; return false; }
+    rules.finalize(); // No allocation/sorting should be deferred until cutover.
+    return true;
+}
+
+// After switching/rolling back routes, keep bypassing until both consumers
+// have observed a genuinely empty socket after this epoch. An ACK-only frame
+// or an interrupted syscall is not evidence of a drained receive queue.
+static bool drain_policy_transition(PolicyBarrier::Change &change) {
+    if (!g_workers_started) return true;
+    const uint64_t epoch = change.seal();
+    const uint64_t deadline = monotonic_ms() + 3000;
+    while (!g_policy.drained(epoch) && !stop_requested() && monotonic_ms() < deadline)
+        usleep(2000);
+    if (g_policy.drained(epoch) && !stop_requested()) return true;
+    change.fail_open();
+    if (stop_requested()) return false;
+    record_engine_error("reload_drain_failed", "热重载收包边界未能确认，停止接管并保留故障诊断");
+    watchdog_emergency();
+    return false;
+}
+
+// 热重载的协调事务：慢速候选构建不阻塞旧策略；入口切换期间收包线程
+// 仅发送无 connmark 的 ACCEPT，不会在新/旧双栈路由上执行混合规则判定。
+static bool hot_reload() {
+    log_line("系统", "收到热重载信号，构建私有规则与路由候选...");
+    auto candidate = std::make_shared<RuleDB>();
+    EngineConfig cfg;
+    std::string candidate_error;
+    if (!load_candidate(cfg, *candidate, candidate_error)) {
+        log_line("错误", "热重载失败，保留旧规则与路由: %s", candidate_error.c_str());
+        return false;
+    }
     IptablesConfig icfg;
     icfg.block_quic = cfg.block_quic;
     icfg.scope = cfg.scope;
     icfg.bypass_uids = cfg.bypass_uids;
     icfg.intercept_uids = cfg.intercept_uids;
-    // 热重载统一构建非活动 A/B 代际；双栈规则均完整落地后再切换稳定入口链。
-    // scope、白名单、selector 与 QUIC 配置因此在同一 route lock 事务中生效，
-    // 任一阶段失败由安装器恢复旧入口，不产生先清空生效链的放行窗口。
+    PolicyBarrier::Change change(g_policy);
+    if (!change.ok()) {
+        log_line("错误", "热重载未能及时取得数据面写租约，保留旧策略");
+        return false;
+    }
     std::string err = iptables_install(icfg);
     if (!err.empty()) {
         if (err.find("rollback failed") != std::string::npos) {
+            change.fail_open();
             log_line("致命", "热重载 iptables 失败且回滚失败: %s,拔除规则保网",
                      err.c_str());
             record_engine_error("reload_rollback_failed", "热重载路由回滚失败: " + err);
             watchdog_emergency();
         } else {
-            log_line("错误", "热重载 iptables 失败: %s,已保留旧路由继续运行",
+            log_line("错误", "热重载 iptables 失败: %s,已保留旧规则和路由",
                      err.c_str());
+            if (drain_policy_transition(change)) change.resume();
         }
+        return false;
     }
+    publish_rules_snapshot(candidate);
+    g_applied_block_quic = cfg.block_quic;
+    // Do not clear old reassembly decisions on a failed candidate or rollback.
+    // Existing kernel PASS/BLOCK connmarks intentionally retain flow lifetime.
+    g_handshakes.clear();
+    g_dns_tcp.clear();
+    if (!drain_policy_transition(change)) return false;
+    save_rule_stats(*candidate);
+    change.resume();
+    log_line("规则", "热重载已完成:黑 %zu / 白 %zu (mode %d)，新连接使用新策略",
+             candidate->black.size(), candidate->white.size(), candidate->mode);
+    return true;
 }
 
 // ============================================================================
@@ -583,17 +642,16 @@ int run_daemon() {
 
     // 1. 规则加载。启动阶段尚无数据面线程，但仍经同一个不可变快照入口发布。
     auto initial_rules = std::make_shared<RuleDB>();
-    load_all_rules(*initial_rules);
-    if (!initial_rules->load_valid) {
-        fail_engine_start("rule_load_failed", initial_rules->load_error);
+    EngineConfig cfg;
+    std::string candidate_error;
+    if (!load_candidate(cfg, *initial_rules, candidate_error)) {
+        fail_engine_start("rule_load_failed", candidate_error);
         return 1;
     }
     if (!initial_rules->ok) {
         fail_engine_start("rules_empty", "尚无可用规则，请先点击“同步开源规则”，同步成功后再启动守护。");
         return 1;
     }
-    save_rule_stats(*initial_rules);
-    publish_rules_snapshot(initial_rules);
     log_line("规则", "已加载:黑 %zu / 白 %zu (mode %d)",
                  initial_rules->black.size(), initial_rules->white.size(),
                  initial_rules->mode);
@@ -635,7 +693,6 @@ int run_daemon() {
     }
 
     // 4. iptables 落地(失败即拔除并拒绝启动,防断网)
-    EngineConfig cfg = load_engine_config();
     IptablesConfig icfg;
     icfg.block_quic = cfg.block_quic;
     icfg.scope = cfg.scope;
@@ -650,6 +707,9 @@ int run_daemon() {
         write_runtime_state("error");
         return 1;
     }
+    publish_rules_snapshot(initial_rules);
+    g_applied_block_quic = cfg.block_quic;
+    save_rule_stats(*initial_rules);
     if (stop_requested()) {
         teardown_queue(fd0, QUEUE_DNS);
         teardown_queue(fd1, QUEUE_TLS_HTTP);
@@ -670,6 +730,7 @@ int run_daemon() {
     try {
         t1 = std::thread(recv_loop, fd0, QUEUE_DNS, on_dns_packet);
         t2 = std::thread(recv_loop, fd1, QUEUE_TLS_HTTP, on_tls_packet);
+        g_workers_started = true;
     } catch (const std::exception &error) {
         record_engine_error("thread_failed", "队列线程创建失败：" + std::string(error.what()));
         g_stop.store(true);
@@ -704,6 +765,7 @@ int run_daemon() {
 
     t1.join();
     t2.join();
+    g_workers_started = false;
     try {
         save_metrics();
     } catch (const std::exception &error) {

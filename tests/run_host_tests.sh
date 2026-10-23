@@ -226,6 +226,9 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread -DADK_AUDIT_DATA_DIR=\""$BUILD_DIR/cleanup-d
 python3 "$ROOT/tests/test_iptables_cleanup.py" "$BUILD_DIR/cleanup_cli"
 
 mkdir "$BUILD_DIR/engine-failure-data"
+${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" "$ROOT/tests/test_policy_barrier.cpp" \
+    -o "$BUILD_DIR/test_policy_barrier"
+"$BUILD_DIR/test_policy_barrier"
 ${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fdata-sections \
     -DADK_AUDIT_DATA_DIR=\""$BUILD_DIR/engine-failure-data"\" -include "$ROOT/tests/audit/rebase_paths.h" \
     -I"$ROOT/tests/audit/include" -I"$ROOT/src" "$ROOT/tests/test_engine_failure.cpp" \

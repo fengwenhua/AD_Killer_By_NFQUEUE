@@ -8,7 +8,7 @@ import socket
 import subprocess
 import sys
 
-from test_engine import DATA, BINARY, command, dns_query, state, wait_for
+from test_engine import DATA, BINARY, command, dns_query, state, wait_for, reload_command
 
 
 def uid_request(family, uid, allowed, tcp=False, host='ads.example.com'):
@@ -123,8 +123,8 @@ def main():
         (DATA / 'app_whitelist.txt').write_text('com.example.first\n')
         (DATA / 'app_intercept.txt').write_text('com.example.second\n')
         for scope in (0, 1, 0):
-            command(BINARY, '--scope', str(scope))
-            command(BINARY, '--apps-apply')
+            reload_command('--scope', str(scope))
+            reload_command('--apps-apply')
             wait_for(lambda: json.loads(command(BINARY, '--status').splitlines()[-1])['iptables_active'], 'UID selector applied')
             cache = DATA / ('app_intercept_uids.conf' if scope else 'app_uids.conf')
             assert ('10002' if scope else '10001') in cache.read_text()
@@ -135,16 +135,16 @@ def main():
                     # Neither list includes this UID: global mode intercepts it,
                     # selected-app mode bypasses it. Detect a stale selector.
                     uid_request(family, 10003, scope == 1, tcp)
-        command(BINARY, '--scope', '1')
+        reload_command('--scope', '1')
         (DATA / 'app_intercept.txt').write_text('')
-        command(BINARY, '--apps-apply')
+        reload_command('--apps-apply')
         wait_for(lambda: json.loads(command(BINARY, '--status').splitlines()[-1])['iptables_active'], 'empty per-app selector')
         uid_request(socket.AF_INET, 10002, True)
         # Explicit custom rules are always active, including Hosts-only mode.
         (DATA / 'custom_rules.txt').write_text('||custom-block.example^\n@@ads.example.com\n')
-        command(BINARY, '--scope', '0')
+        reload_command('--scope', '0')
         (DATA / 'app_whitelist.txt').write_text('')
-        command(BINARY, '--apps-apply')
+        reload_command('--apps-apply')
         command(BINARY, '--mode', '1')
         wait_policy(1, 1, 'custom rules in Hosts-only mode')
         uid_request(socket.AF_INET, 10002, False, host='custom-block.example')

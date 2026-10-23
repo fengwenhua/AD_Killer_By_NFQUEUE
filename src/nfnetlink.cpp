@@ -352,7 +352,11 @@ int nfq_recv_packets(int fd, NfqPacketCb cb, void *userdata) {
 
     ssize_t n = recvmsg(fd, &mh, MSG_DONTWAIT);
     if (n < 0) {
-        if (errno == EAGAIN || errno == EINTR) return 0;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            nfq_receive_report().idle = true;
+            return 0;
+        }
+        if (errno == EINTR) return 0;
         nfq_receive_report().kind = NfqReceiveKind::SOCKET;
         nfq_receive_report().error = errno;
         return -1;

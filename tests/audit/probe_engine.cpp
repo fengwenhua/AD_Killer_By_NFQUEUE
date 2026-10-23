@@ -15,21 +15,6 @@ IptablesCleanupResult iptables_remove_all(const IptablesCleanupLimits &) {
 FastResponseSender::~FastResponseSender() {}
 
 int main() {
-    assert(write_file_atomic(FILE_STATE_CONF, "mode=2\nscope=0\nblock_quic=false\n"));
-    assert(write_file_atomic(FILE_CUSTOM_RULES, "old.example.com\n"));
-    auto old = std::make_shared<RuleDB>();
-    load_all_rules(*old);
-    assert(old->ok);
-    publish_rules_snapshot(old);
-    assert(match_domain("old.example.com") == Verdict::BLOCK_EXACT);
-    assert(write_file_atomic(FILE_CUSTOM_RULES, "new.example.com\n"));
-    injected_failure = "injected route installation failure";
-    hot_reload();
-    assert(match_domain("old.example.com") == Verdict::PASS_DEFAULT);
-    assert(match_domain("new.example.com") == Verdict::BLOCK_EXACT);
-    assert(!g_stop.load() && !g_fault.load());
-    puts("OBSERVED mixed-generation: new rule snapshot published despite route installation failure");
-
     HandshakeReassembler reassembler;
     TcpFlowKey key{};
     key.ip_version = 4; key.src_port = 12345; key.dst_port = 80;

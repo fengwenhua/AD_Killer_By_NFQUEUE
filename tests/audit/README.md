@@ -27,7 +27,6 @@ python3 tests/audit/run_deep_audit.py --sanitize
 | 标记 | 观测内容 | 证据边界 |
 | --- | --- | --- |
 | `unrelated-pid` | 用探针自身 PID 模拟被复用的旧任务 PID，查询仍为 running | 未强制内核复用 PID |
-| `mixed-generation` | 路由安装返回失败后，真实规则匹配已切至新快照 | 路由依赖为桩，规则逻辑真实执行 |
 | `idle-retention` | 读取重组统计不执行回收，显式 prune 后释放 | 无实际等待；结合引擎调用路径判断空闲回收缺口 |
 
 O02 的 `read-failure-save` 已修复，从缺陷探针迁移到
@@ -46,7 +45,10 @@ O16 的 `cleanup-failure` 已迁移至实际 C++ 清理接口、子进程执行�
 相关依赖在普通主机测试中隔离，真实内核结果另行记录在方案进度中。
 O03 原 `fault-state` 子问题随 O16 的退出故障传播一并修复，正式回归为
 `test_engine_failure.cpp`，以及 `test_cleanup_failures.py` 中真实双栈切换/回滚失败后的非零退出。
-O03 的 `mixed-generation` 仍保留，不能把这一子问题修复当作全部重载一致性已完成。
-当前隔离审计保留其余 3 个观测点，不再要求这些已修复的缺陷存在。
+O03 的 `mixed-generation` 已迁移到 `test_engine_failure.cpp`、`test_policy_barrier.cpp`
+和真实内核 `test_reload_consistency.py`，验证失败保留旧快照/统计、切换期间无连接标记旁路、
+双队列空闲边界与既有 PASS 连接保留。期望/生效修订号与界面 ACK 仍待后续实施，
+不能把切换子问题修复当作 O03 全部完成。
+当前隔离审计保留其余 2 个观测点，不再要求这些已修复的缺陷存在。
 
 最终出现 `Audit characterization completed` 仅表示预期的当前行为已被观测；ASan/UBSan 没有报错也不代表完成安全审计。

@@ -16,6 +16,9 @@ for argument do
         -F|-N|-D|-I) mutation=true ;;
     esac
 done
+if [ "$mode" = switch ] && [ "$replace" = true ] && [ "${0##*/}" = ip6tables ]; then
+    exit 1 # IPv4 already switched; its rollback remains functional.
+fi
 if [ "$mode" = rollback ] && [ "$replace" = true ]; then
     if [ "${0##*/}" = ip6tables ]; then exit 1; fi
     for argument do
