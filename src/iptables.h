@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "exclusive_file_lock.h"
 
 struct IptablesConfig {
     std::string chain = "ADK_NFQ_OUT";
@@ -59,17 +60,27 @@ std::vector<std::string> iptables_build_whitelist_commands(
 std::string iptables_connmark_conflict(const std::vector<std::string> &lines,
                                       uint32_t mask);
 
-class FileLock {
-public:
-    explicit FileLock(const char *path, bool wait = false);
-    ~FileLock();
-    bool ok() const { return fd_ >= 0; }
-private:
-    int fd_ = -1;
+using FileLock = ExclusiveFileLock;
+
+enum class FirewallCleanupState { CLEAN, PARTIAL, UNKNOWN };
+struct IptablesCleanupResult {
+    FirewallCleanupState state = FirewallCleanupState::UNKNOWN;
+    std::vector<std::string> remaining;
+    std::vector<std::string> errors;
+    bool ok() const { return state == FirewallCleanupState::CLEAN; }
+    const char *name() const {
+        return state == FirewallCleanupState::CLEAN ? "clean" : state == FirewallCleanupState::PARTIAL ? "partial" : "unknown";
+    }
+};
+struct IptablesCleanupLimits {
+    unsigned total_ms = 15000;
+    unsigned command_ms = 6000;
+    unsigned lock_ms = 1000;
 };
 
 std::string iptables_install(const IptablesConfig &cfg);
-void iptables_remove_all();
+IptablesCleanupResult iptables_remove_all(const IptablesCleanupLimits &limits = {});
+IptablesCleanupResult iptables_inspect_owned();
 bool iptables_verify(const IptablesConfig &cfg);
 bool iptables_chain_active(const IptablesConfig &cfg);
 // Read-only two-command check, explicitly not a full generation verification.

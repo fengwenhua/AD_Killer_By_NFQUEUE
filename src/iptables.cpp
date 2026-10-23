@@ -1,12 +1,15 @@
 #include "iptables.h"
 #include "logging.h"
 #include "common.h"
+#include "process_runner.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cstdarg>
 #include <cerrno>
+#include <algorithm>
+#include <chrono>
 #include <fcntl.h>
 #include <map>
 #include <sstream>
@@ -19,6 +22,52 @@ constexpr const char *ENTRY_CHAIN = "ADK_NFQ_ENTRY";
 constexpr const char *CHAIN_PREFIX = "ADK_NFQ_";
 constexpr const char *TB[2] = {"iptables -w 5", "ip6tables -w 5"};
 constexpr const char *TB_SAVE[2] = {"iptables-save", "ip6tables-save"};
+using Clock = std::chrono::steady_clock;
+thread_local auto command_deadline = Clock::time_point::max();
+thread_local unsigned command_limit_ms = 6000;
+thread_local int route_lease = -1;
+thread_local bool uncertain_command = false;
+struct RouteLease {
+    int previous = route_lease;
+    explicit RouteLease(int fd) { route_lease = fd; }
+    ~RouteLease() { route_lease = previous; }
+};
+struct CommandBudget {
+    Clock::time_point previous = command_deadline;
+    unsigned previous_limit = command_limit_ms;
+    bool previous_uncertain = uncertain_command;
+    explicit CommandBudget(unsigned total_ms, unsigned single_ms = 6000) {
+        command_deadline = std::min(previous, Clock::now() + std::chrono::milliseconds(total_ms));
+        command_limit_ms = std::min(previous_limit, single_ms);
+        if (previous == Clock::time_point::max()) uncertain_command = false;
+    }
+    ~CommandBudget() {
+        uncertain_command = previous == Clock::time_point::max() ? previous_uncertain : (uncertain_command || previous_uncertain);
+        command_deadline = previous; command_limit_ms = previous_limit;
+    }
+};
+unsigned remaining_command_ms() {
+    if (Clock::now() >= command_deadline) return 0;
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(command_deadline - Clock::now()).count();
+    return static_cast<unsigned>(std::min<int64_t>(command_limit_ms, std::max<int64_t>(1, remaining)));
+}
+ProcessResult execute(const std::vector<std::string> &arguments) {
+    if (uncertain_command) {
+        ProcessResult result; result.error = "previous command group is not confirmed stopped";
+        result.reaped = false; result.group_gone = false; return result;
+    }
+    auto result = run_process(arguments, remaining_command_ms(), 2u * 1024u * 1024u, route_lease);
+    if (!result.reaped || !result.group_gone) uncertain_command = true;
+    return result;
+}
+ProcessResult execute_shell(const char *command) {
+    if (!command) { ProcessResult result; result.error = "empty command"; return result; }
+#if defined(__ANDROID__)
+    return execute({"/system/bin/sh", "-c", command});
+#else
+    return execute({"/bin/sh", "-c", command});
+#endif
+}
 
 bool owned_chain_name(const std::string &name) {
     return name.compare(0, strlen(CHAIN_PREFIX), CHAIN_PREFIX) == 0;
@@ -26,28 +75,9 @@ bool owned_chain_name(const std::string &name) {
 
 }  // namespace
 
-FileLock::FileLock(const char *path, bool wait) {
-    fd_ = open(path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0644);
-    if (fd_ >= 0) {
-        int operation = LOCK_EX | (wait ? 0 : LOCK_NB);
-        if (flock(fd_, operation) != 0) {
-            close(fd_);
-            fd_ = -1;
-        }
-    }
-}
-
-FileLock::~FileLock() {
-    if (fd_ >= 0) {
-        flock(fd_, LOCK_UN);
-        close(fd_);
-    }
-}
-
 int run_shell(const char *cmd) {
-    char full[2048];
-    snprintf(full, sizeof(full), "%s 2>/dev/null", cmd);
-    return system(full);
+    const auto result = execute_shell(cmd);
+    return result.ok() ? 0 : result.exit_code > 0 ? result.exit_code : -1;
 }
 
 namespace {
@@ -75,23 +105,17 @@ static void remove_rule(const char *fmt, ...) {
 static std::vector<std::string> shell_output_lines(const char *cmd,
                                                   bool *success = nullptr) {
     if (success) *success = false;
-    char full[1024];
-    snprintf(full, sizeof(full), "%s 2>/dev/null", cmd);
     std::vector<std::string> lines;
-    FILE *f = popen(full, "r");
-    if (!f) return lines;
-    char *line = nullptr;
-    size_t capacity = 0;
-    ssize_t length = 0;
-    while ((length = getline(&line, &capacity, f)) >= 0) {
-        std::string s(line, static_cast<size_t>(length));
+    const auto result = execute_shell(cmd);
+    if (!result.ok() || result.output.find('\0') != std::string::npos) return lines;
+    std::istringstream input(result.output);
+    std::string s;
+    while (std::getline(input, s)) {
+        if (s.size() > 65536 || lines.size() >= 32768) return {};
         while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
         lines.push_back(s);
     }
-    const bool read_ok = ferror(f) == 0;
-    free(line);
-    const int status = pclose(f);
-    if (success) *success = read_ok && status == 0;
+    if (success) *success = true;
     return lines;
 }
 
@@ -175,23 +199,6 @@ static void remove_obsolete_rules(const char *tb) {
     // Deleting them by port/queue alone can undo another firewall's policy.
 
     for (const char *chain : obsolete_chains) delete_chain(tb, chain);
-}
-
-static void remove_all_unlocked() {
-    for (const char *tb : TB) {
-        detach_output_target(tb, ENTRY_CHAIN);
-        delete_chain(tb, ENTRY_CHAIN);
-
-        IptablesConfig cfg;
-        for (const char *slot : {"A", "B"}) {
-            IptablesGeneration generation;
-            generation.slot = slot;
-            generation.main_chain = cfg.chain + "_" + slot;
-            generation.apps_chain = cfg.apps_chain + "_" + slot;
-            delete_generation(tb, generation);
-        }
-        remove_obsolete_rules(tb);
-    }
 }
 
 static std::string apply_whitelist(const char *tb,
@@ -774,23 +781,164 @@ std::vector<std::string> iptables_build_whitelist_commands(
     return commands;
 }
 
-void iptables_remove_all() {
-    log_line("系统", "正在拔除 iptables/ip6tables 拦截规则...");
-    FileLock lock(DATA_DIR "/.route.lock", true);
-    if (!lock.ok()) {
-        log_line("错误", "无法取得 route lock,未执行规则清理");
-        return;
+namespace {
+constexpr const char *CLEANUP_BINARIES[] = {"iptables", "ip6tables"};
+const std::vector<std::string> CLEANUP_CHAINS = {"ADK_NFQ_ENTRY", "ADK_NFQ_APPS_A", "ADK_NFQ_APPS_B",
+    "ADK_NFQ_OUT_A", "ADK_NFQ_OUT_B", "ADK_NFQ_APPS_NEXT", "ADK_NFQ_APPS_OLD", "ADK_NFQ_APPS", "ADK_NFQ_OUT"};
+bool cleanup_chain(const std::string &name) {
+    return std::find(CLEANUP_CHAINS.begin(), CLEANUP_CHAINS.end(), name) != CLEANUP_CHAINS.end();
+}
+bool saved_arguments(const std::string &line, std::vector<std::string> &arguments) {
+    if (line.size() > 65536) return false;
+    std::string value;
+    char quote = 0;
+    bool started = false, escaped = false;
+    for (unsigned char ch : line) {
+        if ((ch < 32 && ch != '\t') || ch == 127) return false;
+        if (escaped) { value += ch; escaped = false; started = true; }
+        else if (ch == '\\' && quote != '\'') { escaped = true; started = true; }
+        else if (quote) { if (ch == quote) quote = 0; else value += ch; }
+        else if (ch == '\'' || ch == '"') { quote = static_cast<char>(ch); started = true; }
+        else if (ch == ' ' || ch == '\t') {
+            if (started) { arguments.push_back(value); value.clear(); started = false; }
+        } else { value += ch; started = true; }
+        if (arguments.size() > 128) return false;
     }
-    remove_all_unlocked();
-    log_line("系统", "拦截规则已清理");
+    if (escaped || quote) return false;
+    if (started) arguments.push_back(value);
+    return arguments.size() <= 128;
+}
+std::string command_error(const ProcessResult &result) {
+    std::string message = result.error.empty() ? "exit " + std::to_string(result.exit_code) : result.error;
+    if (!result.diagnostic.empty()) message += ": " + result.diagnostic.substr(0, 256);
+    for (char &ch : message) if (ch == '\r' || ch == '\n') ch = ' ';
+    return message;
+}
+struct OwnedInventory {
+    bool valid = false;
+    bool capped = false;
+    std::vector<std::string> chains, remaining;
+    std::vector<std::vector<std::string>> detach;
+    std::string error;
+};
+OwnedInventory owned_inventory(const char *binary) {
+    OwnedInventory out;
+    const auto query = execute({binary, "-w", "5", "-t", "mangle", "-S"});
+    if (!query.ok()) { out.error = command_error(query); return out; }
+    bool saw_output = false;
+    size_t count = 0;
+    std::istringstream input(query.output);
+    std::string line;
+    while (std::getline(input, line)) {
+        if (++count > 32768) { out.error = "ruleset line limit exceeded"; return out; }
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        std::vector<std::string> tokens;
+        if (!saved_arguments(line, tokens)) { out.error = "cannot parse ruleset safely"; return out; }
+        if (tokens.empty()) continue;
+        if (tokens[0] == "-P" && tokens.size() == 3) { saw_output = saw_output || tokens[1] == "OUTPUT"; continue; }
+        if (tokens[0] == "-N" && tokens.size() == 2) {
+            if (owned_chain_name(tokens[1])) out.remaining.push_back(std::string(binary) + ":chain:" + tokens[1]);
+            if (cleanup_chain(tokens[1])) out.chains.push_back(tokens[1]);
+            continue;
+        }
+        if (tokens[0] != "-A" || tokens.size() < 3) { out.error = "incomplete ruleset output"; return out; }
+        if (tokens[1] != "OUTPUT") continue;
+        for (size_t i = 2; i + 1 < tokens.size(); ++i) {
+            if (tokens[i] != "-j" && tokens[i] != "--jump" && tokens[i] != "-g" && tokens[i] != "--goto") continue;
+            if (!owned_chain_name(tokens[i + 1])) continue;
+            out.remaining.push_back(std::string(binary) + ":OUTPUT->" + tokens[i + 1]);
+            if (cleanup_chain(tokens[i + 1])) {
+                std::vector<std::string> command{binary, "-w", "5", "-t", "mangle", "-D", "OUTPUT"};
+                command.insert(command.end(), tokens.begin() + 2, tokens.end());
+                if (out.detach.size() < 256) out.detach.push_back(std::move(command));
+                else out.capped = true;
+            }
+            break;
+        }
+    }
+    if (!saw_output) { out.error = "missing OUTPUT policy; empty output is not proof of cleanup"; return out; }
+    out.valid = true; return out;
+}
+IptablesCleanupResult inspect_owned() {
+    IptablesCleanupResult result;
+    result.state = FirewallCleanupState::CLEAN;
+    for (const char *binary : CLEANUP_BINARIES) {
+        const auto inventory = owned_inventory(binary);
+        if (!inventory.valid) {
+            result.state = FirewallCleanupState::UNKNOWN;
+            result.errors.push_back(std::string(binary) + " -t mangle -S: " + inventory.error);
+        } else {
+            result.remaining.insert(result.remaining.end(), inventory.remaining.begin(), inventory.remaining.end());
+            if (!inventory.remaining.empty() && result.state != FirewallCleanupState::UNKNOWN) result.state = FirewallCleanupState::PARTIAL;
+        }
+    }
+    return result;
+}
+}
+
+IptablesCleanupResult iptables_inspect_owned() {
+    CommandBudget budget(8000);
+    return inspect_owned();
+}
+
+IptablesCleanupResult iptables_remove_all(const IptablesCleanupLimits &limits) {
+    CommandBudget budget(limits.total_ms, limits.command_ms);
+    IptablesCleanupResult result;
+    if (!remaining_command_ms()) { result.errors.push_back("cleanup deadline expired"); return result; }
+    FileLock lock(DATA_DIR "/.route.lock", limits.lock_ms != 0, std::min(limits.lock_ms, remaining_command_ms()));
+    if (!lock.ok()) { result.errors.push_back("route lock unavailable; cleanup was not executed"); return result; }
+    RouteLease lease(lock.native_fd());
+    bool termination_unknown = false, mutated = false;
+    unsigned operations = 0;
+    const auto attempt = [&](const std::vector<std::string> &command) {
+        if (termination_unknown) return;
+        if (++operations > 256) {
+            if (result.errors.size() < 16) result.errors.push_back("cleanup command limit reached");
+            return;
+        }
+        mutated = true;
+        const auto execution = execute(command);
+        termination_unknown = termination_unknown || !execution.reaped || !execution.group_gone;
+        if (!execution.ok() && result.errors.size() < 16) {
+            // Fixed chain names, not pasted rules/comments, make this safe to log.
+            result.errors.push_back(command[0] + " " + command[5] + " " + command[6] + ": " + command_error(execution));
+        }
+    };
+    bool initially_known = true;
+    for (const char *binary : CLEANUP_BINARIES) {
+        const auto inventory = owned_inventory(binary);
+        if (!inventory.valid) {
+            initially_known = false;
+            result.errors.push_back(std::string(binary) + " -t mangle -S: " + inventory.error);
+            continue; // Never mutate a family that we could not inventory.
+        }
+        result.remaining.insert(result.remaining.end(), inventory.remaining.begin(), inventory.remaining.end());
+        if (inventory.capped) result.errors.push_back(std::string(binary) + ": too many owned OUTPUT references; cleanup is bounded");
+        for (const auto &command : inventory.detach) attempt(command);
+        // Flush every known owned chain before deleting any of them; ENTRY and
+        // selectors can reference the main chains. Foreign chains/rules stay.
+        for (const auto &chain : inventory.chains) attempt({binary, "-w", "5", "-t", "mangle", "-F", chain});
+        for (const auto &chain : inventory.chains) attempt({binary, "-w", "5", "-t", "mangle", "-X", chain});
+    }
+    if (mutated) {
+        const auto final = inspect_owned();
+        result.state = termination_unknown ? FirewallCleanupState::UNKNOWN : final.state;
+        result.remaining = final.remaining;
+        result.errors.insert(result.errors.end(), final.errors.begin(), final.errors.end());
+        if (termination_unknown) result.errors.push_back("command termination not confirmed; do not assume no future side effects");
+    } else result.state = initially_known ? (result.remaining.empty() ? FirewallCleanupState::CLEAN : FirewallCleanupState::PARTIAL) : FirewallCleanupState::UNKNOWN;
+    log_line(result.ok() ? "系统" : "错误", "模块路由清理结果: %s (剩余 %zu，诊断 %zu)", result.name(), result.remaining.size(), result.errors.size());
+    return result;
 }
 
 std::string iptables_install(const IptablesConfig &cfg) {
+    CommandBudget budget(60000);
     if (cfg.scope != SCOPE_GLOBAL && cfg.scope != SCOPE_PER_APP)
         return "invalid scope";
 
     FileLock lock(DATA_DIR "/.route.lock");
     if (!lock.ok()) return "route lock busy";
+    RouteLease lease(lock.native_fd());
 
     for (const char *save : TB_SAVE) {
         bool read_ok = false;
@@ -863,6 +1011,7 @@ std::string iptables_sync_app_routes(const IptablesConfig &cfg) {
 }
 
 bool iptables_verify(const IptablesConfig &cfg) {
+    CommandBudget budget(8000);
     for (const char *tb : TB) {
         std::string target = entry_target(tb);
         if (!known_target(cfg, target) || !verify_target(tb, cfg, target)) return false;
@@ -885,6 +1034,7 @@ bool iptables_validate_output_attachment(const std::vector<std::string> &lines) 
 }
 
 bool iptables_entry_attached() {
+    CommandBudget budget(8000);
     for (const char *tb : TB) {
         bool ok = false;
         auto lines = shell_output_lines((std::string(tb) + " -t mangle -S OUTPUT").c_str(), &ok);
@@ -894,6 +1044,6 @@ bool iptables_entry_attached() {
 }
 
 bool iptables_any_left() {
-    return shell_output_contains("iptables -w 5 -t mangle -S", "ADK_NFQ_") ||
-           shell_output_contains("ip6tables -w 5 -t mangle -S", "ADK_NFQ_");
+    // A failed query is not evidence of absence.
+    return !iptables_inspect_owned().ok();
 }

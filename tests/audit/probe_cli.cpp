@@ -48,16 +48,14 @@ void record_engine_error(const std::string &, const std::string &) {}
 CgroupIsolationResult isolate_daemon_cgroups() { return {true, 0, ""}; }
 int run_daemon() { entered_daemon = true; return 0; }
 bool iptables_any_left() { return routes_left; }
-void iptables_remove_all() { ++removal_attempts; }  // Inject cleanup failure.
+IptablesCleanupResult iptables_remove_all(const IptablesCleanupLimits &) {
+    ++removal_attempts; return {FirewallCleanupState::PARTIAL, {"injected routes"}, {"injected cleanup failure"}};
+}
 
 int main(int argc, char **argv) {
     assert(argc == 2);
     const std::string operation = argv[1];
-    if (operation == "cleanup-failure") {
-        const int result = cmd_stop();
-        assert(result == 0 && removal_attempts == 1 && routes_left && runtime == "stopped");
-        puts("OBSERVED cleanup-failure: stop reports stopped/0 with injected routes still present");
-    } else if (operation == "unrelated-pid") {
+    if (operation == "unrelated-pid") {
         const std::string id = "123-456";
         files[update_job_path(id, ".state")] = running_update_job_state(static_cast<int>(getpid()));
         assert(cmd_update_status(id) == 0);

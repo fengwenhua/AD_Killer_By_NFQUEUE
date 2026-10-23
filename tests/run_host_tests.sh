@@ -166,6 +166,7 @@ ${CXX:-c++} $COMPILE_FLAGS \
     -I"$ROOT/src" \
     "$ROOT/tests/test_iptables.cpp" \
     "$ROOT/src/iptables.cpp" \
+    "$ROOT/src/process_runner.cpp" \
     "$ROOT/src/logging.cpp" \
     "$ROOT/src/bounded_log.cpp" \
     -lz \
@@ -197,6 +198,11 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread \
 
 "$BUILD_DIR/test_config_store"
 
+${CXX:-c++} $COMPILE_FLAGS "$ROOT/tests/process_fixture.cpp" -o "$BUILD_DIR/process_fixture"
+${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" "$ROOT/tests/test_process_runner.cpp" \
+    "$ROOT/src/process_runner.cpp" -o "$BUILD_DIR/test_process_runner"
+"$BUILD_DIR/test_process_runner" "$BUILD_DIR/process_fixture"
+
 ${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" \
     "$ROOT/tests/test_lifecycle.cpp" "$ROOT/src/lifecycle.cpp" \
     "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" -lz -o "$BUILD_DIR/test_lifecycle"
@@ -209,9 +215,25 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fd
     -DADK_AUDIT_DATA_DIR=\""$BUILD_DIR/lifecycle-data"\" \
     -include "$ROOT/tests/audit/rebase_paths.h" -I"$ROOT/src" \
     "$ROOT/tests/lifecycle_cli.cpp" "$ROOT/tests/lifecycle_logging.cpp" \
-    "$ROOT/src/lifecycle.cpp" "$ROOT/src/bounded_log.cpp" \
+    "$ROOT/src/lifecycle.cpp" "$ROOT/src/process_runner.cpp" "$ROOT/src/bounded_log.cpp" \
     $LIFECYCLE_LINK_FLAGS -lz -o "$BUILD_DIR/lifecycle_cli"
 python3 "$ROOT/tests/test_lifecycle_cli.py" "$BUILD_DIR/lifecycle_cli"
+
+${CXX:-c++} $COMPILE_FLAGS -pthread -DADK_AUDIT_DATA_DIR=\""$BUILD_DIR/cleanup-data"\" \
+    -include "$ROOT/tests/audit/rebase_paths.h" -I"$ROOT/src" \
+    "$ROOT/tests/cleanup_cli.cpp" "$ROOT/src/iptables.cpp" "$ROOT/src/process_runner.cpp" \
+    "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" -lz -o "$BUILD_DIR/cleanup_cli"
+python3 "$ROOT/tests/test_iptables_cleanup.py" "$BUILD_DIR/cleanup_cli"
+
+mkdir "$BUILD_DIR/engine-failure-data"
+${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fdata-sections \
+    -DADK_AUDIT_DATA_DIR=\""$BUILD_DIR/engine-failure-data"\" -include "$ROOT/tests/audit/rebase_paths.h" \
+    -I"$ROOT/tests/audit/include" -I"$ROOT/src" "$ROOT/tests/test_engine_failure.cpp" \
+    "$ROOT/src/rules.cpp" "$ROOT/src/rule_stream.cpp" "$ROOT/src/rule_bundle.cpp" \
+    "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" "$ROOT/src/tcp_reassembly.cpp" \
+    "$ROOT/src/dns_tcp_reassembly.cpp" "$ROOT/src/packet.cpp" \
+    $LIFECYCLE_LINK_FLAGS -lz -o "$BUILD_DIR/test_engine_failure"
+"$BUILD_DIR/test_engine_failure"
 
 for probe in test_edit_config edit_config_cli; do
     ${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" \

@@ -16,7 +16,7 @@ def main() -> None:
 
     daemon = source.split("int run_daemon()", 1)[1]
     handlers = daemon.index("install_signal_handlers()")
-    remove_rules = daemon.index("iptables_remove_all()")
+    remove_rules = daemon.index("cleanup_routes()")
     setup_queue = daemon.index("setup_queue(")
     install_rules = daemon.index("iptables_install(")
     assert handlers < remove_rules < setup_queue < install_rules, (

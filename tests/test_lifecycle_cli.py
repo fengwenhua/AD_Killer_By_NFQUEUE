@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real CLI multi-process barriers; all network/process identity effects isolated."""
 import json
+import fcntl
 import os
 from pathlib import Path
 import shutil
@@ -42,6 +43,7 @@ def reset():
         shutil.rmtree(root)  # Only the compile-time, exclusive test data root.
     root.mkdir(mode=0o700)
     (root / 'state.conf').write_text('enabled=false\nmanual_stop=true\nautostart=false\n')
+    (root / 'queue.fixture').write_text('')
 
 
 children = []
@@ -105,6 +107,31 @@ try:
     rejected.communicate(timeout=10); assert rejected.returncode != 0
     assert not (root / 'daemon.started').exists()
     assert 'autostart=false' in (root / 'state.conf').read_text()
+    # Real stop control flow must propagate partial/unknown cleanup, keep the
+    # failure durable and permit an explicit, successful retry.
+    for fault, expected in [('partial', 'partial'), ('unknown', 'unknown')]:
+        reset()
+        (root / f'cleanup.{fault}').touch()
+        failed = run('--stop')
+        value = json.loads(failed.stdout)
+        assert failed.returncode != 0 and value['status'].startswith('error_cleanup_')
+        assert value['cleanup']['routes'] == expected
+        assert (root / 'runtime.state').read_text() == 'error'
+        assert 'cleanup_' in (root / 'engine_error.conf').read_text()
+        (root / f'cleanup.{fault}').unlink()
+        assert json.loads(run('--stop').stdout)['status'] == 'stopped'
+        assert not (root / 'engine_error.conf').read_text()
+    reset()
+    (root / 'queue.fixture').write_text('0 3139568836 0 2 4096 0 0 9 1\n')
+    failed = run('--stop'); value = json.loads(failed.stdout)
+    assert failed.returncode != 0 and value['cleanup']['queues'] == 'unknown'
+    assert value['cleanup']['routes'] == 'clean' and value['cleanup']['process_gone']
+    (root / 'queue.fixture').write_text('')
+    with (root / '.daemon.lock').open('w') as descriptor:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        failed = run('--stop'); value = json.loads(failed.stdout)
+        assert failed.returncode != 0 and not value['cleanup']['process_gone']
+    assert run('--stop').returncode == 0
     print('actual CLI barriers: paused late start, old cleanup/new PID, latest window and boot recheck passed')
 finally:
     for marker in ('startup.release', 'cleanup.release'):

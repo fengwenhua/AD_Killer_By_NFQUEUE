@@ -38,7 +38,9 @@ public:
 
     ~ExclusiveFileLock() {
         if (fd_ >= 0) {
-            flock(fd_, LOCK_UN);
+            // flock belongs to the open file description. Closing the last
+            // inherited lease releases it; LOCK_UN here would prematurely
+            // unlock an in-flight firewall command after its parent returns.
             close(fd_);
         }
     }
@@ -47,6 +49,7 @@ public:
     ExclusiveFileLock &operator=(const ExclusiveFileLock &) = delete;
 
     bool ok() const { return fd_ >= 0; }
+    int native_fd() const { return fd_; }
 
 private:
     int fd_ = -1;

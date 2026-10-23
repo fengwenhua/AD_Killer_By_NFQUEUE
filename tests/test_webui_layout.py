@@ -41,6 +41,7 @@ window.previewRulesEmpty = false;
 window.previewEngineState = "stopped";
 window.previewRoutingActive = true;
 window.previewFreezerState = 'normal';
+window.previewCleanupCode = '';
 window.previewDaemonImageCurrent = true;
 window.previewStartFails = true;
 window.previewStartDelay = 0;
@@ -88,6 +89,7 @@ window.ksu = {
       iptables_active:previewEngineState==="running" && previewRoutingActive, running:previewEngineState==="running",
       daemon_image_current:previewDaemonImageCurrent,
       freezer_state:previewFreezerState,frozen:previewFreezerState==='unknown'?null:previewFreezerState==='frozen',
+      last_error_code:previewCleanupCode,
       runtime:previewEngineState, last_error:previewEngineState==="error"?previewEngineError:"",
       enabled:previewEngineState!=="stopped", metrics:previewMetrics, ...previewSettings});
     else if(command.endsWith(" --start")) {
@@ -96,7 +98,7 @@ window.ksu = {
       errno=previewStartFails?1:0;
       text=JSON.stringify({status:previewStartFails?"error_queue_conflict":"starting",message:previewStartFails?previewEngineError:""});}
     }
-    else if(command.endsWith(" --stop")) {previewEngineState="stopped";text='{"status":"stopped"}';}
+    else if(command.endsWith(" --stop")) {previewEngineState="stopped";previewCleanupCode='';text='{"status":"stopped"}';}
     else if(command.includes(' --autostart ')) {previewSettings.autostart=command.endsWith(' on');text=JSON.stringify({autostart:previewSettings.autostart});}
     else if(command.includes(' --quic ')) {previewSettings.block_quic=command.endsWith(' on');text='{}';}
     else if(command.includes(' --dev ')) {previewSettings.dev_mode=command.endsWith(' on');text='{}';}
@@ -186,6 +188,21 @@ def freezer_health_regression(browser, errors):
     page.locator('#verifyHealthBtn').click()
     expect(page.locator('#stateBadge')).to_have_text('正在守护')
     expect(page.locator('#verifyHealthBtn')).to_have_count(0)
+    page.close()
+
+
+def cleanup_health_regression(browser, errors):
+    page = browser.new_page(viewport={'width': 320, 'height': 740}, reduced_motion='reduce')
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.add_init_script(mock_script() + "\npreviewEngineState='stopped'; previewCleanupCode='cleanup_unknown';")
+    page.goto((ROOT / 'module/webroot/index.html').as_uri())
+    expect(page.locator('#stateTitle')).to_have_text('停止结果待核实')
+    expect(page.locator('#stateBadge')).to_have_text('清理待核实')
+    expect(page.locator('#startBtn')).to_be_disabled()
+    expect(page.locator('#stopBtn')).to_be_enabled()
+    page.locator('#stopBtn').click()
+    expect(page.locator('#stateBadge')).to_have_text('已暂停')
+    assert page.evaluate("!previewCommands.some(c=>c.endsWith(' --start') || c.endsWith(' --reload'))")
     page.close()
 
 
@@ -1185,6 +1202,7 @@ def main():
         try:
             fixture_regression(browser, errors)
             freezer_health_regression(browser, errors)
+            cleanup_health_regression(browser, errors)
             quic_setting_regression(browser, errors)
             preview_regression(browser, errors, args.screenshots)
             source_editor_dialog_regression(browser, errors, args.screenshots)

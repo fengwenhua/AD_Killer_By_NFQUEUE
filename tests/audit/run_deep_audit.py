@@ -47,9 +47,9 @@ def main():
         linker = ['-Wl,-dead_strip'] if sys.platform == 'darwin' else ['-Wl,--gc-sections']
         cli = directory / 'probe_cli'
         subprocess.run([*compiler, *flags, str(AUDIT / 'probe_cli.cpp'),
-                        str(ROOT / 'src/update_job.cpp'), *linker, '-o', str(cli)], check=True, timeout=120)
+                        str(ROOT / 'src/update_job.cpp'), str(ROOT / 'src/process_runner.cpp'), *linker, '-o', str(cli)], check=True, timeout=120)
         observed = ''
-        for operation in ('cleanup-failure', 'unrelated-pid'):
+        for operation in ('unrelated-pid',):
             output = observe([str(cli), operation])
             observed += output
             if operation == 'unrelated-pid':
@@ -62,8 +62,8 @@ def main():
                         *(str(ROOT / 'src' / source) for source in sources),
                         *linker, '-lz', '-o', str(engine)], check=True, timeout=120)
         observed += observe([str(engine)])
-        assert sum(line.startswith('OBSERVED ') for line in observed.splitlines()) == 5
-    print('Audit characterization completed: 5 remaining observations; O02/O15/O17/O18 have normal regressions now.')
+        assert sum(line.startswith('OBSERVED ') for line in observed.splitlines()) == 3
+    print('Audit characterization completed: 3 remaining observations; fixed faults have normal regressions now.')
 
 
 if __name__ == '__main__':

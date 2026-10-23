@@ -432,12 +432,28 @@ static bool install_signal_handlers() {
            sigaction(SIGPIPE, &ignore, nullptr) == 0;
 }
 
+static bool cleanup_routes() {
+    const auto result = iptables_remove_all();
+    if (result.ok()) return true;
+    g_fault.store(true);
+    std::string message = "模块路由清理未能确认完成（" + std::string(result.name()) + "）";
+    for (const auto &error : result.errors) {
+        log_line("清理诊断", "%s", error.c_str());
+        if (message.size() < 1024) message += "; " + error;
+    }
+    record_engine_error("cleanup_failed", message);
+    write_runtime_state("error");
+    return false;
+}
+
 // 看门狗:拔除规则保网
 void watchdog_emergency() {
     g_fault.store(true);
     if (g_stop.exchange(true)) return;
-    log_line("保护", "NFQUEUE 队列无法安全恢复,已关闭拦截以保证网络可用");
-    iptables_remove_all();
+    // Never block a receive worker on firewall tools while its queue remains
+    // bound with no consumer. The owner loop joins workers, releases queues
+    // (queue-bypass), then performs bounded route cleanup.
+    log_line("保护", "NFQUEUE 队列无法安全恢复，正在释放监听器并有界清理路由");
 }
 
 bool daemon_running() { return read_daemon_pid() > 0; }
@@ -527,8 +543,8 @@ static void hot_reload() {
         if (err.find("rollback failed") != std::string::npos) {
             log_line("致命", "热重载 iptables 失败且回滚失败: %s,拔除规则保网",
                      err.c_str());
-            iptables_remove_all();
-            g_stop.store(true);
+            record_engine_error("reload_rollback_failed", "热重载路由回滚失败: " + err);
+            watchdog_emergency();
         } else {
             log_line("错误", "热重载 iptables 失败: %s,已保留旧路由继续运行",
                      err.c_str());
@@ -582,8 +598,7 @@ int run_daemon() {
                  initial_rules->black.size(), initial_rules->white.size(),
                  initial_rules->mode);
     if (stop_requested()) {
-        write_runtime_state("stopped");
-        return 0;
+        return write_runtime_state("stopped") ? 0 : 1;
     }
 
     for (auto &sender : g_response_senders) {
@@ -595,10 +610,9 @@ int run_daemon() {
 
     // 2. 生命周期锁已证明没有其它实例。先清除崩溃遗留链，再建立队列，确保
     // 配置 ACK 阶段不可能收到旧链产生的 PACKET 消息并把包悬挂在内核队列中。
-    iptables_remove_all();
+    if (!cleanup_routes()) return 1;
     if (stop_requested()) {
-        write_runtime_state("stopped");
-        return 0;
+        return write_runtime_state("stopped") ? 0 : 1;
     }
 
     // 3. 队列先于新 iptables 建立
@@ -606,8 +620,7 @@ int run_daemon() {
     if (fd0 < 0) { write_runtime_state("error"); return 1; }
     if (stop_requested()) {
         teardown_queue(fd0, QUEUE_DNS);
-        write_runtime_state("stopped");
-        return 0;
+        return write_runtime_state("stopped") ? 0 : 1;
     }
     int fd1 = setup_queue(QUEUE_TLS_HTTP, TLS_COPY_RANGE);
     if (fd1 < 0) {
@@ -618,8 +631,7 @@ int run_daemon() {
     if (stop_requested()) {
         teardown_queue(fd0, QUEUE_DNS);
         teardown_queue(fd1, QUEUE_TLS_HTTP);
-        write_runtime_state("stopped");
-        return 0;
+        return write_runtime_state("stopped") ? 0 : 1;
     }
 
     // 4. iptables 落地(失败即拔除并拒绝启动,防断网)
@@ -632,18 +644,18 @@ int run_daemon() {
     std::string err = iptables_install(icfg);
     if (!err.empty()) {
         record_engine_error("iptables_failed", "iptables 规则植入失败：" + err);
-        iptables_remove_all();
         teardown_queue(fd0, QUEUE_DNS);
         teardown_queue(fd1, QUEUE_TLS_HTTP);
+        cleanup_routes();
         write_runtime_state("error");
         return 1;
     }
     if (stop_requested()) {
-        iptables_remove_all();
         teardown_queue(fd0, QUEUE_DNS);
         teardown_queue(fd1, QUEUE_TLS_HTTP);
-        write_runtime_state("stopped");
-        return 0;
+        cleanup_routes();
+        const bool saved = write_runtime_state(g_fault.load() ? "error" : "stopped");
+        return g_fault.load() || !saved ? 1 : 0;
     }
     write_runtime_state("running");
     log_line("系统", "引擎已启动,2 线程并行处理 DNS/HTTP-TLS 握手阶段流量");
@@ -663,9 +675,9 @@ int run_daemon() {
         g_stop.store(true);
         if (t1.joinable()) t1.join();
         if (t2.joinable()) t2.join();
-        iptables_remove_all();
         teardown_queue(fd0, QUEUE_DNS);
         teardown_queue(fd1, QUEUE_TLS_HTTP);
+        cleanup_routes();
         write_runtime_state("error");
         return 1;
     }
@@ -698,12 +710,14 @@ int run_daemon() {
         log_line("警告", "最终指标保存失败: %s", error.what());
     }
 
-    // 7. 清理:拔规则 → 拆队列 → 状态落盘
-    iptables_remove_all();
+    // 7. No workers remain: release listeners before possibly slow cleanup.
+    // New unclassified packets then use queue-bypass, not an unconsumed queue.
     teardown_queue(fd0, QUEUE_DNS);
     teardown_queue(fd1, QUEUE_TLS_HTTP);
     for (auto &sender : g_response_senders) sender.close();
-    write_runtime_state(g_fault.load() ? "error" : "stopped");
-    log_line("系统", "引擎已停止,拦截规则已清理");
+    cleanup_routes();
+    const bool final_state_saved = write_runtime_state(g_fault.load() ? "error" : "stopped");
+    if (!final_state_saved) g_fault.store(true);
+    log_line("系统", "%s", g_fault.load() ? "引擎已退出，故障状态已保留，请查看清理诊断" : "引擎已停止,拦截规则已核实清理");
     return g_fault.load() ? 1 : 0;
 }

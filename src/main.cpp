@@ -35,6 +35,7 @@
 #include "module_update.h"
 #include "edit_config.h"
 #include "lifecycle.h"
+#include "process_runner.h"
 
 #include <cstdio>
 #include <cerrno>
@@ -202,20 +203,16 @@ static int find_daemon_pid() {
     int pid = read_daemon_pid();
     if (pid > 0) return pid;
     // 兜底:pgrep(兼容 pid 文件丢失/旧版本残留)
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd),
-             "pgrep -f '[A]D_Killer_By_NFQUEUEd? --daemon' 2>/dev/null");
-    FILE *f = popen(cmd, "r");
-    if (!f) return -1;
-    char line[64] = {0};
-    while (fgets(line, sizeof(line), f)) {
-        pid = atoi(line);
+    const auto found = run_process({"pgrep", "-f", "[A]D_Killer_By_NFQUEUEd? --daemon"}, 1000, 8192);
+    if (!found.ok()) return -1;
+    std::istringstream rows(found.output);
+    std::string line;
+    while (std::getline(rows, line)) {
+        if (!parse_integer_arg(line.c_str(), pid)) continue;
         if (is_daemon_pid(pid)) {
-            pclose(f);
             return pid;
         }
     }
-    pclose(f);
     return -1;
 }
 
@@ -524,18 +521,12 @@ static int cmd_stop() {
     if (!lifecycle::begin(DATA_DIR, lifecycle::Action::STOP, request, error)) {
         printf("{\"status\":\"error_storage\",\"message\":%s}\n", source_json_string(error).c_str()); return 1;
     }
+    configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
     ExclusiveFileLock operation(DATA_DIR "/.control.lock", true, 12000);
     if (!operation.ok()) { printf("{\"status\":\"error_busy\"}\n"); return 1; }
     if (!lifecycle::current(DATA_DIR, request)) { printf("{\"status\":\"cancelled\"}\n"); return 0; }
     write_runtime_state("stopping");
     int pid = find_daemon_pid();
-    if (pid <= 0 && !iptables_any_left()) {
-        // 本来就没在跑
-        write_runtime_state("stopped");
-        log_line("系统", "引擎已停止,拦截规则已清理");
-        printf("{\"status\": \"stopped\"}\n");
-        return 0;
-    }
     if (pid > 0 && is_daemon_pid(pid)) {
         log_line("系统", "已向守护进程发送停止信号,等待安全退出");
         kill(pid, SIGTERM);
@@ -554,11 +545,39 @@ static int cmd_stop() {
     // 守护进程持有生命周期锁并负责清理自己的 PID。强杀留下的旧 PID 会在
     // read_daemon_pid() 中因 /proc 身份校验失效；这里不主动 unlink，避免
     // 并发新实例刚写入 PID 时被旧 stop 命令误删。
-    iptables_remove_all();
-    write_runtime_state("stopped");
-    log_line("系统", "引擎已停止,拦截规则已清理");
-    printf("{\"status\": \"stopped\"}\n");
-    return 0;
+    // Nonblocking proof after the signal/wait phase, never wait on the lock of
+    // the daemon we are trying to stop. It also covers a missing PID/pgrep.
+    ExclusiveFileLock lifetime(DAEMON_LOCK_FILE);
+    const auto cleanup = iptables_remove_all();
+    const bool process_gone = lifetime.ok() && find_daemon_pid() <= 0;
+    const auto queues = inspect_queue_release(is_daemon_pid);
+    const bool complete = process_gone && cleanup.ok() && queues.ok();
+    std::string message;
+    if (!process_gone) message += "守护仍存在，或生命周期锁未释放/不可核实；";
+    if (!cleanup.ok()) message += "双栈模块路由清理为 " + std::string(cleanup.name()) + "；";
+    if (!queues.ok()) message += queues.message + "；";
+    for (const auto &error : cleanup.errors) log_line("清理诊断", "%s", error.c_str());
+    const char *code = cleanup.state == FirewallCleanupState::UNKNOWN || queues.state == QueueReleaseState::UNKNOWN
+        ? "cleanup_unknown" : "cleanup_incomplete";
+    bool saved = false;
+    if (complete) {
+        const auto previous = read_conf_value(FILE_ENGINE_ERROR, "code");
+        const bool error_cleared = previous.compare(0, 8, "cleanup_") != 0 || write_file_atomic(FILE_ENGINE_ERROR, "");
+        saved = write_runtime_state("stopped") && error_cleared;
+        message = saved ? "引擎已停止，模块路由与队列已核实清理" : "清理已完成，但停止状态未能保存，请重新核实";
+    } else {
+        for (const auto &error : cleanup.errors) if (message.size() < 1024) message += error + "；";
+        record_engine_error(code, message);
+        write_runtime_state("error");
+    }
+    printf("{\"status\":%s,\"message\":%s,\"cleanup\":{\"routes\":%s,\"process_gone\":%s,\"queues\":%s,\"remaining\":[",
+        source_json_string(complete ? (saved ? "stopped" : "error_storage") : (std::string("error_") + code)).c_str(),
+        source_json_string(message).c_str(), source_json_string(cleanup.name()).c_str(), process_gone ? "true" : "false", source_json_string(queues.name()).c_str());
+    for (size_t i = 0; i < cleanup.remaining.size(); ++i) printf("%s%s", i ? "," : "", source_json_string(cleanup.remaining[i]).c_str());
+    printf("],\"errors\":[");
+    for (size_t i = 0; i < cleanup.errors.size(); ++i) printf("%s%s", i ? "," : "", source_json_string(cleanup.errors[i]).c_str());
+    printf("]}}\n");
+    return complete && saved ? 0 : 1;
 }
 
 // ---------------------------------------------------------------------------

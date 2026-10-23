@@ -42,3 +42,24 @@ test('a normal fast observation followed by unknown full verification is not sta
     async () => ({ running: true, iptables_active: true, freezer_state: 'unknown' }), { active: true, wait: async () => {} });
   assert.equal(result.ok, false);
 });
+
+test('cleanup failure never shows healthy or restarts; explicit stop retry clears the fault', async () => {
+  const scope = effectScope(), commands = [];
+  let state = { running: true, iptables_active: true, runtime: 'error', last_error_code: 'cleanup_unknown', enabled: false };
+  const api = { readFile: async () => '', command: async command => {
+    commands.push(command);
+    if (command === '--stop') { state = { ...state, running: false, iptables_active: false, runtime: 'stopped', last_error_code: '' }; return ok({ status: 'stopped' }); }
+    return ok(state);
+  } };
+  const model = scope.run(() => useEngine(api, { log() {}, toast() {}, consoleOpen: ref(false) }));
+  try {
+    state = { ...state, last_error_code: '', runtime: 'running' };
+    await model.refresh(); assert.equal(model.running.value, true);
+    state = { ...state, last_error_code: 'cleanup_unknown', runtime: 'error' };
+    await model.refreshMetrics(); assert.equal(model.running.value, false); assert.equal(model.cleanupFailed.value, true);
+    assert.equal(model.title.value, '停止结果待核实'); assert.equal(model.kind.value, 'bad');
+    const beforeStart = commands.slice();
+    await model.control('start'); assert.deepEqual(commands, beforeStart);
+    await model.control('stop'); assert.equal(model.cleanupFailed.value, false); assert.equal(model.kind.value, 'neutral');
+  } finally { scope.stop(); }
+});

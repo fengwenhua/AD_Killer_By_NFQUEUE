@@ -2,15 +2,17 @@ import { ref, computed, watch } from 'vue';
 import { PATHS } from '../services/api.js';
 import { keyValues, lastJson, overlap } from '../domain/rules.js';
 import { useLifetime } from './useLifetime.js';
+const cleanupFault = state => ['cleanup_failed', 'cleanup_unknown', 'cleanup_incomplete'].includes(state?.last_error_code);
 
 export async function waitEngine(target, api, refresh, lifetime) {
   for (let i = 0; i < 40 && lifetime.active; i++) {
     const result = await api.command('--status-fast'), state = lastJson(result.stdout);
     if (result.code || !state) return { ok: false, kind: 'query', message: '无法查询引擎状态，请检查管理器授权与模块版本。' };
+    if (target === 'running' && cleanupFault(state)) return { ok: false, kind: 'error', message: state.last_error || '清理结果未核实，请先重试暂停。' };
     if (target === 'running' && state.freezer_state === 'unknown') return { ok: false, kind: 'query', message: '未能核实守护冻结状态，请只读重试并检查权限。' };
     if (state.runtime === target && (target === 'running' ? state.running : !state.running)) {
       const actual = await refresh();
-      if (target === 'running' && (!actual?.running || !actual.iptables_active || actual.freezer_state === 'unknown')) return { ok: false, kind: 'error', message: actual?.last_error || '引擎状态未能核实，请查看运行日志。' };
+      if (target === 'running' && (!actual?.running || !actual.iptables_active || actual.freezer_state === 'unknown' || cleanupFault(actual))) return { ok: false, kind: 'error', message: actual?.last_error || '引擎状态未能核实，请查看运行日志。' };
       return { ok: true };
     }
     if (state.runtime === 'error') return { ok: false, kind: 'error', message: state.last_error || '引擎启动失败，请查看运行日志。' };
@@ -26,14 +28,15 @@ export function useEngine(api, feedback) {
   const ready = computed(() => !!state.value);
   const healthUnknown = computed(() => !!state.value?.running && state.value?.freezer_state === 'unknown');
   const checking = ref(false);
-  const running = computed(() => !!state.value?.running && !healthUnknown.value && !!state.value?.iptables_active && state.value?.daemon_image_current !== false);
+  const cleanupFailed = computed(() => cleanupFault(state.value));
+  const running = computed(() => !!state.value?.running && !healthUnknown.value && !cleanupFailed.value && !!state.value?.iptables_active && state.value?.daemon_image_current !== false);
   const outdated = computed(() => !!state.value?.running && state.value?.daemon_image_current === false);
   const routingLost = computed(() => !!state.value?.running && !state.value?.iptables_active);
   const needsRules = computed(() => ready.value && !running.value && state.value.rules_black === 0 && state.value.rules_white === 0);
-  const kind = computed(() => healthUnknown.value ? 'warn' : running.value ? 'ok' : routingLost.value ? 'bad' : outdated.value ? 'warn' : state.value?.runtime === 'error' ? 'bad' : state.value?.runtime === 'starting' ? 'warn' : 'neutral');
-  const badge = computed(() => !ready.value ? '未连接' : healthUnknown.value ? '状态未核实' : routingLost.value ? '路由待恢复' : outdated.value ? '升级待生效' : ({ ok: '正在守护', bad: '上次启动失败', warn: '启动中', neutral: '已暂停' })[kind.value]);
-  const title = computed(() => !ready.value ? '等待连接管理器' : healthUnknown.value ? '守护状态待核实' : routingLost.value ? '拦截未正常接管' : outdated.value ? '旧版本守护仍在运行' : ({ ok: '拦截已开启', bad: '当前未运行，上次启动失败', warn: '正在准备守护', neutral: '当前未接管网络' })[kind.value]);
-  const description = computed(() => error.value || (!ready.value ? '请在 KernelSU / APatch 中打开模块 WebUI。' : healthUnknown.value ? '进程仍存在，但未能核实冻结状态。可重新核实或检查权限；不会自动停止或解冻进程。' : routingLost.value ? '守护进程仍在，但双栈路由校验未通过。点击“启动守护”安全替换旧实例并重建路由。' : outdated.value ? '安装文件已更新，运行中的守护尚未切换。点击“启动守护”使当前版本生效，不改变开机自启设置。' : running.value ? '规则已接管当前网络请求，广告域名将被拦截。' : kind.value === 'bad' ? state.value.last_error || '引擎已退出，请查看运行日志与诊断。' : kind.value === 'warn' ? '正在加载规则、建立队列与路由，请稍候。' : needsRules.value ? '尚无可用规则，请先点击“同步开源规则”，同步成功后再启动守护。' : '本模块未接管网络；其他网络模块的状态请分别检查。'));
+  const kind = computed(() => cleanupFailed.value ? 'bad' : healthUnknown.value ? 'warn' : running.value ? 'ok' : routingLost.value ? 'bad' : outdated.value ? 'warn' : state.value?.runtime === 'error' ? 'bad' : state.value?.runtime === 'starting' ? 'warn' : 'neutral');
+  const badge = computed(() => !ready.value ? '未连接' : cleanupFailed.value ? '清理待核实' : healthUnknown.value ? '状态未核实' : routingLost.value ? '路由待恢复' : outdated.value ? '升级待生效' : ({ ok: '正在守护', bad: '上次启动失败', warn: '启动中', neutral: '已暂停' })[kind.value]);
+  const title = computed(() => !ready.value ? '等待连接管理器' : cleanupFailed.value ? '停止结果待核实' : healthUnknown.value ? '守护状态待核实' : routingLost.value ? '拦截未正常接管' : outdated.value ? '旧版本守护仍在运行' : ({ ok: '拦截已开启', bad: '当前未运行，上次启动失败', warn: '正在准备守护', neutral: '当前未接管网络' })[kind.value]);
+  const description = computed(() => error.value || (!ready.value ? '请在 KernelSU / APatch 中打开模块 WebUI。' : cleanupFailed.value ? '停止后的清理未能核实。可重试“暂停守护”，或查看日志中的归属与权限诊断；不会抢占其他模块资源。' : healthUnknown.value ? '进程仍存在，但未能核实冻结状态。可重新核实或检查权限；不会自动停止或解冻进程。' : routingLost.value ? '守护进程仍在，但双栈路由校验未通过。点击“启动守护”安全替换旧实例并重建路由。' : outdated.value ? '安装文件已更新，运行中的守护尚未切换。点击“启动守护”使当前版本生效，不改变开机自启设置。' : running.value ? '规则已接管当前网络请求，广告域名将被拦截。' : kind.value === 'bad' ? state.value.last_error || '引擎已退出，请查看运行日志与诊断。' : kind.value === 'warn' ? '正在加载规则、建立队列与路由，请稍候。' : needsRules.value ? '尚无可用规则，请先点击“同步开源规则”，同步成功后再启动守护。' : '本模块未接管网络；其他网络模块的状态请分别检查。'));
   const blockedTotal = computed(() => {
     const metrics=state.value?.metrics;
     if (!metrics || !Number.isSafeInteger(metrics.updated_at) || metrics.updated_at<=0) return null;
@@ -52,6 +55,10 @@ export function useEngine(api, feedback) {
       if (!life.active || revision!==stateRevision) return;
       if (result.code || !next || typeof next.running!=='boolean') { metricsStale.value=true; return; }
       metricsStale.value=false;
+      if (cleanupFault(next)) {
+        state.value={...state.value,running:next.running,runtime:next.runtime,last_error:next.last_error,last_error_code:next.last_error_code,metrics:next.metrics};
+        return;
+      }
       if (next.running && next.freezer_state === 'unknown') {
         state.value={...state.value,running:true,freezer_state:'unknown',frozen:null,freezer_error:next.freezer_error,metrics:next.metrics,
           ...(next.iptables_active===false ? {iptables_active:false} : {}),
@@ -67,7 +74,7 @@ export function useEngine(api, feedback) {
         if (!await refresh()) metricsStale.value=true;
         return;
       }
-      if (!next.running) state.value={...state.value,running:false,iptables_active:false,runtime:next.runtime,last_error:next.last_error,freezer_state:next.freezer_state,frozen:next.frozen};
+      if (!next.running) state.value={...state.value,running:false,iptables_active:false,runtime:next.runtime,last_error:next.last_error,last_error_code:next.last_error_code,freezer_state:next.freezer_state,frozen:next.frozen};
       else if (running.value) state.value={...state.value,metrics:next.metrics};
     })();
     try { return await metricsRefresh; } finally {metricsRefresh=null;}
@@ -93,6 +100,7 @@ export function useEngine(api, feedback) {
   async function control(verb) {
     if (action.value || setting.value || !ready.value) return;
     if (verb === 'start' && healthUnknown.value) { feedback.toast('请先重新核实守护状态'); return; }
+    if (verb === 'start' && cleanupFailed.value) { feedback.toast('请先重试暂停并核实清理结果'); return; }
     action.value = verb; error.value = '';
     const label = verb === 'start' ? '启动' : '停止';
     feedback.log(`${label}底层拦截引擎…`);
@@ -161,5 +169,5 @@ export function useEngine(api, feedback) {
       await life.wait(1000);
     }
   });
-  return { state, total, scope, action, setting, ready, running, healthUnknown, checking, kind, badge, title, description, blockedTotal, metricsStale, refreshMetrics, refresh, verifyHealth, control, changeSetting };
+  return { state, total, scope, action, setting, ready, running, healthUnknown, cleanupFailed, checking, kind, badge, title, description, blockedTotal, metricsStale, refreshMetrics, refresh, verifyHealth, control, changeSetting };
 }

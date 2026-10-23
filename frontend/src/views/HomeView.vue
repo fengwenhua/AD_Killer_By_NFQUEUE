@@ -26,8 +26,8 @@ defineProps({ engine: Object, sync: Object, apps: Object, feedback: Object, modu
           <small :data-stale="engine.metricsStale">{{ engine.metricsStale ? '统计暂不可用，保留上次记录' : engine.blockedTotal === null ? '等待统计数据' : '规则命中次数 · 守护重启后重新累计' }}</small>
         </div>
         <div class="action-grid">
-          <ActionButton id="startBtn" :variant="engine.running ? undefined : 'primary'" icon="play" :busy="engine.action === 'start'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || engine.running || engine.healthUnknown" @click="engine.control('start')"><span id="startLabel">{{ engine.action === 'start' ? '启动中…' : '启动守护' }}</span></ActionButton>
-          <ActionButton id="stopBtn" :variant="engine.running ? 'primary' : undefined" icon="pause" :busy="engine.action === 'stop'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || (!engine.state?.running && !engine.state?.enabled)" @click="engine.control('stop')"><span id="stopLabel">{{ engine.action === 'stop' ? '暂停中…' : '暂停守护' }}</span></ActionButton>
+          <ActionButton id="startBtn" :variant="engine.running ? undefined : 'primary'" icon="play" :busy="engine.action === 'start'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || engine.running || engine.healthUnknown || engine.cleanupFailed" @click="engine.control('start')"><span id="startLabel">{{ engine.action === 'start' ? '启动中…' : '启动守护' }}</span></ActionButton>
+          <ActionButton id="stopBtn" :variant="engine.running ? 'primary' : undefined" icon="pause" :busy="engine.action === 'stop'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || (!engine.state?.running && !engine.state?.enabled && !engine.cleanupFailed)" @click="engine.control('stop')"><span id="stopLabel">{{ engine.action === 'stop' ? '暂停中…' : '暂停守护' }}</span></ActionButton>
         </div>
       </section>
       <section class="card sync-card">

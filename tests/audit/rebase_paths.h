@@ -9,6 +9,8 @@
 #endif
 #undef DATA_DIR
 #define DATA_DIR ADK_AUDIT_DATA_DIR
+#undef PROC_NFQUEUE_FILE
+#define PROC_NFQUEUE_FILE (DATA_DIR "/queue.fixture")
 // common.h's inline helper is expanded when included, not when called. Rebase
 // it too; rebasing only the file macros would leave DATA_FILE() on real /data.
 inline std::string DATA_FILE(const char *name) {

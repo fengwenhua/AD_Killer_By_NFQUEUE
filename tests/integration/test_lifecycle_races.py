@@ -55,6 +55,8 @@ def launcher_exited(marker):
 
 def main():
     assert os.geteuid() == 0 and not DATA.exists(), 'requires clean disposable Linux/root'
+    for table in engine.TABLES:
+        assert 'ADK_NFQ_' not in engine.firewall(table, '-S'), 'existing module rules, refusing lifecycle test'
     DATA.parent.mkdir(parents=True, exist_ok=True)
     children = []
     with tempfile.TemporaryDirectory(prefix='adk-real-lifecycle-') as directory:

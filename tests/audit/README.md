@@ -26,10 +26,8 @@ python3 tests/audit/run_deep_audit.py --sanitize
 
 | 标记 | 观测内容 | 证据边界 |
 | --- | --- | --- |
-| `cleanup-failure` | 清理桩保留路由时，实际 stop 仍返回 0/stopped | 故障注入，不会留下真实路由 |
 | `unrelated-pid` | 用探针自身 PID 模拟被复用的旧任务 PID，查询仍为 running | 未强制内核复用 PID |
 | `mixed-generation` | 路由安装返回失败后，真实规则匹配已切至新快照 | 路由依赖为桩，规则逻辑真实执行 |
-| `fault-state` | 回滚失败后 `g_stop=true`，`g_fault=false` | 不声称执行了完整 daemon 退出路径 |
 | `idle-retention` | 读取重组统计不执行回收，显式 prune 后释放 | 无实际等待；结合引擎调用路径判断空闲回收缺口 |
 
 O02 的 `read-failure-save` 已修复，从缺陷探针迁移到
@@ -42,6 +40,13 @@ O15 的 `paused-daemon` 已迁移至 `tests/test_lifecycle.cpp`、
 `tests/lifecycle_cli.cpp` / `tests/test_lifecycle_cli.py`：真实 CLI、配置、文件锁和进程调度，
 用 barrier 验证 PID 发布前暂停、旧清理与新启动交错、多窗口和自启策略复核；
 仅 PID 身份、引擎/防火墙执行及 cgroup 迁移隔离，不接管实际网络。
-当前隔离审计保留其余 5 个观测点，不再要求这些已修复的缺陷存在。
+O16 的 `cleanup-failure` 已迁移至实际 C++ 清理接口、子进程执行和 CLI 正式回归：
+`test_iptables_cleanup.py` / `test_lifecycle_cli.py` / `test_process_runner.cpp`。
+它们断言部分残留、查询/锁/超时失败必须非零，保留外部规则且可以重试恢复；
+相关依赖在普通主机测试中隔离，真实内核结果另行记录在方案进度中。
+O03 原 `fault-state` 子问题随 O16 的退出故障传播一并修复，正式回归为
+`test_engine_failure.cpp`，以及 `test_cleanup_failures.py` 中真实双栈切换/回滚失败后的非零退出。
+O03 的 `mixed-generation` 仍保留，不能把这一子问题修复当作全部重载一致性已完成。
+当前隔离审计保留其余 3 个观测点，不再要求这些已修复的缺陷存在。
 
 最终出现 `Audit characterization completed` 仅表示预期的当前行为已被观测；ASan/UBSan 没有报错也不代表完成安全审计。

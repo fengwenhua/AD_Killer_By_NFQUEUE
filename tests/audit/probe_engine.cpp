@@ -9,7 +9,9 @@ int cleanup_calls = 0;
 }
 
 std::string iptables_install(const IptablesConfig &) { return injected_failure; }
-void iptables_remove_all() { ++cleanup_calls; }
+IptablesCleanupResult iptables_remove_all(const IptablesCleanupLimits &) {
+    ++cleanup_calls; return {FirewallCleanupState::CLEAN, {}, {}};
+}
 FastResponseSender::~FastResponseSender() {}
 
 int main() {
@@ -27,11 +29,6 @@ int main() {
     assert(match_domain("new.example.com") == Verdict::BLOCK_EXACT);
     assert(!g_stop.load() && !g_fault.load());
     puts("OBSERVED mixed-generation: new rule snapshot published despite route installation failure");
-
-    injected_failure = "injected route installation failure; rollback failed";
-    hot_reload();
-    assert(g_stop.load() && !g_fault.load() && cleanup_calls == 1);
-    puts("OBSERVED fault-state: rollback failure sets stop but leaves g_fault false");
 
     HandshakeReassembler reassembler;
     TcpFlowKey key{};

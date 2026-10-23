@@ -63,6 +63,7 @@ inline std::string DATA_FILE(const char *name) {
 #define FILE_RUNTIME_STATE    (DATA_DIR "/runtime.state")        // 运行时状态(WebUI 轮询)
 #define FILE_ENGINE_ERROR     (DATA_DIR "/engine_error.conf")     // 当前启动失败原因
 #define FILE_METRICS          (DATA_DIR "/metrics.conf")         // 数据面指标快照
+#define PROC_NFQUEUE_FILE     "/proc/net/netfilter/nfnetlink_queue"
 #define STATE_LOCK_FILE       (DATA_DIR "/.state.lock")
 #define DIR_LOG               (DATA_DIR "/log")
 #define FILE_ENGINE_LOG       (DATA_DIR "/log/engine.log")       // daemon 日志

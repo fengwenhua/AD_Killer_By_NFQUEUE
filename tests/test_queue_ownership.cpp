@@ -23,12 +23,26 @@ int main() {
     assert(queue_owner_process(13268, root) == "YH_hosts");
     assert(find_queue_conflict(root).find("YH_hosts") != std::string::npos);
     assert(find_queue_conflict(root, 1).empty());
+    const auto queue_file = root + "/net/netfilter/nfnetlink_queue";
+    assert(inspect_queue_release([](int) { return false; }, queue_file, root).state == QueueReleaseState::FOREIGN);
+    assert(inspect_queue_release([](int pid) { return pid == 13268; }, queue_file, root).state == QueueReleaseState::OCCUPIED);
     auto queue1 = queue_conflict_message(owners, root, 1);
     assert(queue1.find("3139568836") != std::string::npos && queue1.find("YH_hosts") == std::string::npos);
     assert(unlink((root + "/13268/fd/3").c_str()) == 0);
     assert(queue_owner_process(13268, root).empty());
+    assert(inspect_queue_release([](int) { assert(false); return true; }, queue_file, root).state == QueueReleaseState::UNKNOWN);
     assert(find_queue_conflict(root).find("YH_hosts") == std::string::npos);
     assert(find_queue_conflict(root + "/absent").empty());
+    const auto never = [](int) { assert(false); return false; };
+    for (const char *bad : {"invalid\n", "0\n", "0 0\n", "-1 22\n", "0 33 garbage\n"}) {
+        std::ofstream(queue_file) << bad;
+        assert(inspect_queue_release(never, queue_file, root).state == QueueReleaseState::UNKNOWN);
+    }
+    std::ofstream(queue_file) << "5 13268 0 2 4096 0 0 1 1\n";
+    assert(inspect_queue_release(never, queue_file, root).ok());
+    std::ofstream(queue_file) << "";
+    assert(inspect_queue_release(never, queue_file, root).state == QueueReleaseState::RELEASED);
+    assert(inspect_queue_release(never, root + "/missing", root).state == QueueReleaseState::UNKNOWN);
     for (const auto &path : {"/13268/comm", "/net/netlink", "/net/netfilter/nfnetlink_queue"})
         assert(unlink((root + path).c_str()) == 0);
     for (const auto &path : {"/13268/fd", "/13268", "/net/netfilter", "/net"})

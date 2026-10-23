@@ -80,7 +80,7 @@ void log_line(const char *tag, const char *fmt, ...) {
 // 写运行时状态(WebUI 的 waitEngine 轮询 cat 此文件)
 bool write_runtime_state(const char *state) {
     if (!state) return false;
-    ExclusiveFileLock lock(STATE_LOCK_FILE, true);
+    ExclusiveFileLock lock(STATE_LOCK_FILE, true, 1000);
     return lock.ok() && write_file_atomic(FILE_RUNTIME_STATE, state);
 }
 
@@ -196,7 +196,7 @@ std::string read_conf_value(const char *path, const char *key) {
 bool write_conf_value_with_lock(const char *path, const char *key,
                                 const char *value, const char *lock_path) {
     if (!path || !key || !*key || !value || !lock_path) return false;
-    ExclusiveFileLock lock(lock_path, true);
+    ExclusiveFileLock lock(lock_path, true, 1000);
     if (!lock.ok()) return false;
     std::string content;
     read_file(path, content);

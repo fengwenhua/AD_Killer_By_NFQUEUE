@@ -58,7 +58,7 @@ cat "$ADK_DATADIR/engine_error.conf"
 | --- | --- |
 | `version` / `versionCode` | `module.prop` 与二进制版本应匹配；不要把电脑上的构建版本当成已安装版本 |
 | `running` / `runtime` | 正常启动后应为 `true` / `running`；手动暂停时停止是正常状态 |
-| `frozen` | 应为 `false`，否则有后台冻结风险 |
+| `frozen` / `freezer_state` | 新构建区分正常/冻结/未知；`frozen=null` 或 `freezer_state=unknown` 不能当成未冻结，仍需只读重试 |
 | `last_error` / `last_error_code` | 结合日志时间判断；文件为空不代表其他检查可以省略 |
 | `iptables_active` | v1.2.3 及更早快速状态仅按进程近似；v1.2.4 起快速状态检查双栈 OUTPUT 唯一入口，但仍不证明代际链完整 |
 | `route_check` | v1.2.4 起 `entry` 为入口检查，`full` 为完整双栈布局校验 |
@@ -69,6 +69,22 @@ cat "$ADK_DATADIR/engine_error.conf"
 | `autostart` | 是否开机自启；`false` 不影响当前已手动启动的引擎 |
 
 `runtime.state`、`metrics.conf` 都是磁盘快照，退出异常时可能保留旧值，不能单独用来证明进程仍在运行。统计时间持续刷新但流量计数不变时，仍需核对真实 OUTPUT 跳转；参见[软重启生命周期](软重启与守护生命周期.md)。
+
+### 已显式暂停后的结果解读（优化构建）
+
+下面是读取已有结果的说明，不要求在只读取证期间执行启停。
+优化后的构建会在停止响应中返回 `cleanup.routes`、`cleanup.process_gone`、
+`cleanup.queues`、`cleanup.remaining` 和 `cleanup.errors`；旧安装包可能没有这些字段。
+
+- `routes=clean` 才表示已成功读取双栈规则并确认本模块归属链/引用消失。
+  `partial` 是已确认仍有残留，`unknown` 是查询、锁或命令收尾无法核实；空输出和读取失败不是干净。
+- `process_gone=true` 同时依赖生命周期锁已释放和进程身份核对，不只看 PID 文件。
+- `queues=released` 表示队列已释放；`foreign` 表示经 socket inode 验证是其他监听器，模块不会停止它们。
+  `occupied/unknown` 不能当成本模块队列已清理，不能把 netlink port ID 直接当 PID 杀掉。
+- 只有整体核实且状态保存成功才返回 `status=stopped`、退出码 0。
+  `cleanup_unknown/cleanup_incomplete/cleanup_failed` 会保留诊断，WebUI 显示“停止结果待核实”，允许显式重试暂停。
+- `.route.lock` 仍被占用时，可能是旧防火墙命令正在完成。新的命令保留锁租约，父守护被强杀也不会提前放行新实例；
+  不要删除或替换锁文件、清空全局防火墙来绕过保护。先保存日志和进程/FD 证据，再决定如何处理。
 
 ## 3. 进程、线程、内存和冻结组
 

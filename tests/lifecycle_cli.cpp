@@ -34,7 +34,14 @@ void clear_daemon_pid_if(int pid) {
 }
 CgroupIsolationResult isolate_daemon_cgroups() { barrier("startup"); return {true, 0, ""}; }
 bool iptables_any_left() { return access(DATA_FILE("test.routes").c_str(), F_OK) == 0; }
-void iptables_remove_all() { barrier("cleanup"); unlink(DATA_FILE("test.routes").c_str()); }
+IptablesCleanupResult iptables_remove_all(const IptablesCleanupLimits &) {
+    if (access(DATA_FILE("cleanup.partial").c_str(), F_OK) == 0)
+        return {FirewallCleanupState::PARTIAL, {"ip6tables:ADK_NFQ_OUT_A"}, {"ip6tables -X failed"}};
+    if (access(DATA_FILE("cleanup.unknown").c_str(), F_OK) == 0)
+        return {FirewallCleanupState::UNKNOWN, {}, {"cannot inspect IPv6 rules"}};
+    barrier("cleanup"); unlink(DATA_FILE("test.routes").c_str());
+    return {FirewallCleanupState::CLEAN, {}, {}};
+}
 int run_daemon() {
     signal(SIGTERM, term); signal(SIGINT, term);
     assert(write_file_atomic(DATA_FILE("test.routes").c_str(), std::to_string(getpid())));
