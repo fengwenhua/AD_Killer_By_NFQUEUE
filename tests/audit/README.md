@@ -1,6 +1,6 @@
 # 深度分析隔离探针
 
-用于复核[待优化方案](../../待优化方案.md)中的当前行为，**不是修复实现，也不是“正确行为”的通过证明**。探针刻意断言当前缺陷或边界；生产代码修复后，相关断言应失效，随后应迁移成验证正确行为的正式回归测试。
+记录[待优化方案](../../待优化方案.md)中的历史隔离验证。原缺陷探针均已迁移到正常回归；当前入口仅执行空闲回收的正确行为测试，方便复核，不再断言“缺陷仍存在”。没有活动观测点，不表示项目已经没有其他问题。
 
 ## 运行
 
@@ -11,13 +11,13 @@ python3 tests/audit/run_deep_audit.py
 python3 tests/audit/run_deep_audit.py --sanitize
 ```
 
-默认没有接入 `make test` 或发布 CI，避免把“仍能复现缺陷”当成永久发布条件。普通构建启用 `-Wall -Wextra -Werror`，另可选择 ASan/UBSan。当前已在 macOS 验证；包含 Linux 编译选项，但不等于已验证跨平台行为。
+此历史入口不单独接入 CI，所调用的正式回归已纳入 `make test`。普通构建启用 `-Wall -Wextra -Werror`，另可选择 ASan/UBSan。当前已在 macOS 验证；包含 Linux 编译选项，但不等于已验证跨平台行为。
 
 ## 隔离方式与限制
 
 - 测试源码保存在本目录；编译产物和全部磁盘数据使用独占临时目录，结束后由 `TemporaryDirectory` 清理。
 - 强制包含 `rebase_paths.h`，先加载公共宏，再将所有参与编译单元的 `DATA_DIR` 改到临时目录。生产头文件不修改。这个测试头不能用于生产构建。
-- 引擎探针直接包含实际 `engine.cpp`，运行真实 `hot_reload()`、规则加载/匹配与重组代码；防火墙安装/清理使用故障注入桩，真实 `run_daemon()` 不执行。macOS 的 `prctl` 编译适配仅在本目录生效。
+- 空闲回收测试直接包含实际 `engine.cpp`，运行 owner 的 `maintain_reassembly()` 和真实 HTTP/TLS、TCP DNS 缓存；真实 `run_daemon()` 不执行，不打开网络响应 socket。macOS 的 `prctl` 编译适配仅在本目录生效。
 - 未使用网络请求、ADB、root 安装、真实 NFQUEUE、防火墙或 cgroup 迁移。冻结状态检查使用合成文件读取回调，前端只使用模拟 bridge 和内存数据。
 - 依赖未调用函数的编译/链接消除，因此这不是完整 Android 二进制或真实内核集成测试。不要将 probe 二进制刷入手机。
 
@@ -25,7 +25,7 @@ python3 tests/audit/run_deep_audit.py --sanitize
 
 | 标记 | 观测内容 | 证据边界 |
 | --- | --- | --- |
-| `idle-retention` | 读取重组统计不执行回收，显式 prune 后释放 | 无实际等待；结合引擎调用路径判断空闲回收缺口 |
+| 无活动观测点 | 原缺陷均已迁移到正式回归 | 不等于完整安全审计或真机认证 |
 
 O02 的 `read-failure-save` 已修复，从缺陷探针迁移到
 `frontend/tests/config-edit.test.js`，正常 `make test` 验证读取失败后不可保存。
@@ -55,6 +55,6 @@ O04 的 `unrelated-pid` 已迁移至 `test_job_identity.cpp` 与真实 CLI
 `integration/test_job_identity.py`：按任务 ID、boot/PID/启动时间与可执行映像核验，
 旧版 PID-only 记录不再算运行；查询不发送信号。任务记录与索引持久化、并发去重、
 所有者崩溃、未知后代写入者和安装阶段不确定性另有正式回归。
-原 CLI 缺陷探针已移除，当前隔离审计只保留 1 个 `idle-retention` 观测点。
+O06 的 `idle-retention` 已迁移至 `tests/test_idle_maintenance.cpp`：实际 owner 定时维护调用同时回收 HTTP/TLS 和 TCP DNS 的未完成前缀，没有新数据包也能到期释放；边界时刻和时钟倒退不误回收。观察统计仍保持只读，不用修改 stats 的副作用让旧探针“通过”。原 CLI、引擎缺陷探针均已移除。
 
-最终出现 `Audit characterization completed` 仅表示预期的当前行为已被观测；ASan/UBSan 没有报错也不代表完成安全审计。
+最终出现 `Audit regressions passed` 只表示这些指定回归通过；ASan/UBSan 没有报错不代表完成安全审计。

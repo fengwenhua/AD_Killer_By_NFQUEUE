@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 enum class DnsTcpDecision {
@@ -33,6 +34,8 @@ public:
     void finish(const TcpFlowKey &key, bool blocked, uint64_t now_ms);
     void forget(const TcpFlowKey &key);
     void clear();
+    void prune(uint64_t now_ms);
+    std::pair<size_t, size_t> retained(); // flows, bytes; observation never prunes
 
 private:
     static constexpr size_t MAX_FLOW_BYTES = 16u * 1024u;
@@ -61,7 +64,7 @@ private:
 
     using FlowMap = std::unordered_map<TcpFlowKey, FlowState, KeyHash>;
     void erase(FlowMap::iterator it);
-    void prune(uint64_t now_ms);
+    void prune_unlocked(uint64_t now_ms);
     bool evict_oldest();
     bool insert_segment(FlowState &flow, uint32_t sequence,
                         const uint8_t *payload, size_t payload_len);

@@ -134,7 +134,7 @@ bool write_file_atomic(const char *path, const std::string &content) {
 }
 
 // 二进制原子写(规则 gzip 落盘用)
-bool write_file_raw_atomic(const char *path, const std::string &data) {
+static bool write_atomic_snapshot(const char *path, const std::string &data, bool sync) {
     if (!path || !*path) return false;
     std::string tmp = std::string(path) + ".tmp.XXXXXX";
     int fd = mkstemp(tmp.data());
@@ -147,12 +147,15 @@ bool write_file_raw_atomic(const char *path, const std::string &data) {
         if (written <= 0) ok = false;
         else offset += static_cast<size_t>(written);
     }
-    if (ok) ok = fsync(fd) == 0;
+    if (ok && sync) ok = fsync(fd) == 0;
     if (close(fd) != 0) ok = false;
     if (ok) ok = rename(tmp.c_str(), path) == 0;
     if (!ok) unlink(tmp.c_str());
     return ok;
 }
+
+bool write_file_raw_atomic(const char *path, const std::string &data) { return write_atomic_snapshot(path, data, true); }
+bool write_file_volatile_atomic(const char *path, const std::string &data) { return write_atomic_snapshot(path, data, false); }
 
 AtomicWriteResult write_file_durable_atomic(const char *path, const std::string &data) {
     AtomicWriteResult result;

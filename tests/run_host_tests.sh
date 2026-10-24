@@ -231,6 +231,14 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fd
     "$ROOT/src/lifecycle.cpp" "$ROOT/src/apply_state.cpp" "$ROOT/src/process_runner.cpp" "$ROOT/src/bounded_log.cpp" \
     $LIFECYCLE_LINK_FLAGS -lz -o "$BUILD_DIR/lifecycle_cli"
 python3 "$ROOT/tests/test_lifecycle_cli.py" "$BUILD_DIR/lifecycle_cli"
+
+${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fdata-sections \
+    -DADK_AUDIT_DATA_DIR=\""$BUILD_DIR/idle-data"\" \
+    -include "$ROOT/tests/audit/rebase_paths.h" -I"$ROOT/tests/audit/include" -I"$ROOT/src" \
+    "$ROOT/tests/test_idle_maintenance.cpp" "$ROOT/src/tcp_reassembly.cpp" \
+    "$ROOT/src/dns_tcp_reassembly.cpp" "$ROOT/src/packet.cpp" \
+    $LIFECYCLE_LINK_FLAGS -o "$BUILD_DIR/test_idle_maintenance"
+"$BUILD_DIR/test_idle_maintenance"
 python3 "$ROOT/tests/test_uninstall_script.py"
 
 ${CXX:-c++} $COMPILE_FLAGS -pthread -DADK_AUDIT_DATA_DIR=\""$BUILD_DIR/cleanup-data"\" \

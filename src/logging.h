@@ -24,6 +24,10 @@ void log_dns_query(const std::string &domain, const char *verdict);
 // 追加文本文件(原子写临时文件 + rename)
 bool write_file_atomic(const char *path, const std::string &content);
 
+// Atomic visibility only, no fsync: ephemeral metric snapshots, never config,
+// rule pointers, lifecycle intents, ACKs or task journals.
+bool write_file_volatile_atomic(const char *path, const std::string &content);
+
 // 读取整个文本文件
 bool read_file(const char *path, std::string &out);
 

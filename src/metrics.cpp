@@ -196,3 +196,15 @@ std::string metrics_json(const MetricsSnapshot &snapshot) {
            << snapshot.reassembly_limit_rejected << "}";
     return output.str();
 }
+
+MetricsPublication MetricsPublisher::publish(MetricsSnapshot snapshot, uint64_t wall_seconds, uint64_t monotonic_ms,
+        const std::function<bool(const std::string &)> &write, bool force) {
+    snapshot.updated_at = 0;
+    const auto payload = serialize_metrics(snapshot);
+    if (!force && saved_ && payload == payload_ && monotonic_ms >= saved_ms_ && monotonic_ms - saved_ms_ < 15000)
+        return MetricsPublication::SKIPPED;
+    snapshot.updated_at = wall_seconds;
+    if (!write(serialize_metrics(snapshot))) return MetricsPublication::FAILED;
+    payload_ = payload; saved_ms_ = monotonic_ms; saved_ = true;
+    return MetricsPublication::SAVED;
+}

@@ -79,6 +79,34 @@ int main() {
                json.find("\"reassembly_bytes\":4096") != std::string::npos,
            "status JSON should expose packet, failure and reassembly metrics");
 
+    MetricsPublisher publisher;
+    unsigned writes = 0;
+    bool writable = true;
+    std::string last;
+    const auto store = [&](const std::string &text) {
+        ++writes; if (!writable) return false; last = text; return true;
+    };
+    MetricsSnapshot idle;
+    for (uint64_t second = 0; second <= 3600; ++second) {
+        idle.updated_at = second; // A timestamp alone never makes data dirty.
+        publisher.publish(idle, 10000 + second, second * 1000, store);
+    }
+    expect(writes == 241 && parse_metrics(last).updated_at == 13600,
+           "one simulated idle hour should write 241 heartbeats instead of 3601 synced snapshots");
+    idle.dns_packets = 1;
+    expect(publisher.publish(idle, 13601, 3601000, store) == MetricsPublication::SAVED,
+           "changed counters must be visible on the next one-second sample");
+    writable = false; idle.dns_packets = 2;
+    expect(publisher.publish(idle, 13602, 3602000, store) == MetricsPublication::FAILED &&
+               parse_metrics(last).dns_packets == 1, "failed publication cannot advance the saved checkpoint");
+    writable = true;
+    expect(publisher.publish(idle, 13603, 3603000, store) == MetricsPublication::SAVED &&
+               parse_metrics(last).dns_packets == 2, "a failed publication retries the unchanged unsaved data");
+    expect(publisher.publish(idle, 13604, 3604000, store, true) == MetricsPublication::SAVED,
+           "lifecycle shutdown can force a final snapshot even without changed data");
+    expect(publisher.publish(idle, 9000, 1, store) == MetricsPublication::SAVED,
+           "a restarted/rolled-back monotonic clock must not stall the heartbeat");
+
     if (failures != 0) {
         std::cerr << failures << " metrics test(s) failed\n";
         return EXIT_FAILURE;

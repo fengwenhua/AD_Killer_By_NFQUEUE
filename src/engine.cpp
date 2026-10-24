@@ -132,8 +132,14 @@ static void record_match(Verdict verdict) {
     }
 }
 
-static void save_metrics() {
+static void maintain_reassembly(uint64_t now) {
+    g_handshakes.prune(now);
+    g_dns_tcp.prune(now);
+}
+
+static void save_metrics(bool force = false) {
     static bool write_failed = false;
+    static MetricsPublisher publisher;
     MetricsSnapshot snapshot = g_metrics.snapshot();
     snapshot.updated_at = static_cast<uint64_t>(now_epoch());
     IpExtensionStats ip = ip_extension_stats();
@@ -147,7 +153,10 @@ static void save_metrics() {
     snapshot.reassembly_expired = reassembly.expired;
     snapshot.reassembly_evicted = reassembly.evicted;
     snapshot.reassembly_limit_rejected = reassembly.limit_rejected;
-    bool ok = write_file_atomic(FILE_METRICS, serialize_metrics(snapshot));
+    const auto published = publisher.publish(snapshot, snapshot.updated_at, monotonic_ms(),
+        [](const std::string &text) { return write_file_volatile_atomic(FILE_METRICS, text); }, force);
+    if (published == MetricsPublication::SKIPPED) return;
+    const bool ok = published == MetricsPublication::SAVED;
     if (!ok && !write_failed)
         log_line("警告", "数据面指标写入失败: %s", FILE_METRICS);
     write_failed = !ok;
@@ -872,6 +881,7 @@ int run_daemon() {
                 hot_reload();
             }
             if (now >= next_metrics_ms) {
+                maintain_reassembly(now);
                 save_metrics();
                 next_metrics_ms = now + 1000;
             }
@@ -886,7 +896,7 @@ int run_daemon() {
     t2.join();
     g_workers_started = false;
     try {
-        save_metrics();
+        save_metrics(true);
     } catch (const std::exception &error) {
         log_line("警告", "最终指标保存失败: %s", error.what());
     }

@@ -46,6 +46,14 @@ bool DnsTcpReassembler::evict_oldest() {
 }
 
 void DnsTcpReassembler::prune(uint64_t now_ms) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    prune_unlocked(now_ms);
+}
+std::pair<size_t, size_t> DnsTcpReassembler::retained() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return {flows_.size(), total_bytes_};
+}
+void DnsTcpReassembler::prune_unlocked(uint64_t now_ms) {
     for (auto it = flows_.begin(); it != flows_.end();) {
         const uint64_t timeout = it->second.blocked
             ? BLOCKED_TIMEOUT_MS : IDLE_TIMEOUT_MS;
@@ -155,7 +163,7 @@ DnsTcpResult DnsTcpReassembler::inspect(
     const TcpFlowKey &key, uint32_t sequence, uint8_t tcp_flags,
     const uint8_t *payload, size_t payload_len, uint64_t now_ms) {
     std::lock_guard<std::mutex> lock(mutex_);
-    prune(now_ms);
+    prune_unlocked(now_ms);
     auto found = flows_.find(key);
     if ((tcp_flags & 0x02) != 0) {
         if (found != flows_.end()) erase(found);

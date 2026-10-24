@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <string>
 
 enum class MetricMatch {
@@ -81,3 +82,17 @@ private:
 std::string serialize_metrics(const MetricsSnapshot &snapshot);
 MetricsSnapshot parse_metrics(const std::string &content);
 std::string metrics_json(const MetricsSnapshot &snapshot);
+
+enum class MetricsPublication { SKIPPED, SAVED, FAILED };
+// The owner samples at most once/second. Unchanged data only emits a 15 s
+// heartbeat; failed writes do not advance the checkpoint. This is volatile
+// observability, never a durability policy for config/rules/job journals.
+class MetricsPublisher {
+public:
+    MetricsPublication publish(MetricsSnapshot snapshot, uint64_t wall_seconds, uint64_t monotonic_ms,
+        const std::function<bool(const std::string &)> &write, bool force = false);
+private:
+    bool saved_ = false;
+    uint64_t saved_ms_ = 0;
+    std::string payload_;
+};

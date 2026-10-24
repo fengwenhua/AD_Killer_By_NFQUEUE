@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in defect characterization, NOT a fixed-behavior regression or root test.
+"""Historical audit entrypoint, now running fixed-behavior regressions.
 
 Compiles unmodified production code with test-only data path rebasing and
 network/process stubs. All files live in a TemporaryDirectory. No adb, network,
@@ -46,16 +46,15 @@ def main():
                           '-fno-sanitize-recover=all'])
         linker = ['-Wl,-dead_strip'] if sys.platform == 'darwin' else ['-Wl,--gc-sections']
         observed = ''
-        engine = directory / 'probe_engine'
-        sources = ['rules.cpp', 'rule_stream.cpp', 'rule_bundle.cpp', 'logging.cpp',
-                   'bounded_log.cpp', 'tcp_reassembly.cpp', 'dns_tcp_reassembly.cpp', 'packet.cpp',
-                   'cgroup_isolation.cpp']
-        subprocess.run([*compiler, *flags, str(AUDIT / 'probe_engine.cpp'),
+        engine = directory / 'idle_maintenance'
+        sources = ['tcp_reassembly.cpp', 'dns_tcp_reassembly.cpp', 'packet.cpp']
+        subprocess.run([*compiler, *flags, str(ROOT / 'tests/test_idle_maintenance.cpp'),
                         *(str(ROOT / 'src' / source) for source in sources),
                         *linker, '-lz', '-o', str(engine)], check=True, timeout=120)
         observed += observe([str(engine)])
-        assert sum(line.startswith('OBSERVED ') for line in observed.splitlines()) == 1
-    print('Audit characterization completed: 1 remaining observation; fixed faults have normal regressions now.')
+        assert 'actual owner maintenance releases idle' in observed
+        assert not any(line.startswith('OBSERVED ') for line in observed.splitlines())
+    print('Audit regressions passed: no active defect-characterization probes; see normal tests for all migrated faults.')
 
 
 if __name__ == '__main__':
