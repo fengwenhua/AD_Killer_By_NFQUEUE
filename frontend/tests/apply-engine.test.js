@@ -12,6 +12,29 @@ const feedback = messages => ({ log: text => messages?.push(text), toast() {}, c
 const baseline = () => ({ running: true, iptables_active: true, runtime: 'running', mode: 2, scope: 0,
   daemon_image_current: true, freezer_state: 'normal', rules_black: 4, rules_white: 3, apply: applied() });
 
+test('DNS log switch waits for its own policy ACK and never announces a failed reload as applied', async () => {
+  const scope = effectScope(), commands = [], messages = [];
+  let snapshot = {...baseline(), dev_mode:true};
+  const api = {readFile:async()=>'', command:async command=>{
+    commands.push(command);
+    if (command === '--dev off') return ok({status:'queued',revision:next,dev_mode:false});
+    if (command === '--apply-status '+next) {
+      snapshot={...snapshot,dev_mode:false,apply:applied({status:'failed',desired_revision:next,error:'injected rollback'})};
+      return ok(snapshot.apply);
+    }
+    return ok(snapshot);
+  }};
+  const model=scope.run(()=>useEngine(api,feedback(messages)));
+  try {
+    await model.refresh(); await model.changeSetting('dev',false);
+    assert.ok(commands.includes('--apply-status '+next));
+    assert.ok(messages.some(message=>message.includes('失败')));
+    assert.ok(!messages.includes('配置已保存'));
+    assert.equal(model.applyIssue.value,true);
+    assert.ok(!commands.includes('--start'));
+  } finally {scope.stop();}
+});
+
 test('failed desired policy shows old effective policy/counts and retries only through apply, never start', async () => {
   const scope = effectScope(), commands = [], messages = [];
   let snapshot = baseline();

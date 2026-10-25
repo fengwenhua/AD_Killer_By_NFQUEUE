@@ -673,8 +673,7 @@ static int cmd_toggle(const char *key, bool on) {
     configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
     std::string error;
     const bool saved = strcmp(key, "autostart") == 0 ? lifecycle::set_autostart(DATA_DIR, on, error)
-        : strcmp(key, "block_quic") == 0 ? write_policy_value(key, on ? "true" : "false")
-        : write_conf_value(FILE_STATE_CONF, key, on ? "true" : "false");
+        : write_policy_value(key, on ? "true" : "false");
     if (!saved) {
         fprintf(stderr, "配置写入失败: %s\n", key);
         return 1;
@@ -683,15 +682,17 @@ static int cmd_toggle(const char *key, bool on) {
         // Only persist boot policy: do not start/stop/reload the running engine.
         printf("{\"autostart\": %s}\n", on ? "true" : "false");
     } else if (strcmp(key, "dev_mode") == 0) {
+        ConfigInputLock inputs(DATA_DIR);
+        if (!inputs.ok()) { printf("{\"status\":\"busy\"}\n"); return 2; }
+        if (!setting_matches("dev_mode", on ? "true" : "false")) return 2;
         // 写/删 dev_mode_enabled 标志文件
         if (on) {
-            FILE *f = fopen(FILE_DEV_MODE_ENABLED, "w");
-            if (f) { fputs("1", f); fclose(f); }
+            if (!write_file_atomic(FILE_DEV_MODE_ENABLED, "1")) log_line("警告", "兼容日志标志未能更新，实际开关以策略回执为准");
         } else {
             unlink(FILE_DEV_MODE_ENABLED);
         }
-        log_line("系统", "%s DNS 流量日志", on ? "已开启" : "已关闭");
-        printf("{\"dev_mode\": \"done\"}\n");
+        log_line("系统", "DNS 流量日志设置已保存：%s，等待策略回执", on ? "开启" : "关闭");
+        return submit_apply_locked(std::string(",\"dev_mode\":") + (on ? "true" : "false"));
     } else {
         // QUIC 切换需要重建 iptables → 通知守护进程热重载
         ConfigInputLock inputs(DATA_DIR);

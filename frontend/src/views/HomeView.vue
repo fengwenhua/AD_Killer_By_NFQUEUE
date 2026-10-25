@@ -56,7 +56,7 @@ defineProps({ engine: Object, sync: Object, apps: Object, feedback: Object, modu
           <div class="settings-list">
             <SettingSwitch id="autostart" label="开机自动启动" help="默认关闭；开启后仍尊重手动暂停，不影响当前运行状态。" :checked="!!engine.state?.autostart" @change="engine.changeSetting('autostart', $event)" />
             <SettingSwitch id="quic" label="阻止 QUIC" help="默认开启；阻止 UDP 443，促使应用回退到 TCP。" :checked="!!engine.state?.block_quic" @change="engine.changeSetting('quic', $event)" />
-            <SettingSwitch id="devLog" label="DNS 流量日志" help="默认开启；域名日志仅存本机，可随时关闭。" :checked="!!engine.state?.dev_mode" @change="engine.changeSetting('dev', $event)" />
+            <SettingSwitch id="devLog" label="DNS 流量日志" help="默认开启，仅存本机；日志繁忙或写入失败时可能丢弃，数量记入运行指标。" :checked="!!engine.state?.dev_mode" @change="engine.changeSetting('dev', $event)" />
           </div>
         </fieldset>
       </section>

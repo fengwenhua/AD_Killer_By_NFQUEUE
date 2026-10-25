@@ -57,10 +57,12 @@ int main() {
     load_all_rules(*old); publish_rules_snapshot(old); save_rule_stats(*old);
     const auto old_stats = [&] { std::string text; assert(read_file(FILE_RULE_STATS, text)); return text; }();
     assert(write_file_atomic(FILE_CUSTOM_RULES, "new.example.com\nsecond.example.com\n"));
+    assert(write_file_atomic(FILE_STATE_CONF, "mode=2\nscope=0\nblock_quic=false\ndev_mode=true\n"));
     failure = "injected switch failure; rollback succeeded";
     assert(!hot_reload());
     assert(!g_fault.load() && !g_stop.load() && installs == 1);
     assert(rules_snapshot() == old);
+    assert(!dev_mode_now()); // Failed reload cannot enable logging from desired disk state.
     std::string stats; assert(read_file(FILE_RULE_STATS, stats) && stats == old_stats);
     { PolicyBarrier::Read packet(g_policy); assert(packet.active()); }
 
@@ -79,6 +81,9 @@ int main() {
 
     failure.clear();
     assert(hot_reload() && installs == 2);
+    assert(dev_mode_now());
+    assert(write_file_atomic(FILE_STATE_CONF, "mode=2\nscope=0\nblock_quic=false\ndev_mode=false\n"));
+    assert(dev_mode_now()); // Saving alone never changes the packet's effective policy.
     assert(match_domain("new.example.com") == Verdict::BLOCK_EXACT);
     assert(match_domain("old.example.com") == Verdict::PASS_DEFAULT);
     assert(read_conf_value(FILE_RULE_STATS, "black") == "2");
@@ -89,6 +94,7 @@ int main() {
     g_fault.store(false); g_stop.store(false);
     assert(!hot_reload());
     assert(g_fault.load() && g_stop.load());
+    assert(dev_mode_now());
     assert(cleanup_calls == 0); // Owner must release listeners before cleanup.
     assert(read_conf_value(FILE_ENGINE_ERROR, "code") == "reload_rollback_failed");
     assert(rules_snapshot() == old);

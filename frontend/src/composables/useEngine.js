@@ -204,7 +204,7 @@ export function useEngine(api, feedback) {
         feedback.log(`${name === 'autostart' ? '开机自启' : '配置'}设置失败：${result.stderr || '请刷新后重试'}`, 'error');
         feedback.toast('设置失败');
       } else {
-        if (['mode', 'scope', 'quic'].includes(name)) {
+        if (['mode', 'scope', 'quic', 'dev'].includes(name)) {
           const outcome = await observeApply(api, result, life);
           if (!life.active) return;
           feedback.log(outcome.message, outcome.level); feedback.toast(outcome.message);

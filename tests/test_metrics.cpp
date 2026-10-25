@@ -64,6 +64,7 @@ int main() {
     snapshot.ipv6_extension_errors = 8;
     snapshot.reassembly_bytes = 4096;
     snapshot.reassembly_limit_rejected = 9;
+    snapshot.dns_log_dropped = 10; snapshot.dns_log_pending_bytes = 4096; snapshot.dns_log_batches = 11;
     std::string encoded = serialize_metrics(snapshot);
     MetricsSnapshot decoded = parse_metrics(encoded + "unknown=42\nbad=nope\n");
     expect(decoded.updated_at == 123456 && decoded.dns_packets == 4000 &&
@@ -71,12 +72,12 @@ int main() {
                decoded.ipv6_fragments == 7 &&
                decoded.ipv6_extension_errors == 8 &&
                decoded.reassembly_bytes == 4096 &&
-               decoded.reassembly_limit_rejected == 9,
+               decoded.reassembly_limit_rejected == 9 && decoded.dns_log_dropped == 10 && decoded.dns_log_pending_bytes == 4096 && decoded.dns_log_batches == 11,
            "metrics persistence should round-trip every metric family");
     std::string json = metrics_json(decoded);
     expect(json.find("\"dns_packets\":4000") != std::string::npos &&
                json.find("\"verdict_failures\":1") != std::string::npos &&
-               json.find("\"reassembly_bytes\":4096") != std::string::npos,
+               json.find("\"reassembly_bytes\":4096") != std::string::npos && json.find("\"dns_log_dropped\":10") != std::string::npos,
            "status JSON should expose packet, failure and reassembly metrics");
 
     MetricsPublisher publisher;

@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 
 DATA = Path("/data/adb/AD_Killer_By_NFQUEUE")
@@ -42,6 +43,14 @@ def main():
         assert first["block_quic"], "fresh installation must block QUIC by default"
         assert first["dev_mode"], "fresh installation must enable DNS diagnostics by default"
         assert (DATA/'dev_mode_enabled').read_text() == '1'
+        with tempfile.TemporaryDirectory(prefix='adk-dev-marker-') as temporary:
+            outside = Path(temporary)/'outside'
+            outside.write_text('outside unchanged')
+            (DATA/'dev_mode_enabled').unlink()
+            (DATA/'dev_mode_enabled').symlink_to(outside)
+            submitted = command_json('--dev', 'on')
+            assert submitted['status'] == 'deferred' and len(submitted['revision']) == 64
+            assert outside.read_text() == 'outside unchanged' and not (DATA/'dev_mode_enabled').is_symlink()
         command('--dev','off')
         saved = conf.read_text()
         command('--install')

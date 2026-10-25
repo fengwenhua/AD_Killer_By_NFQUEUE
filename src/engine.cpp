@@ -50,6 +50,7 @@ static DataPlaneMetrics g_metrics;
 static PolicyBarrier g_policy;
 static bool g_workers_started = false; // owner thread only
 static bool g_applied_block_quic = false; // protected by policy read/write leases
+static bool g_applied_dev_mode = false;  // no file I/O in packet callbacks
 static ProcessIdentity g_owner;
 // Each worker owns its separate, bounded-timeout CTNETLINK request socket.
 static int g_ct_fds[2] = {-1, -1};
@@ -153,6 +154,11 @@ static void save_metrics(bool force = false) {
     snapshot.reassembly_expired = reassembly.expired;
     snapshot.reassembly_evicted = reassembly.evicted;
     snapshot.reassembly_limit_rejected = reassembly.limit_rejected;
+    const auto dns = dns_log_stats();
+    snapshot.dns_log_enqueued = dns.enqueued; snapshot.dns_log_written = dns.written;
+    snapshot.dns_log_dropped = dns.dropped; snapshot.dns_log_write_failures = dns.write_failures;
+    snapshot.dns_log_batches = dns.batches; snapshot.dns_log_pending = dns.pending;
+    snapshot.dns_log_pending_bytes = dns.pending_bytes; snapshot.dns_log_active = dns.active ? 1 : 0;
     const auto published = publisher.publish(snapshot, snapshot.updated_at, monotonic_ms(),
         [](const std::string &text) { return write_file_volatile_atomic(FILE_METRICS, text); }, force);
     if (published == MetricsPublication::SKIPPED) return;
@@ -162,18 +168,8 @@ static void save_metrics(bool force = false) {
     write_failed = !ok;
 }
 
-// dev_mode 读取(2 秒缓存,避免每个 DNS 包都读文件)
-static bool dev_mode_now() {
-    static time_t cached_at = 0;
-    static bool cached = false;
-    time_t now = time(nullptr);
-    if (now != cached_at) {
-        std::string v = read_conf_value(FILE_STATE_CONF, "dev_mode");
-        cached = (v == "true" || v == "1");
-        cached_at = now;
-    }
-    return cached;
-}
+// Accessed under the packet's policy lease; changes only at policy commit.
+static bool dev_mode_now() { return g_applied_dev_mode; }
 
 // ============================================================================
 // DNS 队列处理(queue 0)
@@ -708,6 +704,7 @@ static bool hot_reload() {
     }
     publish_rules_snapshot(candidate);
     g_applied_block_quic = cfg.block_quic;
+    g_applied_dev_mode = cfg.dev_mode;
     // Do not clear old reassembly decisions on a failed candidate or rollback.
     // Existing kernel PASS/BLOCK connmarks intentionally retain flow lifetime.
     g_handshakes.clear();
@@ -826,6 +823,7 @@ int run_daemon() {
     }
     publish_rules_snapshot(initial_rules);
     g_applied_block_quic = cfg.block_quic;
+    g_applied_dev_mode = cfg.dev_mode;
     save_rule_stats(*initial_rules);
     if (stop_requested()) {
         teardown_queue(fd0, QUEUE_DNS);
@@ -842,6 +840,7 @@ int run_daemon() {
     log_line("系统", "命中后快速拒绝：DNS NXDOMAIN / TCP reset / QUIC ICMP 不可达，不等待静默丢包超时");
 
     // 5. 双线程(DNS 与 TLS/HTTP 并行)
+    if (!start_dns_log()) log_line("警告", "DNS 日志线程无法启动，继续守护；未写日志会计入 dns_log_dropped");
     std::thread t1, t2;
     try {
         t1 = std::thread(recv_loop, fd0, QUEUE_DNS, on_dns_packet);
@@ -855,6 +854,7 @@ int run_daemon() {
         teardown_queue(fd0, QUEUE_DNS);
         teardown_queue(fd1, QUEUE_TLS_HTTP);
         cleanup_routes();
+        stop_dns_log();
         write_runtime_state("error");
         return 1;
     }
@@ -895,18 +895,18 @@ int run_daemon() {
     t1.join();
     t2.join();
     g_workers_started = false;
-    try {
-        save_metrics(true);
-    } catch (const std::exception &error) {
-        log_line("警告", "最终指标保存失败: %s", error.what());
-    }
-
     // 7. No workers remain: release listeners before possibly slow cleanup.
     // New unclassified packets then use queue-bypass, not an unconsumed queue.
     teardown_queue(fd0, QUEUE_DNS);
     teardown_queue(fd1, QUEUE_TLS_HTTP);
     for (auto &sender : g_response_senders) sender.close();
     cleanup_routes();
+    stop_dns_log();
+    try {
+        save_metrics(true);
+    } catch (const std::exception &error) {
+        log_line("警告", "最终指标保存失败: %s", error.what());
+    }
     const bool final_state_saved = write_runtime_state(g_fault.load() ? "error" : "stopped");
     if (!final_state_saved) g_fault.store(true);
     log_line("系统", "%s", g_fault.load() ? "引擎已退出，故障状态已保留，请查看清理诊断" : "引擎已停止,拦截规则已核实清理");

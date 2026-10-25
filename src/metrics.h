@@ -40,6 +40,8 @@ struct MetricsSnapshot {
     uint64_t reassembly_expired = 0;
     uint64_t reassembly_evicted = 0;
     uint64_t reassembly_limit_rejected = 0;
+    uint64_t dns_log_enqueued = 0, dns_log_written = 0, dns_log_dropped = 0, dns_log_write_failures = 0;
+    uint64_t dns_log_batches = 0, dns_log_pending = 0, dns_log_pending_bytes = 0, dns_log_active = 0;
 };
 
 class DataPlaneMetrics {

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <functional>
 #include <string>
+#include "async_log.h"
 
 // 设置当前进程的独立日志；未设置时 log_line 输出 stdout。
 void configure_process_log(const char *path, size_t max_bytes, int backups);
@@ -20,6 +21,9 @@ std::string read_runtime_state();
 
 // DNS 查询日志(带时间戳): [HH:MM:SS] domain -> verdict
 void log_dns_query(const std::string &domain, const char *verdict);
+bool start_dns_log();
+void stop_dns_log();
+AsyncLogStats dns_log_stats();
 
 // 追加文本文件(原子写临时文件 + rename)
 bool write_file_atomic(const char *path, const std::string &content);

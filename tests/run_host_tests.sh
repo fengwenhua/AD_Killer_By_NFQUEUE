@@ -78,6 +78,10 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread \
 
 "$BUILD_DIR/test_metrics"
 
+${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" \
+    "$ROOT/tests/test_async_log.cpp" -o "$BUILD_DIR/test_async_log"
+"$BUILD_DIR/test_async_log"
+
 ${CXX:-c++} $COMPILE_FLAGS -pthread \
     -I"$ROOT/src" \
     "$ROOT/tests/test_nfnetlink_parser.cpp" \

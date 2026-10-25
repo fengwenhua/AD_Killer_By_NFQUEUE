@@ -39,6 +39,7 @@ std::mutex log_mutex;
 std::string process_log_path;
 size_t process_log_max_bytes = 0;
 int process_log_backups = 0;
+AsyncLog dns_log;
 
 }  // namespace
 
@@ -98,6 +99,13 @@ std::string read_runtime_state() {
 
 // ---------------------------------------------------------------------------
 // DNS 查询日志(dev_mode 开启时由 DNS 队列线程写入)
+bool start_dns_log() {
+    return dns_log.start([](const char *data, size_t bytes) {
+        return append_bounded_log(FILE_DNS_LOG, std::string(data, bytes), DNS_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
+    });
+}
+void stop_dns_log() { dns_log.stop(); }
+AsyncLogStats dns_log_stats() { return dns_log.stats(); }
 void log_dns_query(const std::string &domain, const char *verdict) {
     if (domain.empty()) return;
     if (domain.size() > 480) return;   // 防御:超长行丢弃
@@ -112,9 +120,7 @@ void log_dns_query(const std::string &domain, const char *verdict) {
     if (length <= 0) return;
     size_t bytes = static_cast<size_t>(length);
     if (bytes >= sizeof(line)) bytes = sizeof(line) - 1;
-    std::lock_guard<std::mutex> lock(log_mutex);
-    append_bounded_log(FILE_DNS_LOG, std::string(line, bytes),
-                       DNS_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
+    dns_log.enqueue(line, bytes);
 }
 
 // ---------------------------------------------------------------------------

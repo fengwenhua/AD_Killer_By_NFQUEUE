@@ -124,7 +124,7 @@ window.ksu = {
     else if(command.endsWith(" --stop")) {previewEngineState="stopped";previewCleanupCode='';text='{"status":"stopped"}';}
     else if(command.includes(' --autostart ')) {previewSettings.autostart=command.endsWith(' on');text=JSON.stringify({autostart:previewSettings.autostart});}
     else if(command.includes(' --quic ')) {previewSettings.block_quic=command.endsWith(' on');text=previewSubmitApply();}
-    else if(command.includes(' --dev ')) {previewSettings.dev_mode=command.endsWith(' on');text='{}';}
+    else if(command.includes(' --dev ')) {previewSettings.dev_mode=command.endsWith(' on');text=previewSubmitApply();}
     else if(command.includes(' --scope ')) {previewSettings.scope=Number(command.split(' ').pop());text=previewSubmitApply();}
     else if(command.includes(' --mode ')) {previewSettings.mode=Number(command.split(' ').pop());text=previewSubmitApply();}
     else if(command.includes(' --apps-apply') || command.includes(' --reload')) text=previewSubmitApply();

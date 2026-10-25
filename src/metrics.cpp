@@ -39,6 +39,14 @@ void parse_value(MetricsSnapshot &snapshot, const std::string &key,
     METRIC_FIELD(reassembly_expired)
     METRIC_FIELD(reassembly_evicted)
     METRIC_FIELD(reassembly_limit_rejected)
+    METRIC_FIELD(dns_log_enqueued)
+    METRIC_FIELD(dns_log_written)
+    METRIC_FIELD(dns_log_dropped)
+    METRIC_FIELD(dns_log_write_failures)
+    METRIC_FIELD(dns_log_batches)
+    METRIC_FIELD(dns_log_pending)
+    METRIC_FIELD(dns_log_pending_bytes)
+    METRIC_FIELD(dns_log_active)
 #undef METRIC_FIELD
 }
 
@@ -143,6 +151,14 @@ std::string serialize_metrics(const MetricsSnapshot &snapshot) {
     METRIC_FIELD(reassembly_expired)
     METRIC_FIELD(reassembly_evicted)
     METRIC_FIELD(reassembly_limit_rejected)
+    METRIC_FIELD(dns_log_enqueued)
+    METRIC_FIELD(dns_log_written)
+    METRIC_FIELD(dns_log_dropped)
+    METRIC_FIELD(dns_log_write_failures)
+    METRIC_FIELD(dns_log_batches)
+    METRIC_FIELD(dns_log_pending)
+    METRIC_FIELD(dns_log_pending_bytes)
+    METRIC_FIELD(dns_log_active)
 #undef METRIC_FIELD
     return output.str();
 }
@@ -193,7 +209,15 @@ std::string metrics_json(const MetricsSnapshot &snapshot) {
            << ",\"reassembly_expired\":" << snapshot.reassembly_expired
            << ",\"reassembly_evicted\":" << snapshot.reassembly_evicted
            << ",\"reassembly_limit_rejected\":"
-           << snapshot.reassembly_limit_rejected << "}";
+           << snapshot.reassembly_limit_rejected
+           << ",\"dns_log_enqueued\":" << snapshot.dns_log_enqueued
+           << ",\"dns_log_written\":" << snapshot.dns_log_written
+           << ",\"dns_log_dropped\":" << snapshot.dns_log_dropped
+           << ",\"dns_log_write_failures\":" << snapshot.dns_log_write_failures
+           << ",\"dns_log_batches\":" << snapshot.dns_log_batches
+           << ",\"dns_log_pending\":" << snapshot.dns_log_pending
+           << ",\"dns_log_pending_bytes\":" << snapshot.dns_log_pending_bytes
+           << ",\"dns_log_active\":" << snapshot.dns_log_active << "}";
     return output.str();
 }
 
