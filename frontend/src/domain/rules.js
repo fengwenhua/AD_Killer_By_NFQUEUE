@@ -53,8 +53,11 @@ export function parseSourceSummary(text) {
   const filtered = sources.reduce((n, s) => n + (Number(s.rejected_unsupported) || 0) + (Number(s.rejected_too_long) || 0), 0);
   let message = `来源 ${accepted}/${total} 成功；过滤不支持或超长规则 ${filtered.toLocaleString()} 行`;
   if (head.unique_total !== undefined) message += `；去重 ${Number(head.duplicate_lines || 0).toLocaleString()} 行，来源唯一规则 ${Number(head.unique_total).toLocaleString()} 条（含白名单 ${Number(head.unique_white || 0).toLocaleString()}）`;
-  if (accepted < total) message += '。注意：部分来源失败，本次仅合并成功来源。';
-  return { head, sources, message, partial: accepted < total };
+  if (accepted < total) message += head.publish_status === 'published' ? '。注意：部分来源失败，本次仅合并成功来源。' :
+    head.publish_status === 'incomplete_sources' ? '。部分来源未完整通过，本次未发布，保留整份旧规则。' : '。部分来源失败，请核查发布结果。';
+  const cached = sources.filter(s => s.status === 'accepted' && s.provenance === 'cache_fallback').length;
+  if (cached) message += `；${cached} 个来源使用缓存，请查看来源卡片中的核验时间`;
+  return { head, sources, message, partial: accepted < total, cached };
 }
 
 export function publishedSummary(report, jobLog, jobId) {
@@ -69,13 +72,21 @@ export function sourceHistory(source, entries) {
   const accepted = entry.status === 'accepted', ok = accepted && entry.publish_status === 'published';
   let detail;
   if (!accepted) detail = '上次同步未接受：' + (entry.reason || entry.status || '统计不完整，请重新同步');
-  else if (!ok) detail = '规则未成功发布，当前仍保留旧规则。';
+  else if (!ok) detail = entry.publish_status === 'incomplete_sources' ? '来源未完整通过，本次未发布，仍使用整份旧规则。' : '发布结果未确认，请核查当前规则。';
   else if (entry.format === 'hagezi-pro-minus-fake') detail = `Pro 唯一 ${Number(entry.difference_base_unique || 0).toLocaleString()} / Fake 唯一 ${Number(entry.difference_exclude_unique || 0).toLocaleString()} / 差集剔除 ${Number(entry.difference_removed || 0).toLocaleString()} / 保留 ${Number(entry.accepted_hosts || 0).toLocaleString()} 条精确规则`;
   else detail = `上次同步接受 ${((Number(entry.accepted_hosts) || 0) + (Number(entry.accepted_adguard) || 0)).toLocaleString()} 行，过滤 ${((Number(entry.rejected_unsupported) || 0) + (Number(entry.rejected_too_long) || 0)).toLocaleString()} 行（去重前）`;
   const date = new Date(Number(entry.checked_at) * 1000);
   const known = Number(entry.checked_at) > 0 && Number.isFinite(date.getTime());
-  return { label: ok ? '✓ 同步成功' : accepted ? '✕ 发布失败（下载校验已通过）' : '✕ 同步失败', detail,
-    kind: ok ? 'success' : 'error', datetime: known ? date.toISOString() : '',
+  const cached = ok && entry.provenance === 'cache_fallback', revalidated = ok && entry.provenance === 'revalidated';
+  if (cached) {
+    const age = Number(entry.cache_age_seconds), verified = Number(entry.cache_verified_at);
+    const ageText = /^\d+$/.test(String(entry.cache_age_seconds ?? '')) && /^\d+$/.test(String(entry.cache_verified_at ?? '')) &&
+      Number.isSafeInteger(age) && age >= 0 && Number.isSafeInteger(verified) && verified > 0 ?
+      age < 60 ? '不足 1 分钟' : age < 3600 ? `${Math.ceil(age / 60)} 分钟` : `${(age / 3600).toFixed(1)} 小时` : '年龄未核实';
+    detail += `；上次同步使用已核验缓存，距核验 ${ageText}。` + (entry.warning ? ` 原因：${entry.warning}` : '');
+  } else if (revalidated) detail += '；服务器已确认缓存内容未变化（304）。';
+  return { label: cached ? '⚠ 已同步（使用缓存）' : ok ? '✓ 同步成功' : accepted ? '✕ 发布未确认（下载校验已通过）' : entry.status === 'not_attempted' ? '未继续请求（本次同步已中止）' : '✕ 同步失败', detail,
+    kind: cached ? 'warning' : ok ? 'success' : 'error', datetime: known ? date.toISOString() : '',
     time: known ? date.toLocaleString('zh-CN', { hour12: false }) : '时间未记录，请重新同步' };
 }
 

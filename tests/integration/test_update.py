@@ -195,7 +195,7 @@ def main():
             assert (DATA / "rules.current").read_bytes() == manifest
             assert not list((DATA / "rulesets").glob(".staging-*"))
 
-        sources("/404", "/adguard")
+        sources("/adguard", "/404")
         started = json.loads(command("--update-start").splitlines()[-1])
         assert started["status"] == "started"
         for _ in range(100):
@@ -248,6 +248,12 @@ def main():
                 previous = current
         finally:
             os.close(lease)
+        cache = DATA / 'source_cache'
+        cached = [path for path in cache.iterdir() if path.is_dir()]
+        manifests = list(cache.glob('*.current'))
+        assert len(cached) == len(manifests) <= 65
+        assert sum(path.stat().st_size for entry in cached for path in entry.glob('body-*')) <= 256 * 1024 * 1024
+        assert not list(cache.glob('.new-*')) and not (DATA / 'source_staging').exists()
         print("real update AdGuard-only/Hosts-only/mixed, paused counters, bad-source "
               "preservation, asynchronous jobs, unchanged reuse and 100-generation pinned-reader GC passed")
     finally:

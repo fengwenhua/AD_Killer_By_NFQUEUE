@@ -82,6 +82,7 @@ make test
 
 - [实现文档](docs/AD_Killer_By_NFQUEUE实现文档.md)
 - [开源规则合并指南](docs/开源规则合并指南.md)
+- [规则同步预算与缓存](docs/规则同步策略.md)
 - [HaGeZi 内置特殊来源](docs/HaGeZi内置特殊来源.md)
 - [兼容性与协议限制](docs/兼容性与协议限制.md)
 - [模块更新](docs/模块更新.md)

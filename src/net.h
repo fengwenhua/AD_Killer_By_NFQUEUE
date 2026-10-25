@@ -4,6 +4,21 @@
 
 #include <cstddef>
 #include <string>
+#include "http_validators.h"
+
+struct DownloadResponse {
+    std::string error;
+    long http_status = 0;
+    std::string effective_url;
+    HttpValidators validators;
+    size_t bytes = 0;
+    bool not_modified = false, transient = false;
+};
+
+// A 304 is successful only for an explicit validator request. It never
+// replaces path; the caller must bind/validate its own cached representation.
+DownloadResponse download_file_response(const std::string &url, const std::string &path,
+                                        const HttpValidators &validators = {});
 
 // 下载 HTTP(S) url 到 path(原子临时文件 + rename,单源最大 64 MiB)
 // 返回空串成功,否则错误信息

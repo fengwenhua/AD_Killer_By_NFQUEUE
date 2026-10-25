@@ -164,6 +164,22 @@ test('unique update task publication, partial sources, resume, logs and observer
   } finally { scope.stop(); }
 });
 
+test('complete cached-source publication warns about cache reuse without announcing a partial ruleset', async () => {
+  const scope = effectScope(), history = ref([]);
+  const api = {
+    command: async args => args === '--jobs-list' ? ok({ status: 'ok', jobs: [] }) : args === '--update-start' ? ok({ status: 'started', job_id: '123-456' }) : ok({ status: 'success', exit_code: 0 }),
+    readJob: async () => '整组复用缓存\ngeneration 999-111 已原子发布',
+    readFile: async () => 'job_id=123-456\npublish_status=published\ngeneration=999-111\nsource_count=1\naccepted_sources=1\ncached_sources=1\n\n[source_0]\nurl=https://a.org\nstatus=accepted\nprovenance=cache_fallback\n',
+  };
+  const sync = scope.run(() => useSync(api, feedback(), history, async () => {}, memory()));
+  try {
+    await sync.start();
+    assert.equal(sync.kind.value, 'warning'); assert.match(sync.message.value, /使用缓存/);
+    assert.doesNotMatch(sync.message.value, /部分来源失败|仅合并/);
+    assert.equal(history.value[0].provenance, 'cache_fallback');
+  } finally { scope.stop(); }
+});
+
 test('diagnostic buffer is bounded and feedback treats hostile text as text', () => {
   const scope = effectScope(), model = scope.run(useFeedback);
   try { model.log(Array.from({ length: 501 }, (_, i) => `line ${i}`).join('\n')); assert.equal(model.logs.value.length, 400); assert.equal(model.logs.value[0].text, 'line 101'); }

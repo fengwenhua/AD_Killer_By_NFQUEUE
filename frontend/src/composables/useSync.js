@@ -72,13 +72,14 @@ export function useSync(api, feedback, history, refresh, storage = getStorage())
       if (report?.head.job_id === id) history.value = report.sources;
       const summary = ok ? publishedSummary(report, text, id) : null;
       const partial = ok && (summary ? summary.partial : /下载失败:|来源内容拒绝:|来源累计资源上限|注意：部分来源失败/.test(text));
+      const cached = ok && (summary ? summary.cached > 0 : /整组复用.*缓存/.test(text));
       const failure = text.trim().split(/\r?\n/).reverse().find(line => /失败|拒绝|错误|无法|不可用|超限/.test(line));
-      const final = ok ? summary?.message || (partial ? '部分来源失败，成功来源已合并保存；请查看诊断日志。' : '规则同步任务已完成；请核实概览中的生效状态。') : state.status === 'interrupted' ? '更新进程意外中断，发布结果未确认；请核查当前规则。' : '同步失败：' + (failure || '请展开诊断日志查看详情');
-      const finalKind = ok ? partial ? 'warning' : 'success' : 'error';
+      const final = ok ? summary?.message || (partial ? '部分来源失败，成功来源已合并保存；请查看诊断日志。' : cached ? '规则已同步，部分来源使用缓存；请查看来源核验时间。' : '规则同步任务已完成；请核实概览中的生效状态。') : state.status === 'interrupted' ? '更新进程意外中断，发布结果未确认；请核查当前规则。' : '同步失败：' + (failure || '请展开诊断日志查看详情');
+      const finalKind = ok ? partial || cached ? 'warning' : 'success' : 'error';
       feedback.log(final, finalKind === 'success' ? 'ok' : finalKind === 'error' ? 'error' : '');
       status(final + (outcome.logError ? ' 日志片段未能完整读取。' : ''), finalKind);
       if (!ok) feedback.consoleOpen.value = true;
-      feedback.toast(ok ? partial ? '同步完成，但部分来源失败' : '规则已同步完成' : '同步失败');
+      feedback.toast(ok ? partial ? '同步完成，但部分来源失败' : cached ? '规则已同步，部分来源使用缓存' : '规则已同步完成' : '同步失败');
       await refresh();
     })();
     try { await tracking; }

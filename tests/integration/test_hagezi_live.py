@@ -25,7 +25,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.server.requests.append(self.path)
-        payload = {"/pro": PRO, "/fake": self.server.fake,
+        payload = {"/pro": self.server.pro, "/fake": self.server.fake,
                    "/ordinary": b"fake.example.com\n", "/long": LONG}.get(self.path)
         self.send_response(200 if payload is not None else 404)
         self.end_headers()
@@ -35,7 +35,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     assert os.geteuid() == 0 and not DATA.exists(), "disposable root environment required"
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    server.fake, server.requests = FAKE, []
+    server.pro, server.fake, server.requests = PRO, FAKE, []
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     prefix = f"http://127.0.0.1:{server.server_port}"
@@ -104,7 +104,7 @@ def main():
             log = (DATA / "update_jobs" / f"update-{test['job_id']}.log").read_text()
             assert "差集剔除 1 / 保留 2" in log and "未替换规则" in log
             configure(True)
-            command("--update")
+            first_sync_output = command("--update")
             generation = (DATA / "rules.current").read_text().strip()
             text = gzip.decompress((DATA / "rulesets" / generation / "hosts_rules.gz").read_bytes()).decode()
             assert set(line for line in text.splitlines() if not line.startswith("#")) == {
@@ -118,6 +118,24 @@ def main():
             command("--update")
             assert server.requests == ["/ordinary"]
             configure(True, ordinary=False)
+            pair_records = [path for path in (DATA / 'source_cache').glob('*/metadata')
+                            if (prefix + '/pro').encode().hex() in path.read_text()]
+            assert pair_records, (first_sync_output, list((DATA / 'source_cache').rglob('*')))
+            pair_metadata = pair_records[0]
+            cached_group = pair_metadata.read_bytes()
+            server.pro, server.fake = b'*.fresh-pro.example.org\n', None
+            command('--update')
+            assert pair_metadata.read_bytes() == cached_group, 'failed source renewed cache age'
+            generation = (DATA / 'rules.current').read_text().strip()
+            text = gzip.decompress((DATA / 'rulesets' / generation / 'hosts_rules.gz').read_bytes()).decode()
+            assert set(row for row in text.splitlines() if not row.startswith('#')) == {'keep.example.com', 'other.example.com'}, 'mixed fresh Pro with cached Fake'
+            assert 'cached_sources=1\n' in (DATA / 'source_stats.conf').read_text()
+            assert 'provenance=cache_fallback\n' in (DATA / 'source_stats.conf').read_text()
+            server.pro = PRO
+            expired = str(int(time.time()) - 86402)
+            pair_metadata.write_text(''.join((line.split('=', 1)[0] + '=' + expired + '\n')
+                                            if line.startswith(('verified_at=', 'fetched_')) else line
+                                            for line in pair_metadata.read_text().splitlines(keepends=True)))
             manifest = (DATA / "rules.current").read_bytes()
             for bad_fake in (None, b"", b"<!doctype html><html>error</html>", b"\x1f\x8bcorrupt"):
                 server.fake = bad_fake
@@ -133,6 +151,7 @@ def main():
             assert (DATA / "rules.current").read_bytes() == manifest
             assert "rejected_sources=1" in (DATA / "source_stats.conf").read_text()
             assert "publish_status=incomplete_sources" in (DATA / "source_stats.conf").read_text()
+            assert 'cache_expired' in (DATA / 'source_stats.conf').read_text()
             assert not (DATA / "daemon.pid").exists()
             print("HaGeZi real HTTP paired jobs, disabled testing, enable/disable, scoped difference, "
                   "404/empty/HTML/gzip failures, atomic retention and no-engine-side-effect tests passed")

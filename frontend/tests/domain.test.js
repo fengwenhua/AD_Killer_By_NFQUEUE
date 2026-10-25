@@ -39,7 +39,23 @@ test('sync counts, history timestamps, stale publication rejection and non-HTML 
   assert.match(sourceHistory({ url: 'https://example.org/b', enabled: true }, report.sources).detail, /<img src=x>/); // renderer must interpolate text, not v-html
   assert.match(sourceHistory({ url: 'https://example.org/a', enabled: false }, report.sources).label, /已停用/);
   report.sources[0].publish_status = 'failed';
-  assert.match(sourceHistory({ url: 'https://example.org/a', enabled: true }, report.sources).label, /发布失败/);
+  assert.match(sourceHistory({ url: 'https://example.org/a', enabled: true }, report.sources).label, /发布未确认/);
+});
+
+test('source cache fallback stays visible with its age; verified 304 and incomplete publication stay distinct', () => {
+  const summary = parseSourceSummary('publish_status=published\nsource_count=1\naccepted_sources=1\n\n[source_0]\nurl=https://a.org\nstatus=accepted\nprovenance=cache_fallback\ncache_age_seconds=7200\ncache_verified_at=1700000000\nwarning=HTTP 503\n');
+  assert.equal(summary.cached, 1); assert.equal(summary.partial, false); assert.match(summary.message, /使用缓存/);
+  let history = sourceHistory({ url: 'https://a.org', enabled: true }, summary.sources);
+  assert.equal(history.kind, 'warning'); assert.match(history.label, /使用缓存/); assert.match(history.detail, /2\.0 小时/); assert.match(history.detail, /HTTP 503/);
+  for (const age of ['-1', '', 'NaN', '1e3']) {
+    summary.sources[0].cache_age_seconds = age;
+    assert.match(sourceHistory({ url: 'https://a.org', enabled: true }, summary.sources).detail, /年龄未核实/);
+  }
+  summary.sources[0].provenance = 'revalidated';
+  history = sourceHistory({ url: 'https://a.org', enabled: true }, summary.sources);
+  assert.equal(history.kind, 'success'); assert.match(history.detail, /304/);
+  const incomplete = parseSourceSummary('publish_status=incomplete_sources\nsource_count=2\naccepted_sources=1\n');
+  assert.match(incomplete.message, /本次未发布，保留整份旧规则/); assert.doesNotMatch(incomplete.message, /仅合并/);
 });
 
 test('custom line filtering and DNS overlap avoid dropped/duplicated lines', () => {

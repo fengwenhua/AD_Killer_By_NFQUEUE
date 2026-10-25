@@ -159,6 +159,7 @@ window.ksu = {
     }
     else if(command.includes("base64 ")) {
       if(command.includes("rule_stats.conf")) text=previewRulesEmpty?'':btoa("black=185695\nwhite=1062\n");
+      else if(command.includes("source_stats.conf") && window.previewSourceReport !== undefined) text=btoa(unescape(encodeURIComponent(window.previewSourceReport)));
       else if(command.includes("source_stats.conf")) text=btoa("updated_at=1792410474\njob_id=123-456\npublish_status=published\ngeneration=999-111\nsource_count=2\naccepted_sources="+(previewPartial?1:2)+"\nunique_total=209084\nunique_white=119\nduplicate_lines=73170\n\n[source_0]\nurl=https://anti-ad.net/easylist.txt\nstatus="+(previewPartial?"download_error\nreason=network_timeout":"accepted")+"\nchecked_at=1792410460\naccepted_adguard=96641\nrejected_unsupported=97\n\n[source_1]\nurl=https://example.org/b\nstatus=accepted\naccepted_adguard=185613\nrejected_unsupported=798\n");
       else if(command.includes("custom_rules.txt")) text=btoa("ads.example.com\n@@safe.example.org\n");
       else if(command.includes("update-123-456.log")) text=btoa(unescape(encodeURIComponent(previewUpdateFails ?
@@ -1318,6 +1319,40 @@ def quic_setting_regression(browser, errors):
         page.close()
 
 
+def source_cache_regression(browser, errors):
+    url = 'https://anti-ad.net/easylist.txt'
+    for theme in ('light', 'dark'):
+        for width in (320, 393):
+            for provenance in ('cache_fallback', 'revalidated', 'incomplete'):
+                page = browser.new_page(viewport={'width': width, 'height': 852}, color_scheme=theme, reduced_motion='reduce')
+                page.on('pageerror', lambda error: errors.append(str(error)))
+                report = ('publish_status=' + ('incomplete_sources' if provenance == 'incomplete' else 'published') +
+                          '\nsource_count=1\naccepted_sources=1\n\n[source_0]\nurl=' + url +
+                          '\nstatus=accepted\nprovenance=' + provenance +
+                          '\ncache_age_seconds=7200\ncache_verified_at=1700000000\nchecked_at=1700007200\naccepted_hosts=123\n' +
+                          'warning=HTTP 503 <img src=x onerror=window.cacheInjected=true> ' + 'long-reason-' * 25 + '\n')
+                page.add_init_script(mock_script([{'url': url, 'enabled': True}]) + '\nwindow.previewSourceReport=' + json.dumps(report) + ';')
+                page.goto((ROOT / 'module/webroot/index.html').as_uri())
+                page.locator('nav [data-page="rules"]').click()
+                page.locator('#sourcesDetails > summary').click()
+                state = page.locator('.source-sync-state')
+                if provenance == 'cache_fallback':
+                    expect(state).to_contain_text('使用缓存')
+                    expect(state).to_have_attribute('data-kind', 'warning')
+                    expect(page.locator('.source-history')).to_contain_text('2.0 小时')
+                    expect(page.locator('.source-history')).to_contain_text('HTTP 503')
+                    expect(page.locator('.source-history img')).to_have_count(0)
+                    assert not page.evaluate('window.cacheInjected || false')
+                elif provenance == 'revalidated':
+                    expect(state).to_have_text('✓ 同步成功')
+                    expect(page.locator('.source-history')).to_contain_text('304')
+                else:
+                    expect(state).to_contain_text('发布未确认')
+                    expect(page.locator('.source-history')).to_contain_text('本次未发布，仍使用整份旧规则')
+                assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1')
+                page.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--browser-path")
@@ -1335,6 +1370,7 @@ def main():
             cleanup_health_regression(browser, errors)
             apply_health_regression(browser, errors)
             background_job_recovery_regression(browser, errors)
+            source_cache_regression(browser, errors)
             quic_setting_regression(browser, errors)
             preview_regression(browser, errors, args.screenshots)
             source_editor_dialog_regression(browser, errors, args.screenshots)

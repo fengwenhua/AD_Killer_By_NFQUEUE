@@ -65,6 +65,9 @@ AD_Killer_By_NFQUEUE/
 │   ├── rules.cpp               规则引擎(FNV-1a 哈希池 + AdGuard 语法)
 │   ├── rule_bundle.cpp         不可变 generation staging/原子指针发布
 │   ├── source_validator.cpp    来源内容识别、有效率与拒绝原因统计
+│   ├── source_sync.cpp         来源预算、条件请求、完整校验与整组回退
+│   ├── source_cache.cpp        校验后单源/组合缓存、原子指针与有界回收
+│   ├── source_staging.cpp      下载暂存目录、跨 exec 写入租约与崩溃回收
 │   ├── update_job.cpp          后台更新 job ID 与状态协议
 │   ├── bounded_log.cpp         日志大小上限与定量备份轮转
 │   ├── iptables.cpp            稳定入口 + A/B 代际路由事务
@@ -353,12 +356,18 @@ GC 不自动回滚配置；需要恢复规则时应先暂停并保留诊断，�
 每个下载成功的来源独立检查：HTML 特征直接拒绝；其余内容逐行调用与引擎相同的
 Hosts/AdGuard 解析器，只聚合实际可加载的域名级规则。空白/注释、有效 Hosts、
 有效 AdGuard、超长行和不支持语法分别计数。来源必须至少包含一条有效规则；候选
-行达到 20 行时，有效率低于 5% 的内容也会整体拒绝，防止 HTTP 200 错误正文夹带
-少量类域名文本后被误判成功。
+行达到 20 行时，AUTO 有效率低于 5% 的内容也会整体拒绝，防止 HTTP 200 错误正文夹带
+少量类域名文本后被误判成功。显式浏览器列表配方允许提取非空域名子集，不套用
+AUTO 的比例门槛，HTML、gzip 和资源保护保持不变。
 
 最近一次更新的每个 URL、下载/内容状态、拒绝原因、字节数、各类行数和 ppm
-有效率写入 `source_stats.conf`。字段中的换行会先被清理，失败来源不会向最终
-generation 贡献任何规则。
+有效率写入 `source_stats.conf`，另记录 downloaded/revalidated/cache_fallback、缓存
+核验/获取时间与失败原因。整次任务 10 分钟、单源 90 秒，网络阶段留出本地校验余量；
+正文累计 256 MiB、解压累计 256 MiB/500 万行，失败输入也计入预算。
+缓存加载后及内容解析后都复核摘要，避免入口校验与实际使用间发生损坏。304 必须绑定
+同一最终 URL；HaGeZi 必须整组提交或整组回退。失败不能取得 24 小时内合格缓存时
+停止后续来源，未请求项明确标记，不发布成功子集。字段中的换行会先被清理。
+完整策略、暂存租约及空间边界见[规则同步策略](规则同步策略.md)。
 
 ### 4.10 日志隔离与轮转
 
@@ -472,6 +481,8 @@ localStorage 只作辅助；未知索引不伪装为没有任务。普通观察�
 ├── app_whitelist.txt / app_intercept.txt  应用名单(scope=0 放行 / scope=1 拦截)
 ├── app_uids.conf / app_intercept_uids.conf  包名→uid 解析缓存
 ├── update_sources.txt               规则源列表(--update 用)
+├── source_cache/                    校验后来源缓存/组合元数据、原子指针
+├── source_staging/job-*/            下载私有暂存，目录租约跨 exec 继承，安全回收崩溃残留
 ├── update_jobs/update-<job_id>.{state,log}  独立后台更新任务(结束任务保留 8 个)
 ├── rule_stats.conf                  规则统计(WebUI 规则数来源)
 ├── source_stats.conf                最近一次逐来源有效率/拒绝原因

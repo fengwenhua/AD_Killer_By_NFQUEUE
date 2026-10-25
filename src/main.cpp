@@ -42,9 +42,12 @@
 #include "operation_gate.h"
 #include "uninstall.h"
 #include "work_budget.h"
+#include "source_sync.h"
+#include "source_staging.h"
 
 #include <cstdio>
 #include <algorithm>
+#include <set>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -939,6 +942,20 @@ static int cmd_update(const std::string &test_url = "") {
         if (!write_file_atomic(FILE_SOURCE_STATS, report))
             log_line("更新", "来源统计写入失败: %s", FILE_SOURCE_STATS);
     };
+    std::set<std::string> cache_keys;
+    std::unique_ptr<SourceCache> cache;
+    SourceStaging source_staging(DATA_DIR);
+    if (!source_staging.ok()) {
+        log_line("更新", "下载暂存区不可用、空间不足或旧写入者仍占用，保留旧规则");
+        return 1;
+    }
+    if (test_url.empty()) {
+        for (const auto &url : urls) cache_keys.insert(source_identity_key(url));
+        cache = std::make_unique<SourceCache>(DATA_DIR);
+        std::string cache_error;
+        if (!cache->available() || !cache->collect(now_epoch(), cache_keys, cache_error))
+            log_line("缓存", "来源缓存不可用或清理未确认，本次仍可完整下载: %s", cache_error.c_str());
+    }
 
     for (auto &url : urls) {
         if (task_unconfirmed_network_writer || WorkBudget::expired() || operation_closing()) break;
@@ -952,31 +969,16 @@ static int cmd_update(const std::string &test_url = "") {
         RuleStreamLimits source_limits;
         source_limits.output_bytes = MAX_RULE_DECOMPRESSED_BYTES - aggregate_content_bytes;
         source_limits.lines = MAX_RULE_LINES - aggregate_source_lines;
-        SourceValidationResult validation;
-        if (is_builtin_source(url)) {
-            validation = fetch_hagezi_source(DATA_DIR, source_limits, download_file, report.downloaded_bytes);
-        } else {
-            log_line("更新", "拉取: %s", url.c_str());
-            std::string part = std::string(DATA_DIR) + "/download.part";
-            std::string err = download_file(url, part);
-            if (!err.empty()) {
-                log_line("更新", "下载失败: %s (%s)", url.c_str(), err.c_str());
-                report.status = "download_error";
-                report.reason = err;
-                record_source_report(report);
-                continue;
-            }
-            struct stat downloaded {};
-            if (stat(part.c_str(), &downloaded) == 0 && downloaded.st_size > 0)
-                report.downloaded_bytes = static_cast<size_t>(downloaded.st_size);
-            // Same bounded plain/gzip stream path for all ordinary sources.
-            validation = validate_rule_source_file(part.c_str(), source_limits, format);
-            unlink(part.c_str());
-        }
+        auto sync = synchronize_rule_source(source_staging.path(), url, source_limits, cache.get(), cache_keys);
+        auto validation = std::move(sync.validation);
+        report.downloaded_bytes = sync.downloaded_bytes;
+        report.provenance = sync.provenance; report.warning = sync.warning;
+        report.cache_verified_at = sync.cache_verified_at; report.cache_fetched_at = sync.cache_fetched_at;
+        report.cache_age_seconds = sync.cache_age_seconds;
         // Rejected input still consumed parsing work. Do not reset the whole
         // task's decompression/line allowance on the next source.
-        aggregate_content_bytes += std::min(validation.stats.bytes, MAX_RULE_DECOMPRESSED_BYTES - aggregate_content_bytes);
-        aggregate_source_lines += std::min(validation.stats.total_lines, MAX_RULE_LINES - aggregate_source_lines);
+        aggregate_content_bytes += std::min(sync.consumed_bytes, MAX_RULE_DECOMPRESSED_BYTES - aggregate_content_bytes);
+        aggregate_source_lines += std::min(sync.consumed_lines, MAX_RULE_LINES - aggregate_source_lines);
         report.stats = validation.stats;
         report.reason = validation.reason;
         if (WorkBudget::expired() || operation_closing()) {
@@ -984,12 +986,12 @@ static int cmd_update(const std::string &test_url = "") {
             report.reason = "cancelled_or_time_budget";
         }
         if (!validation.accepted) {
-            report.status = "content_rejected";
+            report.status = sync.download_failed && !is_builtin_source(url) ? "download_error" : "content_rejected";
             log_line("更新", "来源内容拒绝: %s (%s,有效率 %.2f%%)",
                      url.c_str(), validation.reason.c_str(),
                      validation.stats.valid_ratio_ppm / 10000.0);
             record_source_report(report);
-            continue;
+            break; // no complete generation is possible; stop further requests
         }
         size_t aggregate_bytes = hosts_rules.size() + adguard_rules.size();
         size_t source_bytes = validation.hosts_rules.size() +
@@ -999,7 +1001,7 @@ static int cmd_update(const std::string &test_url = "") {
             report.reason = "aggregate_resource_limit";
             log_line("更新", "来源累计资源上限,跳过: %s", url.c_str());
             record_source_report(report);
-            continue;
+            break;
         }
         report.status = "accepted";
         hosts_rules += validation.hosts_rules;
@@ -1011,6 +1013,14 @@ static int cmd_update(const std::string &test_url = "") {
                      validation.stats.rejected_too_long,
                  validation.stats.valid_ratio_ppm / 10000.0);
         record_source_report(report);
+    }
+
+    for (size_t i = source_reports.size(); i < urls.size(); ++i) {
+        SourceUpdateReport skipped;
+        skipped.url = urls[i]; skipped.status = "not_attempted";
+        skipped.format = is_builtin_source(urls[i]) ? "hagezi-pro-minus-fake" : source_format_name(recipe_source_format(urls[i]));
+        skipped.reason = "earlier_source_failed_or_budget_cancelled";
+        record_source_report(skipped);
     }
 
     if (!test_url.empty()) {

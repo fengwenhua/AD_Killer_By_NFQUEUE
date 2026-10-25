@@ -189,10 +189,12 @@ std::string serialize_source_reports(const std::vector<SourceUpdateReport> &repo
                                      const PublishedSourceStats &published,
                                      const std::string &job_id) {
     size_t accepted_sources = 0;
-    size_t accepted_lines = 0, filtered_lines = 0;
+    size_t accepted_lines = 0, filtered_lines = 0, cached_sources = 0, revalidated_sources = 0;
     for (const auto &report : reports) {
         if (report.status == "accepted") {
             accepted_sources++;
+            if (report.provenance == "cache_fallback") ++cached_sources;
+            if (report.provenance == "revalidated") ++revalidated_sources;
             accepted_lines += report.stats.accepted_hosts + report.stats.accepted_adguard;
         }
         filtered_lines += report.stats.rejected_unsupported + report.stats.rejected_too_long;
@@ -203,6 +205,8 @@ std::string serialize_source_reports(const std::vector<SourceUpdateReport> &repo
            << "publish_status=" << safe_field(publish_status) << "\n"
            << "source_count=" << reports.size() << "\n"
            << "accepted_sources=" << accepted_sources << "\n"
+           << "cached_sources=" << cached_sources << "\n"
+           << "revalidated_sources=" << revalidated_sources << "\n"
            << "rejected_sources=" << reports.size() - accepted_sources << "\n"
            << "accepted_lines=" << accepted_lines << "\n"
            << "filtered_lines=" << filtered_lines << "\n";
@@ -222,6 +226,11 @@ std::string serialize_source_reports(const std::vector<SourceUpdateReport> &repo
                << "status=" << safe_field(report.status) << "\n"
                << "checked_at=" << (report.checked_at > 0 ? report.checked_at : updated_at) << "\n"
                << "reason=" << safe_field(report.reason) << "\n"
+               << "provenance=" << safe_field(report.provenance) << "\n"
+               << "warning=" << safe_field(report.warning) << "\n"
+               << "cache_verified_at=" << report.cache_verified_at << "\n"
+               << "cache_fetched_at=" << report.cache_fetched_at << "\n"
+               << "cache_age_seconds=" << report.cache_age_seconds << "\n"
                << "downloaded_bytes=" << report.downloaded_bytes << "\n"
                << "content_bytes=" << report.stats.bytes << "\n"
                << "total_lines=" << report.stats.total_lines << "\n"

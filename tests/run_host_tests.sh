@@ -107,6 +107,14 @@ ${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" \
 "$BUILD_DIR/test_work_budget"
 
 ${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" \
+    "$ROOT/tests/test_http_validators.cpp" -o "$BUILD_DIR/test_http_validators"
+"$BUILD_DIR/test_http_validators"
+
+${CXX:-c++} $COMPILE_FLAGS -DADK_SOURCE_CACHE_TESTING -I"$ROOT/src" \
+    "$ROOT/tests/test_source_cache.cpp" "$ROOT/src/source_cache.cpp" "$ROOT/src/net_policy.cpp" -o "$BUILD_DIR/test_source_cache"
+"$BUILD_DIR/test_source_cache"
+
+${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" \
     "$ROOT/tests/test_safe_tree.cpp" -o "$BUILD_DIR/test_safe_tree"
 "$BUILD_DIR/test_safe_tree"
 
@@ -144,6 +152,13 @@ ${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" \
     "$ROOT/src/rule_bundle.cpp" "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" \
     -lz -o "$BUILD_DIR/test_hagezi_source"
 "$BUILD_DIR/test_hagezi_source"
+
+${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" \
+    "$ROOT/tests/test_source_sync.cpp" "$ROOT/src/source_sync.cpp" "$ROOT/src/source_cache.cpp" \
+    "$ROOT/src/net_policy.cpp" "$ROOT/src/hagezi_source.cpp" "$ROOT/src/source_validator.cpp" \
+    "$ROOT/src/rules.cpp" "$ROOT/src/rule_stream.cpp" "$ROOT/src/rule_bundle.cpp" \
+    "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" -lz -o "$BUILD_DIR/test_source_sync"
+"$BUILD_DIR/test_source_sync"
 PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT/tests/test_hagezi_parity.py" "$BUILD_DIR/test_hagezi_source"
 
 ${CXX:-c++} $COMPILE_FLAGS -pthread \
@@ -220,6 +235,9 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" "$ROOT/tests/test_apply_state.
 "$BUILD_DIR/test_apply_state"
 
 ${CXX:-c++} $COMPILE_FLAGS "$ROOT/tests/process_fixture.cpp" -o "$BUILD_DIR/process_fixture"
+${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" "$ROOT/tests/test_source_staging.cpp" \
+    "$ROOT/src/source_staging.cpp" -o "$BUILD_DIR/test_source_staging"
+"$BUILD_DIR/test_source_staging" "$BUILD_DIR/process_fixture"
 ${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" "$ROOT/tests/test_process_runner.cpp" \
     "$ROOT/src/process_runner.cpp" -o "$BUILD_DIR/test_process_runner"
 "$BUILD_DIR/test_process_runner" "$BUILD_DIR/process_fixture"

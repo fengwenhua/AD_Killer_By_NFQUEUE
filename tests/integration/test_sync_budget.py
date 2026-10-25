@@ -21,7 +21,7 @@ class Handler(BaseHTTPRequestHandler):
         self.server.requests.append(self.path)
         try:
             if self.path.startswith('/slow'):
-                time.sleep(.7)
+                time.sleep(.55)
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b'0.0.0.0 new.example.org\n' if self.path != '/seed' else b'0.0.0.0 old.example.org\n')
@@ -67,10 +67,10 @@ def main():
             assert (DATA / 'rules.current').read_bytes() == manifest
             assert {path.name: path.read_bytes() for path in generation.iterdir() if path.is_file()} == before
             assert not list((DATA / 'rulesets').glob('.staging-*'))
-            assert not list(DATA.glob('download.part*'))
+            assert not (DATA / 'source_staging').exists()
             report = (DATA / 'source_stats.conf').read_text()
             assert 'publish_status=incomplete_sources\n' in report and 'generation=' not in report
-            assert 'accepted_sources=1\n' in report and 'rejected_sources=1\n' in report
+            assert 'accepted_sources=1\n' in report and 'rejected_sources=2\n' in report and 'status=not_attempted\n' in report
             assert not (DATA / 'daemon.pid').exists()
             sources('/seed')
             command('--update')

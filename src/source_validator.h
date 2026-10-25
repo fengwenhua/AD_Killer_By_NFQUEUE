@@ -39,6 +39,8 @@ struct SourceUpdateReport {
     SourceRuleStats stats;
     std::string format = "auto";
     int64_t checked_at = 0;
+    std::string provenance = "downloaded", warning;
+    int64_t cache_verified_at = 0, cache_fetched_at = 0, cache_age_seconds = 0;
 };
 
 struct PublishedSourceStats {
