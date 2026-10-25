@@ -4,12 +4,13 @@ import { effectScope, nextTick, ref } from 'vue';
 import { useEngine } from '../src/composables/useEngine.js';
 import { useLiveMetrics } from '../src/composables/useLiveMetrics.js';
 import { applied } from './fixtures/apply.js';
+import { liveMetrics } from './fixtures/metrics.js';
 
 const ok=value=>({code:0,stdout:JSON.stringify(value),stderr:''});
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 test('blocked count is current-session rule hits only; metrics polling never upgrades approximate routing state',async()=>{
   const scope=effectScope(), commands=[];
-  let snapshot={running:true,iptables_active:true,scope:0,apply:applied(),metrics:{updated_at:1,block_suffix_hits:4,block_exact_hits:3,blocked_retransmits:99,quic_rejects:100}};
+  let snapshot={running:true,daemon_pid:123,iptables_active:true,scope:0,apply:applied(),metrics:liveMetrics({blocked_retransmits:99,quic_rejects:100})};
   let fail=false, fullFails=false, fastOverride=null;
   const api={command:async command=>{commands.push(command);return fail || (fullFails && command==='--status') ? {code:1,stdout:'',stderr:''} : ok(command==='--status-fast' && fastOverride ? fastOverride : snapshot);},readFile:async()=>''};
   const engine=scope.run(()=>useEngine(api,{log(){},toast(){},consoleOpen:ref(false)}));
@@ -33,11 +34,41 @@ test('blocked count is current-session rule hits only; metrics polling never upg
     snapshot={...snapshot,iptables_active:false}; await engine.refreshMetrics();
     assert.equal(engine.running.value,false); assert.equal(engine.badge.value,'路由待恢复');
     assert.match(engine.description.value,/启动守护/);
-    for(const metrics of [null,{}, {updated_at:0,block_suffix_hits:0,block_exact_hits:0},{updated_at:1,block_suffix_hits:-1,block_exact_hits:0},
-      {updated_at:1,block_suffix_hits:Number.MAX_SAFE_INTEGER,block_exact_hits:1}]) {
+    for(const metrics of [null,{}, {updated_at:1,block_suffix_hits:0,block_exact_hits:0}, liveMetrics({block_suffix_hits:-1}),
+      liveMetrics({block_suffix_hits:Number.MAX_SAFE_INTEGER,block_exact_hits:1})]) {
       snapshot={...snapshot,metrics}; await engine.refresh(); assert.equal(engine.blockedTotal.value,null);
     }
     assert.ok(commands.includes('--status-fast'));
+  } finally {scope.stop();}
+});
+
+test('metric age advances without a response; stale records remain labelled and another session never inherits the old count',async()=>{
+  const scope=effectScope(); let now=0, fail=false, fullFail=false;
+  let snapshot={running:true,daemon_pid:123,iptables_active:true,runtime:'running',apply:applied(),metrics:liveMetrics()};
+  const api={readFile:async()=>'',command:async command=> fail || (fullFail && command==='--status')
+    ? {code:1,stdout:'',stderr:'offline'} : ok(snapshot)};
+  const model=scope.run(()=>useEngine(api,{log(){},toast(){},consoleOpen:ref(false)},()=>now));
+  try {
+    await model.refresh(); assert.equal(model.blockedTotal.value,7); assert.equal(model.metricsQuality.value,'current');
+    now=45001; model.tickMetrics();
+    assert.equal(model.metricsQuality.value,'stale'); assert.match(model.metricsNotice.value,/过期/); assert.equal(model.blockedTotal.value,7);
+    fail=true; await model.refreshMetrics(); assert.equal(model.metricsQuality.value,'stale');
+    fail=false; snapshot={...snapshot,metrics:liveMetrics({age_ms:46000})}; await model.refreshMetrics();
+    assert.equal(model.metricsQuality.value,'stale');
+    snapshot={...snapshot,metrics:liveMetrics()}; await model.refreshMetrics(); assert.equal(model.metricsQuality.value,'current');
+    now=44000; model.tickMetrics(); assert.equal(model.metricsQuality.value,'clock_invalid'); assert.equal(model.blockedTotal.value,null);
+    now=46000; await model.refresh();
+    snapshot={...snapshot,metrics:liveMetrics({owner_verified:false})}; await model.refreshMetrics();
+    assert.equal(model.blockedTotal.value,null); assert.match(model.metricsNotice.value,/归属/);
+    snapshot={...snapshot,metrics:liveMetrics({block_exact_hits:0,block_suffix_hits:0})}; await model.refresh();
+    assert.equal(model.blockedTotal.value,0,'verified zero must differ from unknown');
+    fullFail=true;
+    snapshot={...snapshot,daemon_pid:456,metrics:liveMetrics({owner_pid:456,owner_started:200,block_exact_hits:1,block_suffix_hits:0})};
+    await model.refreshMetrics(); assert.equal(model.running.value,false); assert.equal(model.blockedTotal.value,1);
+    assert.equal(model.metricsQuality.value,'query_failed','new-session counts stay marked as unverified query after full health failure');
+    snapshot={...snapshot,metrics:liveMetrics({owner_pid:456,owner_started:300,block_exact_hits:2,block_suffix_hits:0})};
+    await model.refreshMetrics(); assert.equal(model.running.value,false); assert.equal(model.blockedTotal.value,2);
+    fullFail=false; await model.refresh(); assert.equal(model.running.value,true); assert.equal(model.metricsQuality.value,'current');
   } finally {scope.stop();}
 });
 test('live metrics keep observing a degraded process, stop on hidden tab/background/unmount and never overlap polling',async()=>{

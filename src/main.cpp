@@ -82,10 +82,16 @@ static bool write_initial_config(const char *path, const std::string &text) {
     return result.committed && result.durable;
 }
 
-static std::string current_metrics_json() {
-    std::string content;
-    return metrics_json(read_file(FILE_METRICS, content)
-                            ? parse_metrics(content) : MetricsSnapshot{});
+static std::string current_metrics_json(int pid) {
+    const auto before = pid > 0 ? process_identity(pid) : ProcessIdentity{};
+    MetricsSnapshot snapshot;
+    const auto read = read_metrics(FILE_METRICS, snapshot);
+    const auto after = pid > 0 ? process_identity(pid) : ProcessIdentity{};
+    const auto now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    auto view = observe_metrics(snapshot, before, after, pid > 0, now);
+    if (read != MetricsRead::OK) view = {read == MetricsRead::MISSING ? "missing" : read == MetricsRead::INVALID ? "invalid" : "unreadable", false, false, 0};
+    return metrics_view_json(snapshot, view);
 }
 
 static std::string engine_diagnostics_json(const FreezerStatus &status, bool present) {
@@ -1351,7 +1357,7 @@ static int cmd_status() {
     std::string enabled = read_conf_value(FILE_STATE_CONF, "enabled");
     std::string manual = read_conf_value(FILE_STATE_CONF, "manual_stop");
     std::string autostart = read_conf_value(FILE_STATE_CONF, "autostart");
-    std::string metrics = current_metrics_json();
+    std::string metrics = current_metrics_json(pid);
     long black = 0, white = 0, updated = 0;
     rule_counters(apply, pid, black, white, updated);
     printf("{\"running\": %s, \"iptables_active\": %s, \"mode\": %d, \"scope\": %d, "
@@ -1395,7 +1401,7 @@ static int cmd_status_fast() {
     std::string enabled = read_conf_value(FILE_STATE_CONF, "enabled");
     std::string manual = read_conf_value(FILE_STATE_CONF, "manual_stop");
     std::string autostart = read_conf_value(FILE_STATE_CONF, "autostart");
-    std::string metrics = current_metrics_json();
+    std::string metrics = current_metrics_json(pid);
     long black = 0, white = 0, updated = 0;
     rule_counters(apply, pid, black, white, updated);
     bool dev_on = (dev == "true" || dev == "1");

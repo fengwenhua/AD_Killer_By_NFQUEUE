@@ -23,9 +23,9 @@ defineProps({ engine: Object, sync: Object, apps: Object, feedback: Object, modu
         <ActionButton v-if="engine.healthUnknown || (engine.applyIssue && (!engine.state?.apply || engine.state.apply.status === 'unverified'))" id="verifyHealthBtn" icon="sync" :busy="engine.checking" :disabled="!!engine.action" @click="engine.verifyHealth">重新核实状态</ActionButton>
         <ActionButton v-if="engine.canRetryApply || engine.setting === 'apply'" id="retryApplyBtn" icon="sync" :busy="engine.setting === 'apply'" :disabled="!!engine.action || (!!engine.setting && engine.setting !== 'apply') || apps.saving" @click="engine.retryApply">重新应用配置</ActionButton>
         <div v-if="engine.running" class="blocked-summary" aria-label="本次守护规则命中统计">
-          <div class="blocked-heading"><span>累计拦截</span><span class="blocked-period">本次守护</span></div>
+          <div class="blocked-heading"><span>规则命中</span><span class="blocked-period">本次守护</span></div>
           <div class="blocked-value"><b id="blockedTotal" :class="{ 'is-long': engine.blockedTotal >= 1000000000 }">{{ engine.blockedTotal === null ? '—' : engine.blockedTotal.toLocaleString() }}</b><span v-if="engine.blockedTotal !== null" class="blocked-unit">次</span></div>
-          <small :data-stale="engine.metricsStale">{{ engine.metricsStale ? '统计暂不可用，保留上次记录' : engine.blockedTotal === null ? '等待统计数据' : '规则命中次数 · 守护重启后重新累计' }}</small>
+          <small :data-stale="engine.metricsQuality !== 'current'">{{ engine.metricsNotice }}</small>
         </div>
         <div class="action-grid">
           <ActionButton id="startBtn" :variant="engine.running ? undefined : 'primary'" icon="play" :busy="engine.action === 'start'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || engine.running || engine.healthUnknown || engine.cleanupFailed || engine.applyIssue" @click="engine.control('start')"><span id="startLabel">{{ engine.action === 'start' ? '启动中…' : '启动守护' }}</span></ActionButton>

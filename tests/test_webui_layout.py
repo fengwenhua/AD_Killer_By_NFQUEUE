@@ -49,7 +49,7 @@ window.previewCleanupCode = '';
 window.previewDaemonImageCurrent = true;
 window.previewStartFails = true;
 window.previewStartDelay = 0;
-window.previewMetrics = {updated_at:1792610000,block_suffix_hits:120,block_exact_hits:34,blocked_retransmits:999,quic_rejects:99};
+window.previewMetrics = {status:'current',owner_verified:true,owner_pid:123,owner_started:100,owner_boot:'12345678-1234-1234-1234-123456789abc',age_ms:0,updated_at:1792610000,block_suffix_hits:120,block_exact_hits:34,blocked_retransmits:999,quic_rejects:99};
 window.previewSettings = {mode:2,scope:0,autostart:false,block_quic:false,dev_mode:false};
 window.previewApplySerial=1;
 window.previewApplyResult='applied';
@@ -111,7 +111,7 @@ window.ksu = {
       freezer_state:previewFreezerState,frozen:previewFreezerState==='unknown'?null:previewFreezerState==='frozen',
       last_error_code:previewCleanupCode,
       runtime:previewEngineState, last_error:previewEngineState==="error"?previewEngineError:"",
-      enabled:previewEngineState!=="stopped", metrics:previewMetrics,
+      enabled:previewEngineState!=="stopped",daemon_pid:123, metrics:previewMetrics,
       rules_black:previewRulesEmpty?0:185695,rules_white:previewRulesEmpty?0:1062,
       apply:previewEngineState==='running'?previewApply:{...previewApply,status:'deferred',verified:false}, ...previewSettings});
     else if(command.endsWith(" --start")) {
@@ -863,7 +863,7 @@ def status_card_regression(browser, errors, screenshots=None):
                 page.screenshot(path=str(screenshots / f'status-card-{theme}-{width}.png'))
             for count in (0, 1234567, 999999999, 1234567890, 9007199254740991, None):
                 page.evaluate('''count=>{
-                    previewMetrics={updated_at:1792610000,block_suffix_hits:count,block_exact_hits:0};
+                    previewMetrics={...previewMetrics,block_suffix_hits:count,block_exact_hits:0};
                 }''', count)
                 # Leaving/re-entering the overview starts a fresh read-only poll.
                 page.locator('nav [data-page="apps"]').click()
@@ -871,13 +871,25 @@ def status_card_regression(browser, errors, screenshots=None):
                 expected = '—' if count is None else f'{count:,}'
                 expect(page.locator('#blockedTotal')).to_have_text(expected)
                 if count is None:
-                    expect(page.locator('.blocked-summary small')).to_have_text('等待统计数据')
+                    expect(page.locator('.blocked-summary small')).to_have_text('统计内容未能核实')
                     expect(page.locator('.blocked-unit')).to_have_count(0)
                 else:
                     expect(page.locator('.blocked-unit')).to_have_text('次')
                 for selector in ('.hero', '.hero-heading', '.blocked-summary', '.blocked-value', '#blockedTotal'):
                     assert page.locator(selector).evaluate('e=>e.scrollWidth<=e.clientWidth+1'), (width, theme, count, selector)
                 assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
+            if width == 320 and theme == 'light':
+                page.evaluate("previewMetrics={...previewMetrics,block_suffix_hits:7,age_ms:44900}")
+                page.locator('nav [data-page="apps"]').click()
+                page.locator('nav [data-page="home"]').click()
+                expect(page.locator('#blockedTotal')).to_have_text('7')
+                expect(page.locator('.blocked-summary small')).to_have_text('统计已过期，保留上次记录', timeout=3000)
+                expect(page.locator('.blocked-summary small')).to_have_attribute('data-stale','true')
+                page.evaluate("previewMetrics={...previewMetrics,status:'unverified',owner_verified:false}")
+                page.locator('nav [data-page="apps"]').click()
+                page.locator('nav [data-page="home"]').click()
+                expect(page.locator('#blockedTotal')).to_have_text('—')
+                expect(page.locator('.blocked-summary small')).to_contain_text('归属未核实')
             assert not page.evaluate("previewCommands.some(c=>/ --(?:start|stop|daemon|reload|autostart)(?: |$)/.test(c))")
             page.locator('#stopBtn').click()
             expect(page.locator('.blocked-summary')).to_have_count(0)

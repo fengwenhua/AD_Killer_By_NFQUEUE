@@ -2,6 +2,8 @@
 
 #include <cstdlib>
 #include <sstream>
+#include <climits>
+#include <unordered_set>
 
 namespace {
 
@@ -9,9 +11,9 @@ uint64_t load(const std::atomic<uint64_t> &value) {
     return value.load(std::memory_order_relaxed);
 }
 
-void parse_value(MetricsSnapshot &snapshot, const std::string &key,
+bool parse_value(MetricsSnapshot &snapshot, const std::string &key,
                  uint64_t value) {
-#define METRIC_FIELD(name) if (key == #name) { snapshot.name = value; return; }
+#define METRIC_FIELD(name) if (key == #name) { snapshot.name = value; return true; }
     METRIC_FIELD(updated_at)
     METRIC_FIELD(dns_packets)
     METRIC_FIELD(tls_packets)
@@ -47,7 +49,10 @@ void parse_value(MetricsSnapshot &snapshot, const std::string &key,
     METRIC_FIELD(dns_log_pending)
     METRIC_FIELD(dns_log_pending_bytes)
     METRIC_FIELD(dns_log_active)
+    METRIC_FIELD(dns_drop_verdicts)
+    METRIC_FIELD(inspected_drop_verdicts)
 #undef METRIC_FIELD
+    return false;
 }
 
 }  // namespace
@@ -98,6 +103,9 @@ void DataPlaneMetrics::record_dns_negative() { dns_negative_replies_.fetch_add(1
 void DataPlaneMetrics::record_tcp_reset() { tcp_resets_.fetch_add(1, std::memory_order_relaxed); }
 void DataPlaneMetrics::record_quic_reject() { quic_rejects_.fetch_add(1, std::memory_order_relaxed); }
 void DataPlaneMetrics::record_response_failure() { response_failures_.fetch_add(1, std::memory_order_relaxed); }
+void DataPlaneMetrics::record_drop_verdict(bool dns) {
+    (dns ? dns_drop_verdicts_ : inspected_drop_verdicts_).fetch_add(1, std::memory_order_relaxed);
+}
 
 MetricsSnapshot DataPlaneMetrics::snapshot() const {
     MetricsSnapshot result;
@@ -118,6 +126,8 @@ MetricsSnapshot DataPlaneMetrics::snapshot() const {
     result.tcp_resets = load(tcp_resets_);
     result.quic_rejects = load(quic_rejects_);
     result.response_failures = load(response_failures_);
+    result.dns_drop_verdicts = load(dns_drop_verdicts_);
+    result.inspected_drop_verdicts = load(inspected_drop_verdicts_);
     return result;
 }
 
@@ -159,23 +169,95 @@ std::string serialize_metrics(const MetricsSnapshot &snapshot) {
     METRIC_FIELD(dns_log_pending)
     METRIC_FIELD(dns_log_pending_bytes)
     METRIC_FIELD(dns_log_active)
+    METRIC_FIELD(dns_drop_verdicts)
+    METRIC_FIELD(inspected_drop_verdicts)
 #undef METRIC_FIELD
+    if (snapshot.owner.valid()) {
+        output << "metrics_format=2\nowner_boot=" << snapshot.owner.boot << "\nowner_pid=" << snapshot.owner.pid
+               << "\nowner_started=" << snapshot.owner.started << "\nobserved_monotonic_ms=" << snapshot.observed_monotonic_ms << '\n';
+    }
     return output.str();
 }
 
-MetricsSnapshot parse_metrics(const std::string &content) {
+bool parse_metrics_checked(const std::string &content, MetricsSnapshot &snapshot) {
+    snapshot = MetricsSnapshot{};
+    if (content.size() > 16384 || content.find('\0') != std::string::npos) return false;
     MetricsSnapshot result;
+    std::unordered_set<std::string> seen;
     std::istringstream lines(content);
     std::string line;
     while (std::getline(lines, line)) {
         size_t equals = line.find('=');
         if (equals == std::string::npos || equals == 0) continue;
-        std::string value_text = line.substr(equals + 1);
-        char *end = nullptr;
-        unsigned long long value = strtoull(value_text.c_str(), &end, 10);
-        if (end == value_text.c_str() || *end != '\0') continue;
-        parse_value(result, line.substr(0, equals), static_cast<uint64_t>(value));
+        const auto key = line.substr(0, equals), value_text = line.substr(equals + 1);
+        const bool metadata = key == "metrics_format" || key == "owner_boot" || key == "owner_pid" || key == "owner_started" || key == "observed_monotonic_ms";
+        if (!metadata && !parse_value(result, key, 0)) continue; // Unknown future fields are ignored.
+        if (!seen.insert(key).second) return false;
+        if (key == "owner_boot") { result.owner.boot = value_text; continue; }
+        uint64_t value = 0;
+        if (!parse_u64(value_text, value)) return false;
+        if (key == "metrics_format") { if (value != 2) return false; }
+        else if (key == "owner_pid") { if (value > INT_MAX) return false; result.owner.pid = static_cast<int>(value); }
+        else if (key == "owner_started") result.owner.started = value;
+        else if (key == "observed_monotonic_ms") result.observed_monotonic_ms = value;
+        else parse_value(result, key, value);
     }
+    bool metadata = false;
+    for (const auto *key : {"metrics_format", "owner_boot", "owner_pid", "owner_started", "observed_monotonic_ms"}) metadata |= seen.count(key) != 0;
+    if (metadata) {
+        if (!result.owner.valid()) return false;
+        for (const auto *key : {"metrics_format", "owner_boot", "owner_pid", "owner_started", "observed_monotonic_ms"}) if (!seen.count(key)) return false;
+        // Version 2 is a complete snapshot, never a successful partial read.
+        std::istringstream required(serialize_metrics(MetricsSnapshot{}));
+        while (std::getline(required, line)) if (!seen.count(line.substr(0, line.find('=')))) return false;
+    }
+    if (seen.empty()) return false;
+    snapshot = std::move(result); return true;
+}
+MetricsSnapshot parse_metrics(const std::string &content) {
+    MetricsSnapshot result; parse_metrics_checked(content, result); return result;
+}
+
+MetricsRead read_metrics(const std::string &path, MetricsSnapshot &snapshot) {
+    snapshot = MetricsSnapshot{};
+    const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (fd < 0) return errno == ENOENT ? MetricsRead::MISSING : MetricsRead::UNREADABLE;
+    struct stat info {};
+    bool ok = !fstat(fd, &info) && S_ISREG(info.st_mode) && info.st_uid == geteuid() && info.st_nlink == 1 &&
+        !(info.st_mode & 0022) && info.st_size >= 0 && info.st_size <= 16384;
+    std::string text;
+    char buffer[4096];
+    while (ok) {
+        const auto count = read(fd, buffer, sizeof(buffer));
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0 || (count > 0 && text.size() + static_cast<size_t>(count) > 16384)) { ok = false; break; }
+        if (!count) break;
+        text.append(buffer, static_cast<size_t>(count));
+    }
+    if (close(fd)) ok = false;
+    if (!ok) return MetricsRead::UNREADABLE;
+    return parse_metrics_checked(text, snapshot) ? MetricsRead::OK : MetricsRead::INVALID;
+}
+
+MetricsView observe_metrics(const MetricsSnapshot &snapshot, const ProcessIdentity &before,
+        const ProcessIdentity &after, bool running, uint64_t monotonic_ms) {
+    MetricsView view;
+    if (!running) { view.status = "inactive"; return view; }
+    if (!before.valid() || !(before == after) || !(snapshot.owner == before)) return view;
+    view.owner_verified = true;
+    if (!snapshot.observed_monotonic_ms || monotonic_ms < snapshot.observed_monotonic_ms) { view.status = "clock_invalid"; return view; }
+    view.age_known = true; view.age_ms = monotonic_ms - snapshot.observed_monotonic_ms;
+    view.status = view.age_ms <= 45000 ? "current" : "stale";
+    return view;
+}
+
+std::string metrics_view_json(const MetricsSnapshot &snapshot, const MetricsView &view) {
+    auto result = metrics_json(snapshot); result.pop_back();
+    result += ",\"status\":\"" + view.status + "\",\"owner_verified\":" + (view.owner_verified ? "true" : "false") +
+        ",\"age_ms\":" + (view.age_known ? std::to_string(view.age_ms) : "null") +
+        ",\"owner_pid\":" + std::to_string(snapshot.owner.valid() ? snapshot.owner.pid : 0) +
+        ",\"owner_started\":" + std::to_string(snapshot.owner.valid() ? snapshot.owner.started : 0) +
+        ",\"owner_boot\":\"" + (snapshot.owner.valid() ? snapshot.owner.boot : "") + "\"}";
     return result;
 }
 
@@ -217,17 +299,21 @@ std::string metrics_json(const MetricsSnapshot &snapshot) {
            << ",\"dns_log_batches\":" << snapshot.dns_log_batches
            << ",\"dns_log_pending\":" << snapshot.dns_log_pending
            << ",\"dns_log_pending_bytes\":" << snapshot.dns_log_pending_bytes
-           << ",\"dns_log_active\":" << snapshot.dns_log_active << "}";
+           << ",\"dns_log_active\":" << snapshot.dns_log_active
+           << ",\"dns_drop_verdicts\":" << snapshot.dns_drop_verdicts
+           << ",\"inspected_drop_verdicts\":" << snapshot.inspected_drop_verdicts << "}";
     return output.str();
 }
 
 MetricsPublication MetricsPublisher::publish(MetricsSnapshot snapshot, uint64_t wall_seconds, uint64_t monotonic_ms,
         const std::function<bool(const std::string &)> &write, bool force) {
     snapshot.updated_at = 0;
+    snapshot.observed_monotonic_ms = 0;
     const auto payload = serialize_metrics(snapshot);
     if (!force && saved_ && payload == payload_ && monotonic_ms >= saved_ms_ && monotonic_ms - saved_ms_ < 15000)
         return MetricsPublication::SKIPPED;
     snapshot.updated_at = wall_seconds;
+    snapshot.observed_monotonic_ms = monotonic_ms;
     if (!write(serialize_metrics(snapshot))) return MetricsPublication::FAILED;
     payload_ = payload; saved_ms_ = monotonic_ms; saved_ = true;
     return MetricsPublication::SAVED;

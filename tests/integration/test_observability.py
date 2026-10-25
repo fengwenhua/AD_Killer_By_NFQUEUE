@@ -5,6 +5,7 @@ import errno
 import json
 from pathlib import Path
 import shutil
+import signal
 import socket
 import struct
 import subprocess
@@ -20,7 +21,7 @@ def metrics():
     if not path.exists():
         return {}
     return {key: int(value) for key, value in
-            (line.split('=', 1) for line in path.read_text().splitlines())}
+            (line.split('=', 1) for line in path.read_text().splitlines()) if key != 'owner_boot'}
 
 
 def wait(test, description, seconds=15):
@@ -116,8 +117,45 @@ def main():
         wait(lambda: metrics().get('dns_negative_replies', 0) >= 65, 'disabled logging affected DNS verdicts')
         after = metrics()
         assert after['dns_log_enqueued'] == before['dns_log_enqueued'] and after['dns_log_dropped'] == before['dns_log_dropped']
+        assert after['dns_drop_verdicts'] >= 65 and after['block_exact_hits'] >= 65
+        # Freeze only our owned daemon, preserving the exact live identity so
+        # fixture edits cannot be immediately replaced by a heartbeat. Restore
+        # the file and SIGCONT on every path; no real clock/PID manipulation.
+        path = DATA/'metrics.conf'
+        saved = path.read_text()
+        os.kill(daemon.pid, signal.SIGSTOP)
+        try:
+            wait(lambda: Path(f'/proc/{daemon.pid}/stat').read_text().rsplit(')', 1)[1].split()[0] == 'T',
+                 'test daemon did not stop', seconds=5)
+            saved = path.read_text()
+            def status():
+                return json.loads(subprocess.run([BINARY, '--status-fast'], check=True, capture_output=True).stdout)['metrics']
+            current = status()
+            assert current['status'] == 'current' and current['owner_verified'] and current['owner_pid'] == daemon.pid
+            fields = dict(line.split('=', 1) for line in saved.splitlines())
+            def replace(**changes):
+                path.write_text(''.join(f'{key}={value}\n' for key, value in {**fields, **changes}.items()))
+            replace(owner_started=str(int(fields['owner_started'])+1))
+            assert status()['status'] == 'unverified' and not status()['owner_verified']
+            replace(owner_boot='ffffffff-ffff-ffff-ffff-ffffffffffff')
+            assert not status()['owner_verified']
+            replace(observed_monotonic_ms='1')
+            stale = status()
+            assert stale['status'] == 'stale' and stale['owner_verified'] and stale['age_ms'] > 45000
+            replace(dns_packets='-1')
+            assert status()['status'] == 'invalid'
+            path.unlink()
+            path.symlink_to(DATA/'state.conf')
+            assert status()['status'] == 'unreadable'
+            path.unlink()
+            assert status()['status'] == 'missing' and not path.exists(), 'query recreated metrics'
+        finally:
+            if path.is_symlink():
+                path.unlink()
+            path.write_text(saved)
+            os.kill(daemon.pid, signal.SIGCONT)
         print('real daemon: idle metric suppression/cache expiry, batched DNS logs, real ENOSPC with immediate verdicts, '
-              'loss counters, storage recovery and disabled-log semantics passed')
+              'loss counters, storage recovery, disabled-log semantics and session/age/corrupt record checks passed')
     finally:
         if DATA.exists():
             stopped = subprocess.run([BINARY, '--stop'], capture_output=True, text=True, timeout=25)
@@ -129,6 +167,8 @@ def main():
         if (DATA/'metrics.conf').exists():
             final = metrics()
             assert final.get('dns_log_active', 0) == 0 and final.get('dns_log_pending', 0) == 0
+            inactive = json.loads(subprocess.run([BINARY, '--status-fast'], check=True, capture_output=True).stdout)['metrics']
+            assert inactive['status'] == 'inactive' and not inactive['owner_verified']
         if DATA.exists():
             shutil.rmtree(DATA)
 

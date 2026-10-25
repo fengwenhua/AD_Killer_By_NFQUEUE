@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include "process_identity.h"
 
 enum class MetricMatch {
     WHITELIST,
@@ -13,6 +14,8 @@ enum class MetricMatch {
 };
 
 struct MetricsSnapshot {
+    ProcessIdentity owner;
+    uint64_t observed_monotonic_ms = 0;
     uint64_t updated_at = 0;
     uint64_t dns_packets = 0;
     uint64_t tls_packets = 0;
@@ -42,6 +45,7 @@ struct MetricsSnapshot {
     uint64_t reassembly_limit_rejected = 0;
     uint64_t dns_log_enqueued = 0, dns_log_written = 0, dns_log_dropped = 0, dns_log_write_failures = 0;
     uint64_t dns_log_batches = 0, dns_log_pending = 0, dns_log_pending_bytes = 0, dns_log_active = 0;
+    uint64_t dns_drop_verdicts = 0, inspected_drop_verdicts = 0;
 };
 
 class DataPlaneMetrics {
@@ -59,6 +63,7 @@ public:
     void record_tcp_reset();
     void record_quic_reject();
     void record_response_failure();
+    void record_drop_verdict(bool dns);
     MetricsSnapshot snapshot() const;
 
 private:
@@ -79,11 +84,23 @@ private:
     std::atomic<uint64_t> tcp_resets_{0};
     std::atomic<uint64_t> quic_rejects_{0};
     std::atomic<uint64_t> response_failures_{0};
+    std::atomic<uint64_t> dns_drop_verdicts_{0}, inspected_drop_verdicts_{0};
 };
 
 std::string serialize_metrics(const MetricsSnapshot &snapshot);
 MetricsSnapshot parse_metrics(const std::string &content);
 std::string metrics_json(const MetricsSnapshot &snapshot);
+bool parse_metrics_checked(const std::string &content, MetricsSnapshot &snapshot);
+enum class MetricsRead { OK, MISSING, UNREADABLE, INVALID };
+MetricsRead read_metrics(const std::string &path, MetricsSnapshot &snapshot);
+struct MetricsView {
+    std::string status = "unverified";
+    bool owner_verified = false, age_known = false;
+    uint64_t age_ms = 0;
+};
+MetricsView observe_metrics(const MetricsSnapshot &, const ProcessIdentity &before,
+                           const ProcessIdentity &after, bool running, uint64_t monotonic_ms);
+std::string metrics_view_json(const MetricsSnapshot &, const MetricsView &);
 
 enum class MetricsPublication { SKIPPED, SAVED, FAILED };
 // The owner samples at most once/second. Unchanged data only emits a 15 s

@@ -3,6 +3,7 @@ import { PATHS } from '../services/api.js';
 import { keyValues, lastJson, overlap } from '../domain/rules.js';
 import { useLifetime } from './useLifetime.js';
 import { confirmedApply, observeApply, validApplyRevision } from '../domain/apply.js';
+import { metricOwner, metricQuality, ruleHits } from '../domain/metrics.js';
 const cleanupFault = state => ['cleanup_failed', 'cleanup_unknown', 'cleanup_incomplete'].includes(state?.last_error_code);
 const applyKey = value => [value?.status, value?.desired_revision, value?.applied_revision, value?.verified, value?.verification].join(':');
 
@@ -27,7 +28,7 @@ export async function waitEngine(target, api, refresh, lifetime) {
   return { ok: false, kind: 'timeout', message: '等待引擎状态超时，请查看日志；不要连续重复启动。' };
 }
 
-export function useEngine(api, feedback) {
+export function useEngine(api, feedback, clock = () => globalThis.performance?.now?.() ?? Date.now()) {
   const life = useLifetime();
   const state = ref(null), total = ref(null), action = ref(''), setting = ref(''), scope = ref(0), error = ref('');
   const ready = computed(() => !!state.value);
@@ -78,15 +79,18 @@ export function useEngine(api, feedback) {
   });
   const kind = computed(() => presentation.value.kind), badge = computed(() => presentation.value.badge);
   const title = computed(() => presentation.value.title), description = computed(() => error.value || presentation.value.description);
-  const blockedTotal = computed(() => {
-    const metrics=state.value?.metrics;
-    if (!metrics || !Number.isSafeInteger(metrics.updated_at) || metrics.updated_at<=0) return null;
-    const values=[metrics.block_suffix_hits,metrics.block_exact_hits];
-    if (!values.every(value=>Number.isSafeInteger(value) && value>=0)) return null;
-    const total=values[0]+values[1];
-    return Number.isSafeInteger(total) ? total : null;
-  });
   const metricsStale = ref(false);
+  const metricClock = ref(clock()), metricObservedAt = ref(null);
+  const tickMetrics = () => { metricClock.value = clock(); };
+  watch(() => state.value?.metrics, () => { tickMetrics(); metricObservedAt.value = metricClock.value; }, {flush:'sync'});
+  const metricsQuality = computed(() => metricQuality(state.value, metricsStale.value, metricObservedAt.value, metricClock.value));
+  // Keep the exported name for callers; this number is domain rule hits only.
+  const blockedTotal = computed(() => ['current', 'stale', 'query_failed'].includes(metricsQuality.value) ? ruleHits(state.value?.metrics) : null);
+  const metricsNotice = computed(() => ({
+    current:'规则命中次数 · 守护重启后重新累计', stale:'统计已过期，保留上次记录', query_failed:'统计暂不可用，保留上次记录',
+    missing:'等待统计数据', inactive:'等待本次守护统计', invalid:'统计内容未能核实', unreadable:'无法读取统计数据',
+    clock_invalid:'统计时间未能核实', unverified:'统计归属未核实，等待当前守护数据',
+  }[metricsQuality.value]));
   let stateRevision=0, metricsRefresh;
   async function refreshMetrics() {
     if (metricsRefresh) return metricsRefresh;
@@ -106,11 +110,17 @@ export function useEngine(api, feedback) {
           ...(next.daemon_image_current===false ? {daemon_image_current:false} : {})};
         return;
       }
+      const oldOwner = metricOwner(state.value?.metrics), nextOwner = metricOwner(next.metrics);
+      if (next.running && ((Number.isSafeInteger(next.daemon_pid) && Number.isSafeInteger(state.value?.daemon_pid) && next.daemon_pid !== state.value.daemon_pid) ||
+          (oldOwner && nextOwner && oldOwner !== nextOwner))) {
+        state.value={...state.value,running:true,daemon_pid:next.daemon_pid,metrics:next.metrics,apply:{status:'unverified',verified:false}};
+        if (!await refresh()) metricsStale.value=true;
+        return;
+      }
       if (applyKey(next.apply) !== applyKey(state.value?.apply)) {
         // A fast response can revoke an ACK, but only full route validation
         // can promote a newly acknowledged revision to healthy.
-        if (!confirmedApply(next.apply))
-          state.value={...state.value,apply:next.apply || {status:'unverified',verified:false},metrics:next.metrics};
+        state.value={...state.value,apply:confirmedApply(next.apply) ? {...next.apply,status:'unverified',verified:false} : next.apply || {status:'unverified',verified:false},metrics:next.metrics};
         if (!await refresh()) metricsStale.value=true;
         return;
       }
@@ -134,9 +144,10 @@ export function useEngine(api, feedback) {
     checking.value = true;
     refreshing = (async () => {
       const result = await api.command('--status'), next = lastJson(result.stdout);
-      if (result.code || !next || typeof next.running!=='boolean') { feedback.log(result.stderr || '无法读取引擎状态', 'error'); return null; }
+      if (result.code || !next || typeof next.running!=='boolean') { if (life.active) metricsStale.value=true; feedback.log(result.stderr || '无法读取引擎状态', 'error'); return null; }
       if (!life.active) return null;
       state.value = next;
+      metricsStale.value = false;
       stateRevision++;
       scope.value = Number(next.scope) === 1 ? 1 : 0;
       const known = Number.isSafeInteger(next.rules_black) && next.rules_black >= 0 && Number.isSafeInteger(next.rules_white) && next.rules_white >= 0;
@@ -243,5 +254,5 @@ export function useEngine(api, feedback) {
       await life.wait(1000);
     }
   });
-  return { state, total, scope, action, setting, ready, running, healthUnknown, cleanupFailed, applyIssue, canRetryApply, checking, kind, badge, title, description, blockedTotal, metricsStale, refreshMetrics, refresh, verifyHealth, retryApply, control, changeSetting };
+  return { state, total, scope, action, setting, ready, running, healthUnknown, cleanupFailed, applyIssue, canRetryApply, checking, kind, badge, title, description, blockedTotal, metricsStale, metricsQuality, metricsNotice, tickMetrics, refreshMetrics, refresh, verifyHealth, retryApply, control, changeSetting };
 }

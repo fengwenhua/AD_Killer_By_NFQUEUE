@@ -69,6 +69,7 @@ static bool stop_requested() {
 static bool send_verdict(int fd, int queue, uint32_t id, uint32_t verdict) {
     bool ok = nfq_set_verdict(fd, queue, id, verdict);
     if (!ok) g_metrics.record_verdict_failure();
+    else if (verdict == NF_DROP_) g_metrics.record_drop_verdict(queue == QUEUE_DNS);
     return ok;
 }
 
@@ -91,6 +92,7 @@ static bool send_marked_verdict(int fd, int queue, uint32_t id,
         ok = nfq_set_verdict_with_connmark(fd, queue, id, verdict, mark, BLOCK_CONNMARK_MASK);
     }
     if (!ok) g_metrics.record_verdict_failure();
+    else if (verdict == NF_DROP_) g_metrics.record_drop_verdict(queue == QUEUE_DNS);
     return ok;
 }
 
@@ -142,6 +144,7 @@ static void save_metrics(bool force = false) {
     static bool write_failed = false;
     static MetricsPublisher publisher;
     MetricsSnapshot snapshot = g_metrics.snapshot();
+    snapshot.owner = g_owner;
     snapshot.updated_at = static_cast<uint64_t>(now_epoch());
     IpExtensionStats ip = ip_extension_stats();
     snapshot.ipv4_fragments = ip.ipv4_fragments;
@@ -201,8 +204,10 @@ static bool on_dns_packet(const NfqPacket &pkt, void *ud) {
         const uint64_t now = monotonic_ms();
         DnsTcpResult result = g_dns_tcp.inspect(
             flow, v.tcp_sequence, v.tcp_flags, v.payload, v.payload_len, now);
-        if (result.decision == DnsTcpDecision::BLOCKED)
+        if (result.decision == DnsTcpDecision::BLOCKED) {
+            g_metrics.record_blocked_retransmit();
             return send_block_verdict(fd, QUEUE_DNS, pkt.id, v, pkt.outdev);
+        }
         if (result.decision == DnsTcpDecision::NEED_MORE)
             return send_verdict(fd, QUEUE_DNS, pkt.id, NF_ACCEPT_);
         if (result.decision == DnsTcpDecision::GIVE_UP || result.domains.empty()) {
@@ -248,7 +253,6 @@ static bool on_dns_packet(const NfqPacket &pkt, void *ud) {
             return send_verdict(fd, QUEUE_DNS, pkt.id, NF_DROP_);
         }
         // Never turn an unsupported DNS packet into a silent resolver timeout.
-        g_metrics.record_domain_failure();
     }
     return send_verdict(fd, QUEUE_DNS, pkt.id, NF_ACCEPT_);
 }
