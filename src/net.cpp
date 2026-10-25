@@ -370,6 +370,11 @@ std::string download_via_exec(const std::string &url,
         if (try_exec_backend(build_curl_download_argv(curl, url, temp_path),
                              temp_path))
             return "";
+        if (unconfirmed_download_writer) return "无法确认下载进程退出，保留临时文件并停止后续下载";
+        if (operation_closing()) return "卸载已请求，下载已安全取消";
+        // Select a backend before the request. HTTP/TLS/content failures are
+        // not evidence that another backend should repeat the same request.
+        return "curl 下载失败，未切换后端重试";
     }
     if (unconfirmed_download_writer) return "无法确认下载进程退出，保留临时文件并停止后续下载";
     if (operation_closing()) return "卸载已请求，下载已安全取消";
@@ -378,7 +383,11 @@ std::string download_via_exec(const std::string &url,
     // need not validate certificates. Do not silently use it as a secure
     // fallback. A compatible GNU wget must accept the required options below.
     static const char *WGET_PATHS[] = {
+#if defined(ADK_NFQ_TEST_WGET_PROGRAM)
+        ADK_NFQ_TEST_WGET_PROGRAM,
+#else
         "/system/bin/wget", "/system/xbin/wget", "/vendor/bin/wget",
+#endif
     };
     if (const char *wget = find_executable(
             WGET_PATHS, sizeof(WGET_PATHS) / sizeof(WGET_PATHS[0]))) {
@@ -582,17 +591,9 @@ std::string download_file(const std::string &url, const std::string &path) {
         log_line("libcurl", "使用受限 HTTP(S) 策略下载: %s", url.c_str());
         error = download_via_libcurl(url, temp_path);
         if (!error.empty())
-            log_line("libcurl", "下载失败: %s,尝试无 shell 后端", error.c_str());
+            log_line("libcurl", "下载失败: %s", error.c_str());
     } else {
         log_line("libcurl", "系统未找到可用 libcurl,尝试无 shell 后端");
-    }
-
-    if (operation_closing()) {
-        unlink(temp_path.c_str());
-        return "卸载已请求，下载已安全取消";
-    }
-    if (!valid_download_file(temp_path)) {
-        unlink(temp_path.c_str());
         error = download_via_exec(url, temp_path);
     }
     if (!error.empty()) {

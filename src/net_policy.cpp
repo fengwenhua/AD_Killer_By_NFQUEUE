@@ -90,6 +90,6 @@ std::vector<std::string> build_curl_download_argv(
 std::vector<std::string> build_wget_download_argv(
         const std::string &executable, const std::string &url,
         const std::string &output_path) {
-    return {executable, "--no-config", "--https-only", "-q", "-T", "30",
+    return {executable, "--no-config", "--https-only", "--tries=1", "-q", "-T", "30",
             "--max-redirect=0", "-O", output_path, "--", url};
 }

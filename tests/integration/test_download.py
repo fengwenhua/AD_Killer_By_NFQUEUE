@@ -2,6 +2,7 @@
 """Exercise the real libcurl ABI and exec curl against a loopback HTTP/TLS server."""
 import ctypes.util
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import os
 from pathlib import Path
 import shutil
@@ -64,15 +65,25 @@ def main():
     assert curl and library and shutil.which("openssl"), "requires curl, libcurl and openssl"
     with tempfile.TemporaryDirectory(prefix="ad_killer_by_nfqueue_download_") as directory:
         base = Path(directory)
+        backend_log = base / "backend-attempts.jsonl"
+        for backend in ("curl", "wget"):
+            wrapper = base / ("backend-" + backend)
+            shutil.copyfile(ROOT / "tests/integration/download_backend.py", wrapper)
+            wrapper.chmod(0o700)
+
+        def attempts():
+            return [json.loads(line)["backend"] for line in backend_log.read_text().splitlines()]
+
         outputs = []
-        for mode in ("libcurl", "exec"):
+        for mode in ("libcurl", "exec", "wget-only"):
             binary = base / mode
             args = [os.environ.get("CXX", "c++"), "-std=c++17", "-O2", "-Wall", "-Wextra",
                     "-Wpedantic", "-Werror", "-pthread", "-I" + str(ROOT / "src"),
                     '-DADK_NFQ_TEST_CURL_LIBRARY="' + (library if mode == "libcurl" else
                                                       "/nonexistent/ad_killer_by_nfqueue_libcurl.so") + '"',
-                    '-DADK_NFQ_TEST_CURL_PROGRAM="' + (curl if mode == "exec" else
+                    '-DADK_NFQ_TEST_CURL_PROGRAM="' + (str(base / "backend-curl") if mode != "wget-only" else
                                                       "/nonexistent/ad_killer_by_nfqueue_curl") + '"',
+                    '-DADK_NFQ_TEST_WGET_PROGRAM="' + str(base / "backend-wget") + '"',
                     str(ROOT / "tests/integration/download_probe.cpp")]
             args += [str(ROOT / "src" / name) for name in
                      ("net.cpp", "net_policy.cpp", "logging.cpp", "bounded_log.cpp")]
@@ -105,12 +116,24 @@ def main():
             # incorrectly succeed. --disable must be the first curl option.
             (base / ".curlrc").write_text("insecure\n")
             env = dict(os.environ, CURL_HOME=str(base), NO_PROXY="127.0.0.1,localhost")
+            env.update(ADK_TEST_BACKEND_LOG=str(backend_log), ADK_TEST_REAL_CURL=curl)
             for binary in outputs:
+                if binary.name == "wget-only":
+                    backend_log.write_text("")
+                    target = base / "rules.txt"
+                    target.write_bytes(b"old rules\n")
+                    result = subprocess.run([str(binary), f"http://127.0.0.1:{servers[0].server_port}/ok", str(target)],
+                                            env=env, capture_output=True, text=True, timeout=15)
+                    assert result.returncode == 1 and attempts() == ["wget"], result
+                    assert target.read_bytes() == b"old rules\n"
+                    assert not list(base.glob("rules.txt.tmp.*"))
+                    continue
                 cases = [("http", servers[0], path, path in ("/ok", "/redirect")) for path in
                          ("/ok", "/redirect", "/404", "/loop", "/file",
                           "/known-large", "/stream-large", "/short")]
                 cases.append(("https", servers[1], "/ok", False))
                 for scheme, server, path, success in cases:
+                    backend_log.write_text("")
                     target = base / "rules.txt"
                     target.write_bytes(b"old rules\n")
                     url = f"{scheme}://127.0.0.1:{server.server_port}{path}"
@@ -121,9 +144,12 @@ def main():
                     expected = b"ads.example.com\n" if success else b"old rules\n"
                     assert target.read_bytes() == expected, (binary.name, path, "old rules replaced")
                     assert not list(base.glob("rules.txt.tmp.*")), "download temp leaked"
+                    assert attempts() == ([] if binary.name == "libcurl" else ["curl"]), \
+                        (binary.name, path, "request repeated through another backend", attempts())
                 # An idle response has no write callbacks: cancellation must
                 # use libcurl progress or the owned exec child's polling loop.
                 for action in ('file', 'prefix'):
+                    backend_log.write_text("")
                     server = servers[0]
                     server.transfer_started.clear()
                     server.release_transfer.clear()
@@ -143,6 +169,8 @@ def main():
                         assert time.monotonic() - started < 5
                         assert target.read_bytes() == b'old rules\n'
                         assert not list(base.glob('rules.txt.tmp.*'))
+                        assert attempts() == ([] if binary.name == "libcurl" else ["curl"]), \
+                            (binary.name, action, attempts())
                     finally:
                         server.release_transfer.set()
                         marker.unlink(missing_ok=True)
@@ -150,7 +178,8 @@ def main():
                             child.kill()
                             child.wait()
             print("real libcurl/exec curl HTTP redirects, errors, TLS rejection, "
-                  "64 MiB limits, idle cancellation and atomic old-file preservation tests passed")
+                  "64 MiB limits, idle cancellation, no cross-backend retries "
+                  "and atomic old-file preservation tests passed")
         finally:
             for server in servers:
                 server.release_transfer.set()

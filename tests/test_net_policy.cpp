@@ -68,6 +68,8 @@ int main() {
            "wget fallback must require documented GNU safety options");
     expect(std::find(wget.begin(), wget.end(), "--max-redirect=0") != wget.end(),
            "wget fallback must disable redirects it cannot safely constrain");
+    expect(std::find(wget.begin(), wget.end(), "--tries=1") != wget.end(),
+           "wget must not silently retry a failed source download");
     expect(MAX_RULE_DOWNLOAD_BYTES == 64u * 1024u * 1024u,
            "download size policy should remain 64 MiB");
 
