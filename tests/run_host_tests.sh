@@ -369,6 +369,7 @@ python3 "$ROOT/tests/test_package.py"
 python3 "$ROOT/tests/test_manager_update.py"
 python3 "$ROOT/tests/test_listing_and_release.py"
 python3 "$ROOT/tests/test_release_contract.py"
+python3 "$ROOT/tests/test_adb_inspect.py"
 
 if [ "${CHECK_RULE_ARTIFACTS:-0}" = "1" ]; then
     ${CXX:-c++} $COMPILE_FLAGS \

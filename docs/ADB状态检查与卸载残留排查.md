@@ -41,6 +41,27 @@ cat /proc/uptime
 - 不要在日常手机运行 `make test-engine-integration`、`make test-update-integration` 等一次性 Linux 环境测试。
 - 查询失败不等于没有残留。`Permission denied`、命令不支持、锁等待超时均应标记为“未能检查”。不要为了得到“干净”结果而隐藏错误。
 
+### 1.1 电脑端只读采集与被动基线
+
+在电脑项目目录执行，序列号必须显式填写，输出目录必须尚不存在：
+
+```sh
+python3 scripts/adb_inspect.py --serial SERIAL --output dist/adb-report-001
+
+# 从第一份采样起至少记录 24 小时；保持电脑、采集进程和 USB 连接可用
+python3 scripts/adb_inspect.py --serial SERIAL \
+  --output dist/adb-baseline-24h-001 --duration 86400 --interval 60
+```
+
+工具采集模块/映像身份、进程 CPU/RSS/I/O、冻结、双栈自有路由、队列归属及丢包、
+磁盘、任务记录和日志大小摘要。不启动/停止/升级模块，不切换网络或配置，不发送
+DNS 探针，不读取 DNS 历史或规则正文。报告默认不包含序列号、名单 UID、配置原文
+或路由原文，保存在本机私有目录，不上传。
+
+报告字段与验收边界见[设备基线采集协议](设备基线采集协议.md)。采样成功或
+`run.json` 的 `complete=true` 只代表记录过程完成，不能替代状态矩阵、卸载残留证明
+或性能验收。缺失/读取失败保持未知；严格卸载残留检查继续按下文逐项核实。
+
 ## 2. 模块版本和配置
 
 ```sh
