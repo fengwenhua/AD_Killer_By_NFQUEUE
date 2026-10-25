@@ -103,6 +103,10 @@ ${CXX:-c++} $COMPILE_FLAGS \
 "$BUILD_DIR/test_net_policy"
 
 ${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" \
+    "$ROOT/tests/test_work_budget.cpp" -o "$BUILD_DIR/test_work_budget"
+"$BUILD_DIR/test_work_budget"
+
+${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" \
     "$ROOT/tests/test_safe_tree.cpp" -o "$BUILD_DIR/test_safe_tree"
 "$BUILD_DIR/test_safe_tree"
 

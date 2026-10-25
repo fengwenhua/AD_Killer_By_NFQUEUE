@@ -1,6 +1,7 @@
 #include "net_policy.h"
 
 #include <cctype>
+#include <algorithm>
 
 namespace {
 
@@ -74,15 +75,21 @@ bool validate_download_url(const std::string &url, std::string *error) {
 
 std::vector<std::string> build_curl_download_argv(
         const std::string &executable, const std::string &url,
-        const std::string &output_path) {
+        const std::string &output_path, uint64_t timeout_ms, uint64_t max_bytes) {
+    const auto seconds = [](uint64_t milliseconds) {
+        if (milliseconds % 1000 == 0) return std::to_string(milliseconds / 1000);
+        return std::to_string(milliseconds / 1000) + "." +
+               std::to_string(1000 + milliseconds % 1000).substr(1);
+    };
     return {
         executable,
         "--disable", "--globoff",
         "--fail", "--silent", "--show-error", "--location",
         "--max-redirs", std::to_string(MAX_DOWNLOAD_REDIRECTS),
         "--proto", "=http,https", "--proto-redir", https_download(url) ? "=https" : "=http,https",
-        "--connect-timeout", "15", "--max-time", "300",
-        "--max-filesize", std::to_string(MAX_RULE_DOWNLOAD_BYTES),
+        "--connect-timeout", seconds(std::min<uint64_t>(15000, timeout_ms)),
+        "--max-time", seconds(timeout_ms),
+        "--max-filesize", std::to_string(max_bytes),
         "--output", output_path, "--", url,
     };
 }

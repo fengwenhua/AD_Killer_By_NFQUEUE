@@ -203,12 +203,12 @@ def main():
             if result["status"] != "running":
                 break
             time.sleep(0.05)
-        assert result["status"] == "success" and result["exit_code"] == 0, result
-        assert (DATA / "rules.current").read_bytes() != manifest
-        assert "publish_status=published" in (DATA / "source_stats.conf").read_text()
+        assert result["status"] == "failed" and result["exit_code"] != 0, result
+        assert (DATA / "rules.current").read_bytes() == manifest
+        assert "publish_status=incomplete_sources" in (DATA / "source_stats.conf").read_text()
         report = (DATA / "source_stats.conf").read_text()
         assert "accepted_sources=1\n" in report and "rejected_sources=1\n" in report
-        assert "duplicate_lines=1\n" in report
+        assert "generation=" not in report, "failed sync must not claim a new publication"
         assert f"job_id={started['job_id']}\n" in report
         sections = report.split("\n[source_")[1:]
         assert len(sections) == 2
@@ -216,6 +216,9 @@ def main():
             fields = dict(line.split("=", 1) for line in section.splitlines() if "=" in line)
             assert int(fields["checked_at"]) > 0
         assert not (DATA / "daemon.pid").exists()
+        sources("/adguard")
+        command("--update")
+        assert "duplicate_lines=1\n" in (DATA / "source_stats.conf").read_text()
         # Real CLI GC, not only the bundle helper: unchanged input reuses a
         # generation; a reader that captured old paths survives 100 changes.
         before = (DATA / "rules.current").read_bytes()

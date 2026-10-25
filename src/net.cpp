@@ -10,6 +10,14 @@
 #include "common.h"
 #include "task_context.h"
 #include "owned_child.h"
+#include "work_budget.h"
+#include <dirent.h>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#endif
+#if defined(__linux__)
+#include <sys/prctl.h>
+#endif
 
 #include <cerrno>
 #include <cstdio>
@@ -72,6 +80,8 @@ enum {
     CURLOPT_SSL_VERIFYHOST_ = 81,
     CURLOPT_CONNECTTIMEOUT_ = 78,
     CURLOPT_NOSIGNAL_ = 99,
+    CURLOPT_TIMEOUT_MS_ = 155,
+    CURLOPT_CONNECTTIMEOUT_MS_ = 156,
     CURLOPT_MAXFILESIZE_LARGE_ = 30117,
     CURLOPT_PROTOCOLS_ = 181,
     CURLOPT_REDIR_PROTOCOLS_ = 182,
@@ -145,15 +155,14 @@ namespace {
 
 // A failed termination poisons the rest of this process's downloads: never
 // reuse a temp name or start another backend under an unconfirmed writer.
-thread_local bool unconfirmed_download_writer = false;
 struct TransferCancellation {
-    bool enabled = !operation_marker_path.empty(), cancelled = false;
+    bool enabled = !operation_marker_path.empty() || WorkBudget::active, cancelled = false, expired = false;
     std::chrono::steady_clock::time_point checked {};
     bool check() {
-        if (!enabled || cancelled) return cancelled;
+        if (!enabled || cancelled || expired) return cancelled || expired;
         const auto now = std::chrono::steady_clock::now();
         if (checked.time_since_epoch().count() && now - checked < std::chrono::milliseconds(100)) return false;
-        checked = now; cancelled = operation_closing(); return cancelled;
+        checked = now; cancelled = operation_closing(); expired = WorkBudget::expired(); return cancelled || expired;
     }
 };
 int cancel_transfer(void *user, int64_t, int64_t, int64_t, int64_t) {
@@ -176,6 +185,7 @@ int configure_transfer_cancellation(void *easy, TransferCancellation &cancel) {
 struct DownloadContext {
     FILE *file = nullptr;
     size_t bytes = 0;
+    size_t maximum = MAX_RULE_DOWNLOAD_BYTES;
     bool too_large = false;
     bool write_failed = false;
     TransferCancellation cancellation;
@@ -189,12 +199,13 @@ size_t write_download(char *data, size_t size, size_t count, void *userdata) {
         return 0;
     }
     size_t bytes = size * count;
-    if (bytes > MAX_RULE_DOWNLOAD_BYTES - context->bytes) {
+    if (bytes > context->maximum - context->bytes) {
         context->too_large = true;
+        context->bytes = context->maximum;
         return 0;
     }
     size_t written = fwrite(data, 1, bytes, context->file);
-    context->bytes += written;
+    context->bytes += bytes;
     if (written != bytes) context->write_failed = true;
     return written;
 }
@@ -217,7 +228,11 @@ bool valid_download_file(const std::string &path) {
 }
 
 std::string download_via_libcurl(const std::string &url,
-                                 const std::string &temp_path) {
+                                 const std::string &temp_path, size_t maximum = MAX_RULE_DOWNLOAD_BYTES,
+                                 size_t *transferred = nullptr) {
+    if (transferred) *transferred = 0;
+    const auto timeout_ms = WorkBudget::remaining_ms(300000);
+    if (!timeout_ms) return "下载时间预算已耗尽";
     int fd = create_temp_file(temp_path);
     if (fd < 0) return "无法创建安全临时文件";
     FILE *file = fdopen(fd, "wb");
@@ -236,6 +251,7 @@ std::string download_via_libcurl(const std::string &url,
 
     DownloadContext context;
     context.file = file;
+    context.maximum = maximum;
     char error_buffer[256] = {0};
     int option_error = 0;
     option_error |= configure_transfer_cancellation(easy, context.cancellation);
@@ -254,17 +270,20 @@ std::string download_via_libcurl(const std::string &url,
     option_error |= p_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER_, 1L);
     option_error |= p_easy_setopt(easy, CURLOPT_SSL_VERIFYHOST_, 2L);
     option_error |= p_easy_setopt(easy, CURLOPT_NOSIGNAL_, 1L);
-    option_error |= p_easy_setopt(easy, CURLOPT_CONNECTTIMEOUT_, 15L);
-    option_error |= p_easy_setopt(easy, CURLOPT_TIMEOUT_, 300L);
+    option_error |= p_easy_setopt(easy, CURLOPT_CONNECTTIMEOUT_MS_, static_cast<long>(std::min<uint64_t>(15000, timeout_ms)));
+    option_error |= p_easy_setopt(easy, CURLOPT_TIMEOUT_MS_, static_cast<long>(timeout_ms));
     option_error |= p_easy_setopt(easy, CURLOPT_LOW_SPEED_LIMIT_, 1L);
     option_error |= p_easy_setopt(easy, CURLOPT_LOW_SPEED_TIME_, 60L);
     option_error |= p_easy_setopt(easy, CURLOPT_MAXFILESIZE_LARGE_,
-                                  static_cast<int64_t>(MAX_RULE_DOWNLOAD_BYTES));
+                                  static_cast<int64_t>(maximum));
     const std::string user_agent = std::string(MODULE_ID) + "/" +
                                    MODULE_VERSION + " (rules downloader)";
     option_error |= p_easy_setopt(easy, CURLOPT_USERAGENT_, user_agent.c_str());
 
     int perform_result = option_error == 0 ? p_easy_perform(easy) : -1;
+    // libcurl can reject an unknown-length body before invoking our writer.
+    // Charge the cap on CURLE_FILESIZE_EXCEEDED instead of refunding it as 0.
+    if (perform_result == 63) context.bytes = maximum;
     long response_code = 0;
     char *effective_url = nullptr;
     int response_info = p_easy_getinfo(easy, CURLINFO_RESPONSE_CODE_, &response_code);
@@ -273,6 +292,7 @@ std::string download_via_libcurl(const std::string &url,
     std::string final_url = effective_url ? effective_url : "";
     p_easy_cleanup(easy);
     int close_result = fclose(file);
+    if (transferred) *transferred = context.bytes;
 
     std::string effective_error;
     bool effective_valid = !final_url.empty() &&
@@ -285,7 +305,8 @@ std::string download_via_libcurl(const std::string &url,
 
     std::string reason;
     if (context.cancellation.cancelled || operation_closing()) reason = "卸载已请求，下载已安全取消";
-    else if (context.too_large) reason = "响应超过 64 MiB";
+    else if (context.cancellation.expired || WorkBudget::expired()) reason = "下载时间预算已耗尽";
+    else if (context.too_large) reason = "响应超过本次下载正文上限";
     else if (response_code != 0 && (response_code < 200 || response_code >= 300))
         reason = "HTTP 状态码 " + std::to_string(response_code);
     else if (!effective_valid) reason = "重定向目标非法: " + effective_error;
@@ -303,8 +324,9 @@ const char *find_executable(const char *const *paths, size_t count) {
     return nullptr;
 }
 
-bool run_download_command(const std::vector<std::string> &arguments) {
-    if (arguments.empty() || unconfirmed_download_writer || operation_closing()) return false;
+bool run_download_command(const std::vector<std::string> &arguments, uint64_t maximum) {
+    const auto timeout_ms = WorkBudget::remaining_ms(305000);
+    if (arguments.empty() || task_unconfirmed_network_writer || operation_closing() || !timeout_ms) return false;
     std::vector<char *> argv;
     for (const auto &argument : arguments) argv.push_back(const_cast<char *>(argument.c_str()));
     argv.push_back(nullptr);
@@ -313,8 +335,8 @@ bool run_download_command(const std::vector<std::string> &arguments) {
     if (child == 0) {
         if (setpgid(0, 0) || !inherit_task_lease()) _exit(127);
         struct rlimit file_limit;
-        file_limit.rlim_cur = MAX_RULE_DOWNLOAD_BYTES;
-        file_limit.rlim_max = MAX_RULE_DOWNLOAD_BYTES;
+        file_limit.rlim_cur = maximum;
+        file_limit.rlim_max = maximum;
         if (setrlimit(RLIMIT_FSIZE, &file_limit)) _exit(127);
 
         int null_fd = open("/dev/null", O_RDWR | O_CLOEXEC);
@@ -331,7 +353,7 @@ bool run_download_command(const std::vector<std::string> &arguments) {
 
     setpgid(child, child);
     const bool group_owned = getpgid(child) == child;
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(305);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
     bool owned = true, interrupted = false;
     while (true) {
         siginfo_t info {};
@@ -339,25 +361,34 @@ bool run_download_command(const std::vector<std::string> &arguments) {
         if (result == 0 && info.si_pid == child) break;
         if (result < 0 && errno != EINTR) { owned = false; interrupted = true; break; }
         if (operation_closing() || std::chrono::steady_clock::now() >= deadline) { interrupted = true; break; }
-        usleep(100 * 1000);
+        usleep(20 * 1000);
     }
     const auto finished = finish_owned_child(child, owned, group_owned);
-    if (!finished.reaped || !finished.group_gone) unconfirmed_download_writer = true;
+    if (!finished.reaped || !finished.group_gone) task_unconfirmed_network_writer = true;
     return !interrupted && finished.reaped && finished.group_gone && finished.exit_code == 0;
 }
 
 bool try_exec_backend(const std::vector<std::string> &arguments,
-                      const std::string &temp_path) {
+                      const std::string &temp_path, WorkBudget::Reservation &body) {
     int fd = create_temp_file(temp_path);
-    if (fd < 0) return false;
+    if (fd < 0) { body.settle(0); return false; }
     close(fd);
-    bool success = run_download_command(arguments) && valid_download_file(temp_path);
-    if (!success && !unconfirmed_download_writer) unlink(temp_path.c_str());
+    bool success = run_download_command(arguments, body.amount()) && valid_download_file(temp_path);
+    if (!task_unconfirmed_network_writer) {
+        struct stat info {};
+        if (success && !lstat(temp_path.c_str(), &info) && S_ISREG(info.st_mode) && info.st_size >= 0 &&
+            static_cast<uint64_t>(info.st_size) <= body.amount()) body.settle(info.st_size);
+        if (!success) unlink(temp_path.c_str());
+    }
     return success;
 }
 
 std::string download_via_exec(const std::string &url,
                               const std::string &temp_path) {
+    WorkBudget::Reservation body(MAX_RULE_DOWNLOAD_BYTES);
+    const auto timeout_ms = WorkBudget::remaining_ms(300000);
+    if (!timeout_ms) { body.settle(0); return "下载时间预算已耗尽"; }
+    if (!body.amount()) return "累计下载正文预算已耗尽";
     static const char *CURL_PATHS[] = {
 #if defined(ADK_NFQ_TEST_CURL_PROGRAM)
         ADK_NFQ_TEST_CURL_PROGRAM,
@@ -367,16 +398,17 @@ std::string download_via_exec(const std::string &url,
     };
     if (const char *curl = find_executable(
             CURL_PATHS, sizeof(CURL_PATHS) / sizeof(CURL_PATHS[0]))) {
-        if (try_exec_backend(build_curl_download_argv(curl, url, temp_path),
-                             temp_path))
+        if (try_exec_backend(build_curl_download_argv(curl, url, temp_path, timeout_ms, body.amount()),
+                             temp_path, body))
             return "";
-        if (unconfirmed_download_writer) return "无法确认下载进程退出，保留临时文件并停止后续下载";
+        if (task_unconfirmed_network_writer) return "无法确认下载进程退出，保留临时文件并停止后续下载";
         if (operation_closing()) return "卸载已请求，下载已安全取消";
+        if (WorkBudget::expired()) return "下载时间预算已耗尽";
         // Select a backend before the request. HTTP/TLS/content failures are
         // not evidence that another backend should repeat the same request.
         return "curl 下载失败，未切换后端重试";
     }
-    if (unconfirmed_download_writer) return "无法确认下载进程退出，保留临时文件并停止后续下载";
+    if (task_unconfirmed_network_writer) return "无法确认下载进程退出，保留临时文件并停止后续下载";
     if (operation_closing()) return "卸载已请求，下载已安全取消";
 
     // BusyBox wget has no --max-redirect option and its internal TLS backend
@@ -392,10 +424,134 @@ std::string download_via_exec(const std::string &url,
     if (const char *wget = find_executable(
             WGET_PATHS, sizeof(WGET_PATHS) / sizeof(WGET_PATHS[0]))) {
         if (try_exec_backend(build_wget_download_argv(
-                                 wget, url, temp_path), temp_path))
+                                 wget, url, temp_path), temp_path, body))
             return "";
+        if (WorkBudget::expired()) return "下载时间预算已耗尽";
+        return "wget 下载或文件校验失败";
     }
+    body.settle(0);
     return "无可用的安全下载后端或下载校验失败";
+}
+
+// Only the synchronous CLI may run library work after fork. A previously
+// initialized parent library or an unknown/multiple-thread state selects the
+// exec backend instead. The child never starts another download process group.
+bool can_fork_libcurl() {
+    if (g_curl_ready || g_curl_lib) return false;
+#if defined(__linux__)
+    DIR *directory = opendir("/proc/self/task");
+    if (!directory) return false;
+    size_t count = 0;
+    errno = 0;
+    while (auto *entry = readdir(directory)) {
+        if (entry->d_name[0] != '.') ++count;
+    }
+    const bool ok = errno == 0 && count == 1;
+    closedir(directory);
+    return ok;
+#elif defined(__APPLE__)
+    thread_act_array_t threads = nullptr;
+    mach_msg_type_number_t count = 0;
+    if (task_threads(mach_task_self(), &threads, &count) != KERN_SUCCESS) return false;
+    for (mach_msg_type_number_t i = 0; i < count; ++i) mach_port_deallocate(mach_task_self(), threads[i]);
+    vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(threads), count * sizeof(thread_t));
+    return count == 1;
+#else
+    return false;
+#endif
+}
+
+struct LibraryReply {
+    uint32_t magic = 0x41444b31, available = 0;
+    uint64_t bytes = 0;
+    char error[384] {};
+};
+static_assert(sizeof(LibraryReply) <= 512, "one atomic pipe record");
+
+std::string supervised_libcurl(const std::string &url, const std::string &temp_path, bool &unavailable) {
+    unavailable = false;
+    WorkBudget::Reservation body(MAX_RULE_DOWNLOAD_BYTES);
+    if (WorkBudget::expired()) { body.settle(0); return "下载时间预算已耗尽"; }
+    if (!body.amount()) return "累计下载正文预算已耗尽";
+    int descriptors[2];
+    if (pipe(descriptors)) { body.settle(0); return "无法创建下载结果管道"; }
+    bool pipe_ok = true;
+    for (int &fd : descriptors) {
+        if (fd < 3) {
+            const int moved = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+            close(fd); fd = moved;
+        }
+        if (fd < 0 || fcntl(fd, F_SETFD, FD_CLOEXEC)) pipe_ok = false;
+    }
+    if (!pipe_ok) {
+        for (int fd : descriptors) if (fd >= 0) close(fd);
+        body.settle(0); return "无法保护下载结果管道";
+    }
+    const int flags = fcntl(descriptors[0], F_GETFL);
+    if (flags < 0 || fcntl(descriptors[0], F_SETFL, flags | O_NONBLOCK)) {
+        close(descriptors[0]); close(descriptors[1]); body.settle(0);
+        return "无法设置下载结果管道";
+    }
+    const pid_t parent = getpid();
+    const pid_t child = fork();
+    if (child < 0) {
+        close(descriptors[0]); close(descriptors[1]); body.settle(0);
+        return "无法创建下载子进程";
+    }
+    if (!child) {
+        close(descriptors[0]);
+        if (setpgid(0, 0) || !inherit_task_lease()) _exit(127);
+#if defined(__linux__)
+        // Library work has no independent parent watchdog after an owner
+        // crash. End this download, including resolver threads, with its owner.
+        if (prctl(PR_SET_PDEATHSIG, SIGKILL) || getppid() != parent) _exit(127);
+#else
+        (void)parent;
+#endif
+        LibraryReply reply;
+        reply.available = net_curl_available() ? 1 : 0;
+        if (reply.available) {
+            size_t transferred = 0;
+            const auto error = download_via_libcurl(url, temp_path, body.amount(), &transferred);
+            reply.bytes = transferred;
+            if (!error.empty()) std::snprintf(reply.error, sizeof(reply.error), "%s",
+                error.size() < sizeof(reply.error) ? error.c_str() : "下载失败（错误信息过长）");
+        }
+        ssize_t written;
+        do { written = write(descriptors[1], &reply, sizeof(reply)); } while (written < 0 && errno == EINTR);
+        close(descriptors[1]);
+        _exit(written == static_cast<ssize_t>(sizeof(reply)) ? 0 : 127);
+    }
+    close(descriptors[1]);
+    setpgid(child, child);
+    const bool group_owned = getpgid(child) == child;
+    bool owned = true, interrupted = false;
+    while (true) {
+        siginfo_t info {};
+        const int result = waitid(P_PID, child, &info, WEXITED | WNOHANG | WNOWAIT);
+        if (!result && info.si_pid == child) break;
+        if (result < 0 && errno != EINTR) { owned = false; interrupted = true; break; }
+        if (operation_closing() || WorkBudget::expired()) { interrupted = true; break; }
+        usleep(20000);
+    }
+    const auto finished = finish_owned_child(child, owned, group_owned);
+    LibraryReply reply;
+    ssize_t received;
+    do { received = read(descriptors[0], &reply, sizeof(reply)); } while (received < 0 && errno == EINTR);
+    close(descriptors[0]);
+    if (!finished.reaped || !finished.group_gone) {
+        task_unconfirmed_network_writer = true;
+        return "无法确认下载进程退出，保留临时文件并停止后续下载";
+    }
+    const bool reported = finished.exit_code == 0 && received == static_cast<ssize_t>(sizeof(reply)) &&
+        reply.magic == 0x41444b31 && reply.available <= 1 && reply.bytes <= body.amount() &&
+        std::memchr(reply.error, 0, sizeof(reply.error));
+    if (reported) body.settle(reply.bytes);
+    if (operation_closing()) return "卸载已请求，下载已安全取消";
+    if (WorkBudget::expired()) return "下载时间预算已耗尽";
+    if (interrupted || !reported) return "下载子进程结果未能核实";
+    unavailable = !reply.available;
+    return reply.error;
 }
 
 }  // namespace
@@ -544,7 +700,7 @@ std::string prefix_exec(const std::string &url, PrefixContext &context) {
     }
     const auto finished = finish_owned_child(child, owned, group_owned);
     if (!finished.reaped || !finished.group_gone) {
-        unconfirmed_download_writer = true;
+        task_unconfirmed_network_writer = true;
         return "无法确认预览进程退出，停止后续下载";
     }
     if (error.empty() && (!body || (!context.limited && finished.exit_code != 0)))
@@ -561,7 +717,7 @@ std::string download_prefix(const std::string &url, std::string &prefix, bool &l
 std::string download_prefix_status(const std::string &url, std::string &prefix, bool &limited, size_t byte_limit, long &http_status) {
     http_status = 0;
     prefix.clear(); limited = false;
-    if (unconfirmed_download_writer) return "先前下载进程尚未确认退出";
+    if (task_unconfirmed_network_writer) return "先前下载进程尚未确认退出";
     if (operation_closing()) return "卸载已请求，未开始预览";
     if (byte_limit == 0 || byte_limit > 32768) return "预览字节限制非法";
     std::string error;
@@ -579,15 +735,21 @@ std::string download_prefix_status(const std::string &url, std::string &prefix, 
 }
 
 std::string download_file(const std::string &url, const std::string &path) {
-    if (unconfirmed_download_writer) return "先前下载进程尚未确认退出";
+    if (task_unconfirmed_network_writer) return "先前下载进程尚未确认退出";
     if (operation_closing()) return "卸载已请求，未开始下载";
+    if (WorkBudget::expired()) return "下载时间预算已耗尽";
     std::string policy_error;
     if (!validate_download_url(url, &policy_error)) return policy_error;
 
     std::string temp_path = unique_temp_path(path);
     unlink(temp_path.c_str());
     std::string error;
-    if (net_curl_available()) {
+    if (WorkBudget::active) {
+        bool unavailable = false;
+        if (can_fork_libcurl()) error = supervised_libcurl(url, temp_path, unavailable);
+        else unavailable = true;
+        if (unavailable && error.empty()) error = download_via_exec(url, temp_path);
+    } else if (net_curl_available()) {
         log_line("libcurl", "使用受限 HTTP(S) 策略下载: %s", url.c_str());
         error = download_via_libcurl(url, temp_path);
         if (!error.empty())
@@ -597,12 +759,16 @@ std::string download_file(const std::string &url, const std::string &path) {
         error = download_via_exec(url, temp_path);
     }
     if (!error.empty()) {
-        if (!unconfirmed_download_writer) unlink(temp_path.c_str());
+        if (!task_unconfirmed_network_writer) unlink(temp_path.c_str());
         return error;
     }
     if (operation_closing()) {
         unlink(temp_path.c_str());
         return "卸载已请求，下载结果未发布";
+    }
+    if (WorkBudget::expired()) {
+        unlink(temp_path.c_str());
+        return "下载时间预算已耗尽，结果未发布";
     }
     if (!valid_download_file(temp_path)) {
         unlink(temp_path.c_str());

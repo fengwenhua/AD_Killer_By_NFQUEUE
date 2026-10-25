@@ -7,6 +7,9 @@
 
 // 下载 HTTP(S) url 到 path(原子临时文件 + rename,单源最大 64 MiB)
 // 返回空串成功,否则错误信息
+// A WorkBudget scope adds shared time/body limits. Single-threaded CLI library
+// transfers run in an owned child, supervised even during DNS/library init;
+// unknown thread/library state selects exec before issuing the request.
 std::string download_file(const std::string &url, const std::string &path);
 
 // In-memory prefix only: caller-specified cap <= 32768 bytes (default 4096),

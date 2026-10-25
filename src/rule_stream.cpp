@@ -1,4 +1,6 @@
 #include "rule_stream.h"
+#include "work_budget.h"
+#include "operation_gate.h"
 
 #include <cstdio>
 #include <sys/stat.h>
@@ -13,7 +15,12 @@ public:
         : callback_(callback), limits_(limits), result_(result) {}
 
     bool consume(const char *data, size_t size) {
+        if (WorkBudget::expired() || operation_closing()) {
+            result_.error = "cancelled_or_time_budget";
+            return false;
+        }
         if (size > limits_.output_bytes - result_.output_bytes) {
+            result_.output_bytes = limits_.output_bytes;
             result_.error = "decompressed_size_limit";
             return false;
         }
@@ -74,6 +81,11 @@ bool stream_rule_file(const char *path, bool require_gzip,
                       RuleStreamResult *result_out,
                       const RuleStreamLimits &limits) {
     RuleStreamResult result;
+    if (!limits.output_bytes || !limits.lines) {
+        result.error = !limits.output_bytes ? "decompressed_size_limit" : "line_count_limit";
+        if (result_out) *result_out = result;
+        return false;
+    }
     struct stat info {};
     if (!path || stat(path, &info) != 0 || info.st_size <= 0) {
         result.error = "empty_or_unreadable";

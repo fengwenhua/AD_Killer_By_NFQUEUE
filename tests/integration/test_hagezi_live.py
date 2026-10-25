@@ -129,11 +129,10 @@ def main():
                 assert "status=content_rejected" in (DATA / "source_stats.conf").read_text()
                 assert not (DATA / "hagezi-pro.part").exists() and not (DATA / "hagezi-fake.part").exists()
             configure(True)
-            command("--update")  # Other source can publish; incomplete Pro must not leak.
-            generation = (DATA / "rules.current").read_text().strip()
-            text = gzip.decompress((DATA / "rulesets" / generation / "hosts_rules.gz").read_bytes()).decode()
-            assert "keep.example.com" not in text and "fake.example.com" in text
+            command("--update", success=False)  # Successful ordinary source cannot publish half a set.
+            assert (DATA / "rules.current").read_bytes() == manifest
             assert "rejected_sources=1" in (DATA / "source_stats.conf").read_text()
+            assert "publish_status=incomplete_sources" in (DATA / "source_stats.conf").read_text()
             assert not (DATA / "daemon.pid").exists()
             print("HaGeZi real HTTP paired jobs, disabled testing, enable/disable, scoped difference, "
                   "404/empty/HTML/gzip failures, atomic retention and no-engine-side-effect tests passed")

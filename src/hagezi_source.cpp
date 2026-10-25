@@ -1,5 +1,6 @@
 #include "hagezi_source.h"
 #include "logging.h"
+#include "task_context.h"
 #include <algorithm>
 #include <iterator>
 #include <sstream>
@@ -29,7 +30,12 @@ SourceValidationResult merge_hagezi_pair(const std::string &pro_file,
     remaining.output_bytes -= pro.stats.bytes;
     remaining.lines -= pro.stats.total_lines;
     auto fake = validate_rule_source_file(fake_file.c_str(), remaining, SourceFormat::HOSTS_AS_ADGUARD);
-    if (!fake.accepted) { fake.reason = "fake: " + fake.reason; return fake; }
+    if (!fake.accepted) {
+        fake.reason = "fake: " + fake.reason;
+        fake.stats.bytes += pro.stats.bytes;
+        fake.stats.total_lines += pro.stats.total_lines;
+        return fake;
+    }
     auto base = unique_domains(pro.adguard_rules), excluded = unique_domains(fake.adguard_rules);
     std::vector<std::string> kept;
     std::set_difference(base.begin(), base.end(), excluded.begin(), excluded.end(), std::back_inserter(kept));
@@ -61,7 +67,7 @@ SourceValidationResult fetch_hagezi_source(const std::string &directory,
     const std::string pro = directory + "/hagezi-pro.part", fake = directory + "/hagezi-fake.part";
     struct Cleanup {
         const std::string &a, &b;
-        ~Cleanup() { unlink(a.c_str()); unlink(b.c_str()); }
+        ~Cleanup() { if (!task_unconfirmed_network_writer) { unlink(a.c_str()); unlink(b.c_str()); } }
     } cleanup{pro, fake};
     for (const auto &component : {std::make_pair(HAGEZI_PRO_URL, pro), std::make_pair(HAGEZI_FAKE_URL, fake)}) {
         log_line("HaGeZi", "拉取固定依赖: %s", component.first);

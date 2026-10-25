@@ -58,6 +58,11 @@ int main() {
            "HTTPS downloads must reject redirects to HTTP");
     expect(curl.size() > 2 && curl[1] == "--disable" && curl[2] == "--globoff",
            "curl must ignore curlrc and not expand URL glob expressions");
+    const auto bounded = build_curl_download_argv("/curl", metachar_url, "/out", 1234, 17);
+    expect(*(std::find(bounded.begin(), bounded.end(), "--max-time") + 1) == "1.234" &&
+           *(std::find(bounded.begin(), bounded.end(), "--connect-timeout") + 1) == "1.234" &&
+           *(std::find(bounded.begin(), bounded.end(), "--max-filesize") + 1) == "17",
+           "remaining task time/body allowance must constrain curl without locale formatting");
 
     std::vector<std::string> wget = build_wget_download_argv(
         "/system/bin/wget", metachar_url,

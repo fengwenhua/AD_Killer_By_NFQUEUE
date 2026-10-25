@@ -41,8 +41,10 @@
 #include "task_context.h"
 #include "operation_gate.h"
 #include "uninstall.h"
+#include "work_budget.h"
 
 #include <cstdio>
+#include <algorithm>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
@@ -858,6 +860,17 @@ static int cmd_apps_apply(const std::string &target, const std::string &expected
 // --update:拉取规则源(支持 gzip)→ 逐行归类 → 原子落盘 → 热重载
 // 失败输出:{"status": "error_download"}
 static int cmd_update(const std::string &test_url = "") {
+#if defined(ADK_NFQ_TEST_SYNC_TASK_MS)
+    constexpr uint64_t task_ms = ADK_NFQ_TEST_SYNC_TASK_MS;
+#else
+    constexpr uint64_t task_ms = 10 * 60 * 1000;
+#endif
+#if defined(ADK_NFQ_TEST_SYNC_SOURCE_MS)
+    constexpr uint64_t source_ms = ADK_NFQ_TEST_SYNC_SOURCE_MS;
+#else
+    constexpr uint64_t source_ms = 90 * 1000;
+#endif
+    WorkBudget task_budget(task_ms, 256u * 1024u * 1024u);
     if (!ensure_dirs()) {
         printf("{\"status\": \"error_storage\"}\n");
         return 1;
@@ -928,7 +941,10 @@ static int cmd_update(const std::string &test_url = "") {
     };
 
     for (auto &url : urls) {
+        if (task_unconfirmed_network_writer || WorkBudget::expired() || operation_closing()) break;
         if (!task_progress("downloading")) return 1;
+        WorkBudget source_budget(source_ms, is_builtin_source(url) ?
+            128u * 1024u * 1024u : MAX_RULE_INPUT_BYTES);
         SourceUpdateReport report;
         report.url = url;
         SourceFormat format = recipe_source_format(url);
@@ -957,8 +973,16 @@ static int cmd_update(const std::string &test_url = "") {
             validation = validate_rule_source_file(part.c_str(), source_limits, format);
             unlink(part.c_str());
         }
+        // Rejected input still consumed parsing work. Do not reset the whole
+        // task's decompression/line allowance on the next source.
+        aggregate_content_bytes += std::min(validation.stats.bytes, MAX_RULE_DECOMPRESSED_BYTES - aggregate_content_bytes);
+        aggregate_source_lines += std::min(validation.stats.total_lines, MAX_RULE_LINES - aggregate_source_lines);
         report.stats = validation.stats;
         report.reason = validation.reason;
+        if (WorkBudget::expired() || operation_closing()) {
+            validation.accepted = false;
+            report.reason = "cancelled_or_time_budget";
+        }
         if (!validation.accepted) {
             report.status = "content_rejected";
             log_line("更新", "来源内容拒绝: %s (%s,有效率 %.2f%%)",
@@ -970,8 +994,7 @@ static int cmd_update(const std::string &test_url = "") {
         size_t aggregate_bytes = hosts_rules.size() + adguard_rules.size();
         size_t source_bytes = validation.hosts_rules.size() +
                               validation.adguard_rules.size();
-        if (source_bytes > MAX_RULE_DECOMPRESSED_BYTES - aggregate_bytes ||
-            validation.stats.total_lines > MAX_RULE_LINES - aggregate_source_lines) {
+        if (source_bytes > MAX_RULE_DECOMPRESSED_BYTES - aggregate_bytes) {
             report.status = "content_rejected";
             report.reason = "aggregate_resource_limit";
             log_line("更新", "来源累计资源上限,跳过: %s", url.c_str());
@@ -981,8 +1004,6 @@ static int cmd_update(const std::string &test_url = "") {
         report.status = "accepted";
         hosts_rules += validation.hosts_rules;
         adguard_rules += validation.adguard_rules;
-        aggregate_content_bytes += validation.stats.bytes;
-        aggregate_source_lines += validation.stats.total_lines;
         log_line("更新", "来源接受:Hosts %zu / AdGuard %zu / 拒绝 %zu / 有效率 %.2f%%",
                  validation.stats.accepted_hosts,
                  validation.stats.accepted_adguard,
@@ -997,6 +1018,19 @@ static int cmd_update(const std::string &test_url = "") {
         log_line("测试", "%s；仅测试下载和解析，未替换规则或启动引擎",
                  accepted ? "来源测试通过" : "来源测试失败");
         return accepted ? 0 : 1;
+    }
+
+    // Coverage is atomic too: a successful subset must not silently replace
+    // the old complete ruleset. Disable a broken source explicitly, or wait
+    // for a complete validated source set (including bounded cache reuse).
+    const bool complete_sources = source_reports.size() == urls.size() &&
+        std::all_of(source_reports.begin(), source_reports.end(),
+            [](const SourceUpdateReport &report) { return report.status == "accepted"; });
+    if (!complete_sources || task_unconfirmed_network_writer || WorkBudget::expired() || operation_closing()) {
+        save_source_reports("incomplete_sources");
+        log_line("更新", "同步未完整通过或预算/取消屏障已到，保留整份旧规则；未发布部分来源");
+        printf("{\"status\": \"error_download\"}\n");
+        return 1;
     }
 
     // 全部源失败 → error_download
@@ -1020,6 +1054,11 @@ static int cmd_update(const std::string &test_url = "") {
         save_source_reports("publish_failed");
         log_line("更新", "规则 staging 压缩失败,保留旧规则");
         printf("{\"status\": \"error_download\"}\n");
+        return 1;
+    }
+    if (WorkBudget::expired() || operation_closing()) {
+        save_source_reports("budget_or_cancelled");
+        log_line("更新", "整理规则后预算已到或取消，未创建 staging");
         return 1;
     }
     long long generation_clock = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1052,6 +1091,7 @@ static int cmd_update(const std::string &test_url = "") {
         return 1;
     }
     bool committed = [&] {
+        if (WorkBudget::expired() || operation_closing()) { stage_error = "预算已到或任务取消，未发布"; return false; }
         if (!task_progress("publishing")) { stage_error = "任务阶段无法持久化，未发布"; return false; }
         ConfigInputLock inputs(DATA_DIR);
         if (!inputs.ok() || !mark_policy_dirty()) { stage_error = "配置保存或生效回执不可用，暂未发布"; return false; }
@@ -1084,8 +1124,6 @@ static int cmd_update(const std::string &test_url = "") {
     log_line("更新", "来源 %zu/%zu 成功；过滤 %zu 行；接受 %zu 行，去重 %zu 行，来源唯一规则 %zu 条(含白名单 %zu)",
              accepted_sources, urls.size(), filtered_lines, accepted_lines,
              accepted_lines >= unique ? accepted_lines - unique : 0, unique, published.unique_white);
-    if (accepted_sources != urls.size())
-        log_line("更新", "注意：部分来源失败，本次仅发布成功来源；请检查上方失败原因");
     save_source_reports("published");
     // Synchronization is allowed while the engine is paused. Refresh the
     // current-mode/custom-rule counters without starting an NFQUEUE listener.

@@ -20,6 +20,7 @@ test-cgroup-integration:
 
 test-download-integration:
 	python3 tests/integration/test_download.py
+	python3 tests/integration/test_download_budget.py
 	python3 tests/integration/test_preview.py
 
 test-update-integration:

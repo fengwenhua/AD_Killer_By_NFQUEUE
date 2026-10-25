@@ -1,4 +1,5 @@
 #include "rule_stream.h"
+#include "work_budget.h"
 
 #include <cstdlib>
 #include <fstream>
@@ -101,6 +102,18 @@ int main() {
                result.error == "gzip_decode_failed",
            "truncated gzip streams should fail structural validation");
 
+    expect(write_gzip(path, "budget.example.org\n"), "budget fixture should be written");
+    {
+        WorkBudget expired(0, 100);
+        size_t seen = 0;
+        expect(!stream_rule_file(path, true, [&](const std::string &, bool) { ++seen; }, &result) &&
+               result.error == "cancelled_or_time_budget" && seen == 0,
+               "expired task must not parse more rules");
+    }
+    RuleStreamLimits exhausted;
+    exhausted.output_bytes = 0;
+    expect(!stream_rule_file(path, true, [](const std::string &, bool) {}, &result, exhausted) &&
+           result.error == "decompressed_size_limit", "exhausted aggregate budget must fail before decoding");
     unlink(path);
     if (failures != 0) {
         std::cerr << failures << " rule stream test(s) failed\n";
