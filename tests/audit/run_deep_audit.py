@@ -40,7 +40,7 @@ def main():
                  '-Wno-unused-function', '-pthread', '-ffunction-sections', '-fdata-sections',
                  '-DADK_AUDIT_DATA_DIR="' + str(data) + '"',
                  '-include', str(AUDIT / 'rebase_paths.h'),
-                 '-I' + str(AUDIT / 'include'), '-I' + str(ROOT / 'src')]
+                 '-idirafter', str(AUDIT / 'include'), '-I' + str(ROOT / 'src')]
         if args.sanitize:
             flags.extend(['-O1', '-g', '-fno-omit-frame-pointer', '-fsanitize=address,undefined',
                           '-fno-sanitize-recover=all'])

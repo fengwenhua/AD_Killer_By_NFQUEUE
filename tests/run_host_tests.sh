@@ -264,14 +264,14 @@ python3 "$ROOT/tests/test_lifecycle_cli.py" "$BUILD_DIR/lifecycle_cli"
 
 ${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fdata-sections \
     -DADK_AUDIT_DATA_DIR=\""$BUILD_DIR/idle-data"\" \
-    -include "$ROOT/tests/audit/rebase_paths.h" -I"$ROOT/tests/audit/include" -I"$ROOT/src" \
+    -include "$ROOT/tests/audit/rebase_paths.h" -idirafter "$ROOT/tests/audit/include" -I"$ROOT/src" \
     "$ROOT/tests/test_idle_maintenance.cpp" "$ROOT/src/tcp_reassembly.cpp" \
     "$ROOT/src/dns_tcp_reassembly.cpp" "$ROOT/src/packet.cpp" \
     $LIFECYCLE_LINK_FLAGS -o "$BUILD_DIR/test_idle_maintenance"
 "$BUILD_DIR/test_idle_maintenance"
 
 ${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fdata-sections \
-    -I"$ROOT/tests/audit/include" -I"$ROOT/src" \
+    -idirafter "$ROOT/tests/audit/include" -I"$ROOT/src" \
     "$ROOT/tests/test_packet_metrics.cpp" "$ROOT/src/metrics.cpp" "$ROOT/src/tcp_reassembly.cpp" \
     "$ROOT/src/dns_tcp_reassembly.cpp" "$ROOT/src/packet.cpp" \
     $LIFECYCLE_LINK_FLAGS -o "$BUILD_DIR/test_packet_metrics"
@@ -290,7 +290,7 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" "$ROOT/tests/test_policy_barri
 "$BUILD_DIR/test_policy_barrier"
 ${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fdata-sections \
     -DADK_AUDIT_DATA_DIR=\""$BUILD_DIR/engine-failure-data"\" -include "$ROOT/tests/audit/rebase_paths.h" \
-    -I"$ROOT/tests/audit/include" -I"$ROOT/src" "$ROOT/tests/test_engine_failure.cpp" "$ROOT/src/edit_config.cpp" \
+    -idirafter "$ROOT/tests/audit/include" -I"$ROOT/src" "$ROOT/tests/test_engine_failure.cpp" "$ROOT/src/edit_config.cpp" \
     "$ROOT/src/rules.cpp" "$ROOT/src/rule_stream.cpp" "$ROOT/src/rule_bundle.cpp" "$ROOT/src/apply_state.cpp" \
     "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" "$ROOT/src/tcp_reassembly.cpp" \
     "$ROOT/src/dns_tcp_reassembly.cpp" "$ROOT/src/packet.cpp" \
