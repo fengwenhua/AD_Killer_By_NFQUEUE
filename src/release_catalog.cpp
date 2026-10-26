@@ -11,15 +11,16 @@ using bounded_json::Value;
 using bounded_json::Kind;
 const std::string *text(const Value *value) { return value && value->kind == Kind::STRING ? &value->text : nullptr; }
 bool boolean(const Value *value, bool expected) { return value && value->kind == Kind::BOOLEAN && value->boolean == expected; }
-std::string bounded_text(const std::string &input, size_t maximum, bool &truncated) {
+struct BoundedText { std::string text; bool truncated = false; };
+BoundedText bounded_text(const std::string &input, size_t maximum) {
     size_t size = std::min(input.size(), maximum);
     while (size && size < input.size() && (static_cast<unsigned char>(input[size]) & 0xc0) == 0x80) --size;
-    truncated = size < input.size();
-    std::string result;
+    BoundedText result;
+    result.truncated = size < input.size();
     for (size_t i = 0; i < size; ++i) {
         const auto ch = static_cast<unsigned char>(input[i]);
-        if (ch >= 0x20 && ch != 0x7f) result += input[i];
-        else if (ch == '\n' || ch == '\r' || ch == '\t') result += input[i];
+        if (ch >= 0x20 && ch != 0x7f) result.text += input[i];
+        else if (ch == '\n' || ch == '\r' || ch == '\t') result.text += input[i];
     }
     return result;
 }
@@ -32,12 +33,16 @@ std::string entry(const Value &value, const std::string &repo, bool notes) {
     std::string result = "{\"tag_name\":" + source_json_string(*tag) + ",\"draft\":false,\"prerelease\":" +
         (preview->boolean ? "true" : "false") + ",\"html_url\":" + source_json_string(*url);
     if (notes) {
-        bool truncated = false, unused = false;
         const auto body = text(value.get("body")), name = text(value.get("name")), date = text(value.get("published_at"));
-        result += ",\"body\":" + source_json_string(bounded_text(body ? *body : "", NOTES_BYTES, truncated)) +
-            ",\"body_truncated\":" + (truncated ? "true" : "false") +
-            ",\"name\":" + source_json_string(bounded_text(name ? *name : *tag, 200, unused)) +
-            ",\"published_at\":" + source_json_string(bounded_text(date ? *date : "", 40, unused));
+        // Finish projection before reading its flags. String concatenation
+        // operand evaluation order must not decide whether truncation is shown.
+        const auto body_value = bounded_text(body ? *body : "", NOTES_BYTES);
+        const auto name_value = bounded_text(name ? *name : *tag, 200);
+        const auto date_value = bounded_text(date ? *date : "", 40);
+        result += ",\"body\":" + source_json_string(body_value.text) +
+            ",\"body_truncated\":" + (body_value.truncated ? "true" : "false") +
+            ",\"name\":" + source_json_string(name_value.text) +
+            ",\"published_at\":" + source_json_string(date_value.text);
     } else {
         const auto assets = value.get("assets");
         if (!assets || assets->kind != Kind::ARRAY) return "";

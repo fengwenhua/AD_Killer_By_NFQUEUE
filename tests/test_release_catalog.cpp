@@ -40,6 +40,31 @@ int main() {
     auto notes = release_catalog::project("[" + release("1.2", "你好😀" + std::string(20000, 'x')) + "]", repo, true);
     assert(notes.valid && notes.candidates == 1 && bounded_json::parse(notes.json, value));
     assert(value.items[0].get("body_truncated")->boolean && value.items[0].get("body")->text.size() <= release_catalog::NOTES_BYTES);
+    const auto check_notes = [&](const std::string &body, const std::string &expected, bool truncated) {
+        auto record = release("1.2", body);
+        // Independently truncated title/date must not change the body flag.
+        record.insert(1, "\"name\":" + source_json_string(std::string(300, 't')) +
+            ",\"published_at\":" + source_json_string(std::string(80, 'd')) + ",");
+        const auto projected = release_catalog::project("[" + record + "]", repo, true);
+        Value parsed;
+        assert(projected.valid && projected.candidates == 1 && bounded_json::parse(projected.json, parsed));
+        const auto &entry = parsed.items[0];
+        assert(entry.get("body")->text == expected);
+        assert(entry.get("body_truncated")->boolean == truncated);
+        assert(entry.get("name")->text == std::string(200, 't'));
+        assert(entry.get("published_at")->text == std::string(40, 'd'));
+    };
+    check_notes("", "", false);
+    check_notes("short notes", "short notes", false);
+    const std::string exact(release_catalog::NOTES_BYTES, 'x');
+    check_notes(exact, exact, false);
+    check_notes(exact + "y", exact, true);
+    const std::string before_three(release_catalog::NOTES_BYTES - 1, 'x');
+    check_notes(before_three + "中", before_three, true);
+    const std::string before_four(release_catalog::NOTES_BYTES - 2, 'x');
+    check_notes(before_four + "😀", before_four, true);
+    const std::string full_character = std::string(release_catalog::NOTES_BYTES - 3, 'x') + "中";
+    check_notes(full_character + "y", full_character, true);
     assert(!release_catalog::project("[" + release() + "," + release() + "]", repo, true).valid);
     auto invalid = release();
     invalid.replace(invalid.find("500"), 3, "5e2");
