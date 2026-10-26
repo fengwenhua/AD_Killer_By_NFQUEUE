@@ -47,6 +47,7 @@ python3 "$ROOT/tests/integration/test_reload_consistency.py" "$BUILD_DIR/AD_Kill
 python3 "$ROOT/tests/integration/test_apply_protocol.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE" "$BUILD_DIR/queue_apply_without_signal"
 python3 "$ROOT/tests/integration/test_engine.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE"
 python3 "$ROOT/tests/integration/test_policy.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE"
+python3 "$ROOT/tests/integration/test_application_lifecycle.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE"
 "${CXX:-c++}" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
     -I"$ROOT/src" "$ROOT/tests/integration/conntrack_probe.cpp" \
     "$ROOT/src/nfnetlink.cpp" "$ROOT/src/nfnetlink_parser.cpp" \

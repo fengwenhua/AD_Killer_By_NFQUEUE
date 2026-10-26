@@ -24,9 +24,13 @@ struct EngineConfig {
     bool enabled = true;               // 引擎启用
     std::vector<uid_t> bypass_uids;     // scope=0:放行名单 uid
     std::vector<uid_t> intercept_uids;  // scope=1:拦截名单 uid
+    // Private candidate provenance; not trusted UID-cache contents. The owner
+    // uses this to detect package lifecycle changes without per-packet work.
+    std::vector<std::string> apps_packages;
+    std::string apps_revision, apps_fingerprint;
 };
 
-// 读取全部配置文件(含包名→uid 解析缓存)
+// Read saved configuration/cache hints; actual candidates verify with PackageManager.
 EngineConfig load_engine_config();
 
 // 守护进程主体(阻塞运行直到收到停止信号):

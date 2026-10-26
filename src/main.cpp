@@ -44,6 +44,7 @@
 #include "work_budget.h"
 #include "source_sync.h"
 #include "source_staging.h"
+#include "app_catalog.h"
 
 #include <cstdio>
 #include <algorithm>
@@ -338,6 +339,8 @@ static int cmd_start(bool boot = false, bool foreground = false) {
         }
         if (read_runtime_state() == "running") {
             EngineConfig cfg = load_engine_config();
+            const auto applied = apply_state::view(apply_state::read(DATA_DIR), process_identity(old), true);
+            if (applied.actual_verified) cfg = applied.record.actual.config;
             IptablesConfig routes;
             routes.block_quic = cfg.block_quic;
             routes.scope = cfg.scope;
@@ -723,9 +726,9 @@ static int cmd_toggle(const char *key, bool on) {
 
 // ---------------------------------------------------------------------------
 // --apps-apply:应用名单落地(WebUI 保存名单文件后调用)
-// 流程:读名单(scope 决定读哪个文件)→ 包名解析 uid(优先 packages.list,
-// 兜底 cmd package list packages -U)→ 写 uid 缓存 → 通知守护进程热重载
-// 输出:{"status": "applied"} / {"status": "not_running"}
+// Capture package names, query PackageManager outside configuration locks,
+// then recheck the captured revision before writing hints and submitting.
+// Returns an exact queued revision or a deferred save; neither is an ACK.
 static int cmd_apps_apply(const std::string &target, const std::string &expected, int expected_scope) {
     configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
     if (!ensure_dirs()) {
@@ -734,8 +737,8 @@ static int cmd_apps_apply(const std::string &target, const std::string &expected
     }
     // Same order as the daemon's candidate capture. Keep selected packages,
     // scope and the generated UID cache from different saves from interleaving.
-    ConfigInputLock inputs(DATA_DIR);
-    if (!inputs.ok()) {
+    auto inputs = std::make_unique<ConfigInputLock>(DATA_DIR);
+    if (!inputs->ok()) {
         printf("{\"status\":\"busy\",\"message\":\"配置正在保存，请稍后重试\"}\n");
         return 2;
     }
@@ -783,66 +786,30 @@ static int cmd_apps_apply(const std::string &target, const std::string &expected
         }
     }
 
-    // 2. 构建 包名→uid 映射
-    //    优先:/data/system/packages.list(每行 "pkg uid debugFlag dataDir seinfo",免子进程)
-    //    兜底:cmd package list packages -U(输出 "package:<pkg> uid:<n>")
-    std::string uid_map = "# packages_revision=" + selected_list.revision + "\n";
-    {
-        std::unordered_map<std::string, long> pkg2uid;
-        std::string pl;
-        if (!pkgs.empty() && read_regular_bounded("/data/system/packages.list", pl, 8u * 1024u * 1024u) == BoundedRead::OK) {
-            // 快速路径:直接解析 packages.list
-            std::istringstream ss(pl);
-            std::string line;
-            while (std::getline(ss, line)) {
-                std::istringstream row(line);
-                std::string pkg;
-                long uid = -1;
-                if (row >> pkg >> uid && valid_package_name(pkg) && uid > 0 && static_cast<uint64_t>(uid) <= UINT32_MAX)
-                    pkg2uid[pkg] = uid;
-            }
-        }
-        if (!pkgs.empty() && pkg2uid.empty()) {
-            // 兜底链:cmd package → pm list
-            const std::vector<std::vector<std::string>> queries = {
-                {"cmd", "package", "list", "packages", "-U"}, {"pm", "list", "packages", "-U"}};
-            for (const auto &query : queries) {
-                const auto result = run_process(query, 2000, 8u * 1024u * 1024u);
-                if (!result.ok()) continue;
-                std::istringstream output(result.output); std::string row;
-                while (std::getline(output, row)) {
-                    if (row.compare(0, 8, "package:") != 0) continue;
-                    const size_t marker = row.find(" uid:", 8);
-                    if (marker == std::string::npos) continue;
-                    std::string pkg = row.substr(8, marker - 8);
-                    char *end = nullptr;
-                    long uid = strtol(row.c_str() + marker + 5, &end, 10);
-                    if (valid_package_name(pkg) && end != row.c_str() + marker + 5 &&
-                        uid > 0 && static_cast<uint64_t>(uid) <= UINT32_MAX && std::string(end).find_first_not_of(" \t\r") == std::string::npos)
-                        pkg2uid[pkg] = uid;
-                }
-                if (!pkg2uid.empty()) break;
-            }
-        }
-        if (!pkgs.empty() && pkg2uid.empty()) {
-            printf("{\"status\":\"error_uid_resolution\",\"message\":\"无法核实已安装应用的 UID，原缓存与旧策略未改变\"}\n");
-            return 1;
-        }
-        // 解析名单中每个包的 uid
-        for (auto &pkg : pkgs) {
-            long uid = -1;
-            auto found = pkg2uid.find(pkg);
-            if (found != pkg2uid.end()) uid = found->second;
-            if (uid > 0) {
-                char row[512];
-                snprintf(row, sizeof(row), "%ld %s\n", uid, pkg.c_str());
-                uid_map += row;
-                log_line("应用", "%s 已解析 UID: %ld", pkg.c_str(), uid);
-            } else {
-                log_line("应用", "未安装或无法解析,跳过: %s", pkg.c_str());
-            }
-        }
+    inputs.reset(); // Binder queries never hold mutable configuration locks.
+    app_catalog::Catalog catalog;
+    if (!pkgs.empty()) catalog = app_catalog::query([](const auto &arguments, unsigned timeout, size_t limit) {
+        return run_process(arguments, timeout, limit, -1, [] { return operation_closing(); });
+    });
+    const auto resolved = app_catalog::resolve_primary(catalog, pkgs);
+    if (!resolved.known || operation_closing()) {
+        printf("{\"status\":\"error_uid_resolution\",\"message\":\"暂时无法核实应用名单，原缓存与旧策略未改变，请稍后重试\"}\n");
+        return 1;
     }
+    inputs = std::make_unique<ConfigInputLock>(DATA_DIR);
+    if (!inputs->ok()) { printf("{\"status\":\"busy\"}\n"); return 2; }
+    const auto current_list = edit_config::read(DATA_DIR, scope == SCOPE_PER_APP ? "intercept" : "allow");
+    const int current_scope = read_conf_value(FILE_STATE_CONF, "scope") == "1" ? SCOPE_PER_APP : SCOPE_GLOBAL;
+    if (current_scope != scope || current_list.status != "ok" || current_list.revision != selected_list.revision || operation_closing()) {
+        printf("{\"status\":\"superseded\",\"message\":\"范围或名单已变更，请重新读取\"}\n"); return 2;
+    }
+    std::string uid_map = "# packages_revision=" + selected_list.revision + "\n# catalog_revision=" + resolved.revision + "\n";
+    for (const auto &mapping : resolved.mappings)
+        uid_map += std::to_string(mapping.uid) + " " + mapping.package + "\n";
+    if (!resolved.uninstalled.empty())
+        log_line("应用", "%zu 个应用当前未安装；保留包名选择，安装后自动重新核实", resolved.uninstalled.size());
+    if (!resolved.shared_packages.empty())
+        log_line("应用", "%zu 个其他应用与所选应用共用 UID，将一同受到名单影响", resolved.shared_packages.size());
     // 3. 写 uid 缓存(scope=1 拦截名单用独立文件)
     std::string uid_cache_path = (scope == SCOPE_PER_APP)
         ? DATA_FILE("app_intercept_uids.conf")
@@ -861,9 +828,11 @@ static int cmd_apps_apply(const std::string &target, const std::string &expected
                  scope == SCOPE_PER_APP ? "拦截" : "放行");
     }
 
-    // 4. 通知守护进程热重载(重读 uid 缓存并同步 selector 链)
+    // 4. 守护重新核实应用身份后提交 selector 链；缓存不作为生效依据。
     // 运行中 applied+scope;未运行 deferred+scope(下次启动生效)
-    return submit_apply_locked(",\"scope\":" + std::to_string(scope));
+    return submit_apply_locked(",\"scope\":" + std::to_string(scope) +
+        ",\"uninstalled_count\":" + std::to_string(resolved.uninstalled.size()) +
+        ",\"shared_package_count\":" + std::to_string(resolved.shared_packages.size()));
 }
 
 // ---------------------------------------------------------------------------

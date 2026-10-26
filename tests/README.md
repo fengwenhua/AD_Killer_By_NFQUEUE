@@ -50,6 +50,10 @@ Linux/root 环境；用法、固定输入与前后对照见
   包括“前缀已返回、尾部延迟 3 秒”的服务，验证外部 curl 不会因输出缓冲等尾部。
 - `test_policy.py`：真实不同 UID 的双栈 DNS/HTTP，范围独立名单、第三个未选 UID、
   空拦截名单、两种规则分类、自定义例外、合法空快照发布和损坏候选保留。
+- `test_app_catalog` / `test_application_lifecycle.py`：包管理器完整查询与主用户边界、
+  共享 UID、重装/卸载/编号复用、旧缓存不授权、30 秒自动核实、未知保留与恢复、
+  保存竞争及查询取消。Linux 仅模拟 Android 包目录，仍执行真实 CLI、双栈路由、
+  NFQUEUE 和流量；不代替厂商分身真机验收，见 [应用名单生命周期](../docs/应用名单生命周期.md)。
 
 - `test_packet`、`test_nfnetlink_parser`：IP、DNS、TLS/HTTP 和 netlink 边界解析；
 - `test_fast_response`：NXDOMAIN 的 ID/问题区/EDNS/压缩指针、TCP RST 序列号、

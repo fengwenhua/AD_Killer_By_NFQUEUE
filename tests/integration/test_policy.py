@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 from test_engine import DATA, BINARY, command, dns_query, state, wait_for, reload_command
+from package_manager import PackageManager
 
 
 def uid_request(family, uid, allowed, tcp=False, host='ads.example.com'):
@@ -93,8 +94,7 @@ def wait_policy(mode, black, description):
 
 def main():
     assert os.geteuid() == 0 and not DATA.exists(), 'requires clean disposable Linux/root'
-    packages = Path('/data/system/packages.list')
-    assert not packages.exists(), 'refusing to overwrite an existing Android package database'
+    packages = PackageManager()
     daemon = None
     try:
         DATA.parent.mkdir(parents=True, exist_ok=True)
@@ -122,8 +122,7 @@ def main():
         wait_policy(2, 1, 'combined mode restores AdGuard')
         uid_request(socket.AF_INET6, 10001, False)
 
-        packages.parent.mkdir(parents=True, exist_ok=True)
-        packages.write_text('com.example.first 10001 0 /data/user/0/first default\ncom.example.second 10002 0 /data/user/0/second default\n')
+        packages.set('package:com.example.first uid:10001\npackage:com.example.second uid:10002\n')
         (DATA / 'app_whitelist.txt').write_text('com.example.first\n')
         (DATA / 'app_intercept.txt').write_text('com.example.second\n')
         for scope in (0, 1, 0):
@@ -178,8 +177,7 @@ def main():
             daemon.wait(timeout=10)
         if DATA.exists():
             shutil.rmtree(DATA)
-        if packages.exists():
-            packages.unlink()
+        packages.close()
 
 
 if __name__ == '__main__':

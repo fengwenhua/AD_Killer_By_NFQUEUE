@@ -18,6 +18,8 @@
 #include "edit_config.h"
 #include "rule_bundle.h"
 #include "cli_utils.h"
+#include "app_catalog.h"
+#include "operation_gate.h"
 
 #include <atomic>
 #include <chrono>
@@ -47,6 +49,8 @@ static volatile sig_atomic_t g_signal_reload = 0;
 static HandshakeReassembler g_handshakes;
 static DnsTcpReassembler g_dns_tcp;
 static DataPlaneMetrics g_metrics;
+static std::shared_ptr<const EngineConfig> g_applied_inputs;
+static std::string g_apps_refresh_revision, g_apps_check_error;
 static PolicyBarrier g_policy;
 static bool g_workers_started = false; // owner thread only
 static bool g_applied_block_quic = false; // protected by policy read/write leases
@@ -493,9 +497,9 @@ bool daemon_running() { return read_daemon_pid() > 0; }
 
 // ============================================================================
 // 配置装配:state.conf + adblock_mode.txt + 应用名单 → uid
-//   包名→uid:优先读 app_uids.conf 缓存(--apps-apply 生成);
-//   兜底直接解析 /data/system/packages.list(免 popen)
-static bool load_engine_config_checked(EngineConfig &cfg, std::string &error) {
+// Actual candidates capture names, then resolve against PackageManager outside
+// the mutable-input lock. Cache-only reads are hints for legacy/status callers.
+static bool load_engine_config_checked(EngineConfig &cfg, std::string &error, bool capture_apps = false) {
     cfg = {};
     std::unordered_map<std::string, std::string> values;
     auto config_file = [&](const char *path, bool optional) {
@@ -548,6 +552,12 @@ static bool load_engine_config_checked(EngineConfig &cfg, std::string &error) {
         packages.insert(row);
         if (packages.size() > edit_config::MAX_LINES) { error = "应用名单超过容量上限"; return false; }
     }
+    if (capture_apps) {
+        cfg.apps_packages.assign(packages.begin(), packages.end());
+        std::sort(cfg.apps_packages.begin(), cfg.apps_packages.end());
+        cfg.apps_revision = list.revision;
+        return true;
+    }
     std::string text, source_revision;
     const auto cache = read_regular_bounded(DATA_FILE(selected ? "app_intercept_uids.conf" : "app_uids.conf"), text, edit_config::MAX_BYTES);
     if (cache == BoundedRead::ERROR) { error = "UID 缓存不可读或不是普通文件"; return false; }
@@ -597,7 +607,7 @@ static bool capture_candidate_inputs(CandidateInputs &inputs, std::string &error
         return false;
     }
     if (!apply_state::capture(DATA_DIR, startup, g_owner, inputs.revision, error)) return false;
-    if (!load_engine_config_checked(inputs.config, error)) return false;
+    if (!load_engine_config_checked(inputs.config, error, true)) return false;
     auto custom = edit_config::read(DATA_DIR, "custom");
     if (custom.status != "ok" && custom.status != "missing") { error = custom.message; return false; }
     error = edit_config::validate_content("custom", custom.content);
@@ -616,6 +626,16 @@ static bool load_candidate(EngineConfig &cfg, RuleDB &rules, std::string &revisi
     const bool captured = capture_candidate_inputs(inputs, error, startup);
     cfg = std::move(inputs.config); revision = inputs.revision;
     if (!captured) return false;
+    app_catalog::Catalog catalog;
+    if (!cfg.apps_packages.empty()) catalog = app_catalog::query([](const auto &arguments, unsigned timeout, size_t limit) {
+        return run_process(arguments, timeout, limit, -1, [] { return stop_requested() || operation_closing(); });
+    });
+    const auto resolved = app_catalog::resolve_primary(catalog, cfg.apps_packages);
+    if (!resolved.known) { error = "应用名单暂时无法核实，请稍后重试或重新保存名单（" + resolved.error + "）"; return false; }
+    auto &uids = cfg.scope == SCOPE_PER_APP ? cfg.intercept_uids : cfg.bypass_uids;
+    for (const auto &mapping : resolved.mappings) uids.push_back(static_cast<uid_t>(mapping.uid));
+    std::sort(uids.begin(), uids.end()); uids.erase(std::unique(uids.begin(), uids.end()), uids.end());
+    cfg.apps_fingerprint = resolved.revision;
     // Decompression, hashing and sorting can be expensive. No mutable input
     // lock remains held, so a user pause/save need not wait for a huge gzip.
     // Generation files are immutable and inputs.bundle pins their directory.
@@ -663,12 +683,14 @@ static bool drain_policy_transition(PolicyBarrier::Change &change) {
 
 // 热重载的协调事务：慢速候选构建不阻塞旧策略；入口切换期间收包线程
 // 仅发送无 connmark 的 ACCEPT，不会在新/旧双栈路由上执行混合规则判定。
-static bool hot_reload() {
+static bool hot_reload(std::string *attempted_revision = nullptr) {
     log_line("系统", "收到热重载信号，构建私有规则与路由候选...");
     auto candidate = std::make_shared<RuleDB>();
     EngineConfig cfg;
     std::string candidate_error, revision;
-    if (!load_candidate(cfg, *candidate, revision, candidate_error)) {
+    const bool loaded = load_candidate(cfg, *candidate, revision, candidate_error);
+    if (attempted_revision) *attempted_revision = revision;
+    if (!loaded) {
         log_line("错误", "热重载失败，保留旧规则与路由: %s", candidate_error.c_str());
         if (!revision.empty()) complete_apply(revision, cfg, nullptr, candidate_error);
         return false;
@@ -676,6 +698,7 @@ static bool hot_reload() {
     if (!apply_state::current(DATA_DIR, g_owner, revision)) {
         complete_apply(revision, cfg, nullptr, "候选已被新的配置保存替代"); return false;
     }
+    auto prepared_inputs = std::make_shared<EngineConfig>(cfg);
     IptablesConfig icfg;
     icfg.block_quic = cfg.block_quic;
     icfg.scope = cfg.scope;
@@ -707,6 +730,8 @@ static bool hot_reload() {
         return false;
     }
     publish_rules_snapshot(candidate);
+    g_applied_inputs = std::move(prepared_inputs);
+    g_apps_check_error.clear(); g_apps_refresh_revision.clear();
     g_applied_block_quic = cfg.block_quic;
     g_applied_dev_mode = cfg.dev_mode;
     // Do not clear old reassembly decisions on a failed candidate or rollback.
@@ -720,6 +745,62 @@ static bool hot_reload() {
     log_line("规则", "热重载已完成:黑 %zu / 白 %zu (mode %d)，新连接使用新策略",
              candidate->black.size(), candidate->white.size(), candidate->mode);
     return true;
+}
+
+// Owner-thread maintenance only. A saved/pending user edit always wins over
+// automatic refresh, and the Binder query holds no mutable-input lock.
+static bool apps_refresh_current(const EngineConfig &applied, std::string &desired) {
+    EngineConfig saved;
+    std::string error;
+    if (!load_engine_config_checked(saved, error, true) || saved.scope != applied.scope ||
+        saved.apps_revision != applied.apps_revision) return false;
+    const auto record = apply_state::read(DATA_DIR);
+    if (!record.valid || !record.submitted || !(record.owner == g_owner) || !record.attempt.empty() ||
+        (record.desired != record.applied && record.desired != g_apps_refresh_revision)) return false;
+    desired = record.desired;
+    return !stop_requested() && !operation_closing();
+}
+
+static void refresh_application_identities() {
+    const auto applied = g_applied_inputs;
+    if (!applied || applied->apps_packages.empty()) return;
+    std::string before;
+    {
+        ConfigInputLock inputs(DATA_DIR);
+        if (!inputs.ok() || !apps_refresh_current(*applied, before)) return;
+    }
+    const auto catalog = app_catalog::query([](const auto &arguments, unsigned timeout, size_t limit) {
+        return run_process(arguments, timeout, limit, -1, [] { return stop_requested() || operation_closing(); });
+    });
+    const auto resolved = app_catalog::resolve_primary(catalog, applied->apps_packages);
+    if (stop_requested() || operation_closing()) return;
+    {
+        ConfigInputLock inputs(DATA_DIR);
+        std::string after;
+        if (!inputs.ok() || !apps_refresh_current(*applied, after) || after != before) return;
+        if (!resolved.known) {
+            // Repeated identical failures do not rewrite the journal/log every
+            // interval. The old actual policy stays verified, with a failed
+            // desired revision so the overview cannot claim fresh success.
+            if (g_apps_check_error == resolved.error && after == g_apps_refresh_revision) return;
+            std::string revision, error;
+            if (!apply_state::capture(DATA_DIR, false, g_owner, revision, error)) return;
+            g_apps_refresh_revision = revision; g_apps_check_error = resolved.error;
+            const std::string message = "应用安装状态暂时无法核实，保留旧策略，稍后自动重试（" + resolved.error + "）";
+            log_line("应用", "%s", message.c_str());
+            complete_apply(revision, *applied, nullptr, message);
+            return;
+        }
+        if (resolved.revision == applied->apps_fingerprint && g_apps_check_error.empty()) return;
+    }
+    // A second capture/query belongs to the normal revision-fenced reload.
+    // It also handles an intervening user save rather than installing the
+    // snapshot above over a newer intent.
+    std::string revision;
+    if (!hot_reload(&revision) && !revision.empty()) {
+        g_apps_refresh_revision = revision;
+        g_apps_check_error = "application_refresh_failed";
+    }
 }
 
 // ============================================================================
@@ -770,6 +851,7 @@ int run_daemon() {
         fail_engine_start("rules_empty", "尚无可用规则，请先点击“同步开源规则”，同步成功后再启动守护。");
         return 1;
     }
+    auto prepared_inputs = std::make_shared<EngineConfig>(cfg);
     log_line("规则", "已加载:黑 %zu / 白 %zu (mode %d)",
                  initial_rules->black.size(), initial_rules->white.size(),
                  initial_rules->mode);
@@ -826,6 +908,8 @@ int run_daemon() {
         return 1;
     }
     publish_rules_snapshot(initial_rules);
+    g_applied_inputs = std::move(prepared_inputs);
+    g_apps_check_error.clear(); g_apps_refresh_revision.clear();
     g_applied_block_quic = cfg.block_quic;
     g_applied_dev_mode = cfg.dev_mode;
     save_rule_stats(*initial_rules);
@@ -872,6 +956,7 @@ int run_daemon() {
     // 6. 主循环:热重载 + 停止等待
     uint64_t next_metrics_ms = 0;
     uint64_t next_reconcile_ms = 0;
+    uint64_t next_apps_ms = monotonic_ms() + 30000;
     while (!stop_requested()) {
         try {
             const uint64_t now = monotonic_ms();
@@ -883,6 +968,10 @@ int run_daemon() {
             if (g_signal_reload != 0 || reconcile) {
                 g_signal_reload = 0;
                 hot_reload();
+            }
+            if (now >= next_apps_ms) {
+                refresh_application_identities();
+                next_apps_ms = monotonic_ms() + 30000;
             }
             if (now >= next_metrics_ms) {
                 maintain_reassembly(now);

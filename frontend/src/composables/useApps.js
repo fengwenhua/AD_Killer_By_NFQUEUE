@@ -2,6 +2,7 @@ import { computed, ref, watch } from 'vue';
 import { PATHS } from '../services/api.js';
 import { isPackage, lastJson } from '../domain/rules.js';
 import { observeApply, validApplyRevision } from '../domain/apply.js';
+import { applicationNotes } from '../domain/apps.js';
 import { useLifetime } from './useLifetime.js';
 
 export function useApps(api, feedback, scope) {
@@ -75,6 +76,7 @@ export function useApps(api, feedback, scope) {
       const outcome = await observeApply(api, result, life);
       if (!life.active) return;
       feedback.log(outcome.message, outcome.level); feedback.toast(outcome.message);
+      applicationNotes(lastJson(result.stdout), outcome.phase).forEach(note => feedback.log(note));
     } catch (error) {
       if (life.active) { feedback.log('保存或应用结果未确认：' + error.message, 'error'); feedback.toast('结果未确认，请重新读取名单并核对'); }
     } finally { saving.value = false; }

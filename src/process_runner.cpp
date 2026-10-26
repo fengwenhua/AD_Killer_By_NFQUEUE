@@ -13,8 +13,18 @@
 
 extern char **environ;
 
-ProcessResult run_process(const std::vector<std::string> &arguments, unsigned timeout_ms, size_t output_limit, int inherited_lock) {
+ProcessResult run_process(const std::vector<std::string> &arguments, unsigned timeout_ms, size_t output_limit,
+                          int inherited_lock, const std::function<bool()> &cancelled) {
     ProcessResult result;
+    const auto stop = [&] {
+        if (!cancelled) return false;
+        try { return cancelled(); } catch (...) { return true; }
+    };
+    const auto cancel = [&] {
+        if (!stop()) return false;
+        result.cancelled = true; result.error = "command cancelled"; return true;
+    };
+    if (cancel()) return result;
     size_t bytes = 0;
     if (arguments.empty() || arguments.size() > 128 || !timeout_ms) { result.error = "invalid command or expired deadline"; return result; }
     for (const auto &arg : arguments) {
@@ -76,6 +86,7 @@ ProcessResult run_process(const std::vector<std::string> &arguments, unsigned ti
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
     bool ended = false, owned = true;
     while (true) {
+        if (cancel()) break;
         if (std::chrono::steady_clock::now() >= deadline) {
             result.timed_out = true; result.error = "command deadline exceeded"; break;
         }
@@ -83,6 +94,7 @@ ProcessResult run_process(const std::vector<std::string> &arguments, unsigned ti
             if (channels[index] < 0) continue;
             char buffer[8192];
             while (true) {
+                if (cancel()) break;
                 const auto n = read(channels[index], buffer, sizeof(buffer));
                 if (n > 0) {
                     if (static_cast<size_t>(n) > output_limit - result.output.size() - result.diagnostic.size()) {

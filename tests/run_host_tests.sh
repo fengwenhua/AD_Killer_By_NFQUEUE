@@ -242,6 +242,10 @@ ${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" "$ROOT/tests/test_process_runner.cpp" \
     "$ROOT/src/process_runner.cpp" -o "$BUILD_DIR/test_process_runner"
 "$BUILD_DIR/test_process_runner" "$BUILD_DIR/process_fixture"
 
+${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" "$ROOT/tests/test_app_catalog.cpp" \
+    "$ROOT/src/app_catalog.cpp" "$ROOT/src/process_runner.cpp" -o "$BUILD_DIR/test_app_catalog"
+"$BUILD_DIR/test_app_catalog"
+
 ${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" "$ROOT/tests/test_operation_gate.cpp" \
     "$ROOT/src/process_runner.cpp" -o "$BUILD_DIR/test_operation_gate"
 "$BUILD_DIR/test_operation_gate" "$BUILD_DIR/process_fixture"
@@ -294,6 +298,7 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fd
     "$ROOT/src/rules.cpp" "$ROOT/src/rule_stream.cpp" "$ROOT/src/rule_bundle.cpp" "$ROOT/src/apply_state.cpp" \
     "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" "$ROOT/src/tcp_reassembly.cpp" \
     "$ROOT/src/dns_tcp_reassembly.cpp" "$ROOT/src/packet.cpp" \
+    "$ROOT/src/app_catalog.cpp" "$ROOT/src/process_runner.cpp" \
     $LIFECYCLE_LINK_FLAGS -lz -o "$BUILD_DIR/test_engine_failure"
 "$BUILD_DIR/test_engine_failure"
 

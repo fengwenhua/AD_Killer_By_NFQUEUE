@@ -33,6 +33,16 @@ int main(int argc, char **argv) {
         if (std::string(operation) == "descendant") assert(result.exit_code == 0 && !result.output.empty());
         assert(std::chrono::steady_clock::now() - started < std::chrono::seconds(1));
     }
+    const auto cancellation_started = std::chrono::steady_clock::now();
+    result = run_process({fixture, "sleep"}, 2000, 1024, -1, [&] {
+        return std::chrono::steady_clock::now() - cancellation_started >= std::chrono::milliseconds(50);
+    });
+    assert(result.cancelled && !result.timed_out && !result.ok() && result.reaped && result.group_gone);
+    assert(std::chrono::steady_clock::now() - cancellation_started < std::chrono::seconds(1));
+    result = run_process({fixture, "echo", "not spawned"}, 2000, 1024, -1, [] { return true; });
+    assert(result.cancelled && result.exit_code == -1 && result.output.empty());
+    result = run_process({fixture, "echo", "not spawned"}, 2000, 1024, -1, []() -> bool { throw 1; });
+    assert(result.cancelled && result.exit_code == -1 && result.output.empty());
     char lease_path[] = "/tmp/adk-process-lease.XXXXXX";
     const int lease = mkstemp(lease_path); assert(lease >= 0);
     assert(fcntl(lease, F_SETFD, FD_CLOEXEC) == 0);
