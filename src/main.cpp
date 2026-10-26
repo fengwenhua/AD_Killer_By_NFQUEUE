@@ -535,7 +535,10 @@ static int cmd_stop(bool emit = true) {
     lifecycle::Ticket request;
     std::string error;
     if (!lifecycle::begin(DATA_DIR, lifecycle::Action::STOP, request, error)) {
-        if (emit) printf("{\"status\":\"error_storage\",\"message\":%s}\n", source_json_string(error).c_str()); return 1;
+        if (emit) {
+            printf("{\"status\":\"error_storage\",\"message\":%s}\n", source_json_string(error).c_str());
+        }
+        return 1;
     }
     configure_process_log(FILE_ENGINE_LOG, ENGINE_LOG_MAX_BYTES, LOG_BACKUP_COUNT);
     ExclusiveFileLock operation(DATA_DIR "/.control.lock", true, 12000);

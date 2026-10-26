@@ -87,27 +87,7 @@ $CXX -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -fvisibility=hidden \
   -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 \
   -static-libstdc++ \
   -o "$BIN" \
-  "$HERE/src/main.cpp" "$HERE/src/engine.cpp" "$HERE/src/rules.cpp" \
-  "$HERE/src/module_update.cpp" \
-  "$HERE/src/edit_config.cpp" \
-  "$HERE/src/lifecycle.cpp" \
-  "$HERE/src/apply_state.cpp" \
-  "$HERE/src/process_runner.cpp" \
-  "$HERE/src/rule_stream.cpp" \
-  "$HERE/src/snapshot_merge.cpp" \
-  "$HERE/src/metrics.cpp" \
-  "$HERE/src/cgroup_isolation.cpp" \
-  "$HERE/src/rule_bundle.cpp" "$HERE/src/source_validator.cpp" \
-  "$HERE/src/hagezi_source.cpp" \
-  "$HERE/src/source_preview.cpp" \
-  "$HERE/src/update_job.cpp" \
-  "$HERE/src/bounded_log.cpp" \
-  "$HERE/src/packet.cpp" "$HERE/src/tcp_reassembly.cpp" \
-  "$HERE/src/fast_response.cpp" \
-  "$HERE/src/dns_tcp_reassembly.cpp" \
-  "$HERE/src/nfnetlink.cpp" "$HERE/src/nfnetlink_parser.cpp" \
-  "$HERE/src/iptables.cpp" \
-  "$HERE/src/net.cpp" "$HERE/src/net_policy.cpp" "$HERE/src/logging.cpp" \
+  "$HERE"/src/*.cpp \
   -llog -lz -ldl
 
 python3 "$HERE/tests/validate_android_elf.py" "$BIN"
