@@ -1,4 +1,4 @@
-.PHONY: test test-rules test-sanitize test-nfqueue-integration test-engine-integration test-cgroup-integration test-download-integration test-update-integration fuzz-smoke benchmark
+.PHONY: test test-rules test-sanitize test-nfqueue-integration test-engine-integration test-cgroup-integration test-download-integration test-update-integration fuzz-smoke benchmark profile-rule-memory
 
 test:
 	sh tests/run_host_tests.sh
@@ -32,3 +32,6 @@ fuzz-smoke:
 
 benchmark:
 	sh tests/run_benchmark.sh
+
+profile-rule-memory:
+	sh tests/run_rule_memory.sh

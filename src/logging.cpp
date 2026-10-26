@@ -20,6 +20,7 @@
 #include "process_identity.h"
 
 #include <cstdio>
+#include <algorithm>
 #include <cerrno>
 #include <cstdlib>
 #include <cstdarg>
@@ -312,14 +313,32 @@ void clear_daemon_pid_if(int expected_pid) {
 // gzip 压缩字符串(zlib 内存压缩,gzip 封装)
 // windowBits = 15 + 16:gzip 封装(带 1f 8b 魔数头)
 bool gz_compress_string(const std::string &in, std::string &out) {
+    return gz_compress_parts({in}, out);
+}
+
+bool gz_compress_parts(std::initializer_list<std::string_view> parts, std::string &out) {
     z_stream zs;
     memset(&zs, 0, sizeof(zs));
     if (deflateInit2(&zs, 9, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK)
         return false;
-    zs.next_in = (Bytef *)in.data();
-    zs.avail_in = (uInt)in.size();
     out.clear();
     char buf[65536];
+    for (const auto &part : parts) {
+        for (size_t offset = 0; offset < part.size();) {
+            const auto bytes = std::min<size_t>(sizeof(buf), part.size() - offset);
+            zs.next_in = reinterpret_cast<Bytef *>(const_cast<char *>(part.data() + offset));
+            zs.avail_in = static_cast<uInt>(bytes);
+            while (zs.avail_in) {
+                zs.next_out = reinterpret_cast<Bytef *>(buf);
+                zs.avail_out = sizeof(buf);
+                if (deflate(&zs, Z_NO_FLUSH) != Z_OK) {
+                    deflateEnd(&zs); out.clear(); return false;
+                }
+                out.append(buf, sizeof(buf) - zs.avail_out);
+            }
+            offset += bytes;
+        }
+    }
     int ret;
     do {
         zs.next_out = (Bytef *)buf;
@@ -328,5 +347,6 @@ bool gz_compress_string(const std::string &in, std::string &out) {
         out.append(buf, sizeof(buf) - zs.avail_out);
     } while (ret == Z_OK);
     deflateEnd(&zs);
-    return ret == Z_STREAM_END;
+    if (ret != Z_STREAM_END) { out.clear(); return false; }
+    return true;
 }

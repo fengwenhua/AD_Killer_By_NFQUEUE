@@ -37,6 +37,11 @@ make benchmark
 RULE_COUNT=1000000 make benchmark
 ```
 
+真实规则同步/启动/重载的 RSS 测量另用 `make profile-rule-memory`，仅限一次性
+Linux/root 环境；用法、固定输入与前后对照见
+[`规则处理内存基线`](../docs/规则处理内存基线.md)。该入口不会升级手机，
+也不加入每次 CI 的大内存性能门禁。
+
 覆盖范围：
 
 - `test_source_preview` / `test_preview.py`：默认 500 / 可选 100–5000 Unicode 码点、gzip/非法 UTF-8，

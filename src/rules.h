@@ -30,6 +30,7 @@ public:
     void add_exact(const std::string &domain);     // 精确规则(裸域名)
     void add_suffix(const std::string &domain);    // 后缀规则(||domain / *.domain)
     void merge_from(const RuleSet &other);         // 成功读完整文件后再合并
+    void merge_from(RuleSet &&other);              // 私有候选数组可移交所有权
     void finalize() const;                         // 排序去重，发布前调用
 
     // 匹配:先精确,再逐级后缀(a.b.com → b.com → com)

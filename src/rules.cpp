@@ -9,6 +9,7 @@
 #include <sstream>
 #include <cerrno>
 #include <sys/stat.h>
+#include <utility>
 
 // ============================================================================
 // FNV-1a 64 位哈希(小写归一)
@@ -50,6 +51,29 @@ void RuleSet::merge_from(const RuleSet &other) {
     suffix_.insert(suffix_.end(), other.suffix_.begin(), other.suffix_.end());
     finalized_ = false;
     bad_lines += other.bad_lines;
+}
+
+void RuleSet::merge_from(RuleSet &&other) {
+    if (this == &other) return;
+    // Compact while the source is still private. Moving spare vector capacity
+    // and shrinking only after the union can retain a second large allocation
+    // in the daemon's allocator across every reload.
+    const bool already_final = finalized_ && empty();
+    other.finalize();
+    const auto take = [](auto &destination, auto &source) {
+        if (destination.empty()) destination = std::move(source);
+        else {
+            destination.insert(destination.end(), source.begin(), source.end());
+            std::vector<uint64_t>().swap(source);
+        }
+    };
+    take(exact_, other.exact_);
+    take(suffix_, other.suffix_);
+    finalized_ = already_final;
+    bad_lines += other.bad_lines;
+    other.bad_lines = 0;
+    other.exact_.clear(); other.suffix_.clear();
+    other.finalized_ = true;
 }
 
 void RuleSet::compact(std::vector<uint64_t> &values) {
@@ -293,8 +317,8 @@ bool load_rule_file_checked(const char *path, bool adguard, RuleDB &db,
     }, &stream);
     if (!ok) return false;
     // 只有完整通过 gzip 校验和全部资源上限后，才把该文件结果并入调用方。
-    db.black.merge_from(staged.black);
-    db.white.merge_from(staged.white);
+    db.black.merge_from(std::move(staged.black));
+    db.white.merge_from(std::move(staged.white));
     if (loaded) *loaded = n;
     return true;
 }

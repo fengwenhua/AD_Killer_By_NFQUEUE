@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+#include <string_view>
 #include <utility>
 
 namespace {
@@ -173,14 +174,25 @@ SourceValidationResult validate_rule_source_file(
 }
 
 void deduplicate_rule_text(std::string &text) {
-    std::vector<std::string> lines;
-    std::istringstream input(text);
-    std::string line;
-    while (std::getline(input, line)) if (!line.empty()) lines.push_back(std::move(line));
+    if (text.empty()) return;
+    std::vector<std::string_view> lines;
+    lines.reserve(static_cast<size_t>(std::count(text.begin(), text.end(), '\n')) + (text.back() != '\n'));
+    for (size_t begin = 0; begin < text.size();) {
+        const auto newline = text.find('\n', begin);
+        const auto end = newline == std::string::npos ? text.size() : newline;
+        if (end != begin) lines.emplace_back(text.data() + begin, end - begin);
+        begin = end == text.size() ? end : end + 1;
+    }
     std::sort(lines.begin(), lines.end());
     lines.erase(std::unique(lines.begin(), lines.end()), lines.end());
-    text.clear();
-    for (const auto &value : lines) text += value + "\n";
+    size_t bytes = 0;
+    for (const auto &line : lines) bytes += line.size() + 1;
+    // Reordered views still point into text. Writing over that buffer while
+    // rebuilding would corrupt views that have not been consumed yet.
+    std::string output;
+    output.reserve(bytes);
+    for (const auto &line : lines) { output.append(line.data(), line.size()); output.push_back('\n'); }
+    text.swap(output);
 }
 
 std::string serialize_source_reports(const std::vector<SourceUpdateReport> &reports,

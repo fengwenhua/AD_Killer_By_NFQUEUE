@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -22,6 +23,26 @@ void expect(bool condition, const char *message) {
 }  // namespace
 
 int main() {
+    for (const auto &item : std::vector<std::pair<std::string, std::string>>{
+             {"", ""}, {"\n\n", ""}, {"z\nb\na", "a\nb\nz\n"},
+             {"long-before-short\na\nlong-before-short\n\n", "a\nlong-before-short\n"},
+             {"a\r\na\n", "a\na\r\n"},
+             {std::string("z\n\0x\nz", 6), std::string("\0x\nz\n", 5)}}) {
+        auto text = item.first;
+        deduplicate_rule_text(text);
+        expect(text == item.second, "dedup must retain byte semantics, final newline and reordered view safety");
+    }
+    std::string unordered;
+    std::set<std::string> oracle;
+    for (unsigned index = 0; index < 10000; ++index) {
+        auto line = std::string(index % 200, 'a' + index % 23) + std::to_string(index % 129);
+        unordered += line + '\n'; oracle.insert(line);
+    }
+    std::string expected;
+    for (const auto &line : oracle) expected += line + '\n';
+    deduplicate_rule_text(unordered);
+    expect(unordered == expected, "dedup must equal the complete independent ordered set");
+
     std::string mixed =
         "! title\n"
         "# hosts comment\n"

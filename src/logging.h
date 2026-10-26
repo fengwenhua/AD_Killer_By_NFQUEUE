@@ -3,7 +3,9 @@
 
 #include <cstddef>
 #include <functional>
+#include <initializer_list>
 #include <string>
+#include <string_view>
 #include "async_log.h"
 
 // 设置当前进程的独立日志；未设置时 log_line 输出 stdout。
@@ -60,6 +62,8 @@ void clear_daemon_pid_if(int expected_pid);
 
 // gzip 压缩字符串(用于规则落盘,输出 gzip 流字节)
 bool gz_compress_string(const std::string &in, std::string &out);
+// One gzip stream, no concatenated input copy and no flush between parts.
+bool gz_compress_parts(std::initializer_list<std::string_view> parts, std::string &out);
 
 // 二进制写文件 + 临时文件原子 rename
 bool write_file_raw_atomic(const char *path, const std::string &data);

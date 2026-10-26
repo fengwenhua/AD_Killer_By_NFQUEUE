@@ -11,6 +11,8 @@
 #include <thread>
 #include <unistd.h>
 #include <vector>
+#include <utility>
+#include <zlib.h>
 
 namespace {
 
@@ -23,9 +25,57 @@ void expect(bool condition, const char *message) {
     }
 }
 
+// Preserve the previous one-shot gzip encoding as a byte-level compatibility
+// oracle: changed boundaries must not create a new rules generation by hash.
+std::string legacy_gzip(const std::string &input) {
+    z_stream stream {};
+    if (deflateInit2(&stream, 9, Z_DEFLATED, 31, 8, Z_DEFAULT_STRATEGY) != Z_OK) return {};
+    stream.next_in = reinterpret_cast<Bytef *>(const_cast<char *>(input.data()));
+    stream.avail_in = static_cast<uInt>(input.size());
+    std::string output;
+    char buffer[65536];
+    int result;
+    do {
+        stream.next_out = reinterpret_cast<Bytef *>(buffer); stream.avail_out = sizeof(buffer);
+        result = deflate(&stream, Z_FINISH);
+        output.append(buffer, sizeof(buffer) - stream.avail_out);
+    } while (result == Z_OK);
+    deflateEnd(&stream);
+    return result == Z_STREAM_END ? output : std::string{};
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
+    RuleSet donated;
+    donated.add_exact("exact.example"); donated.add_suffix("suffix.example"); donated.bad_lines = 2;
+    RuleSet consumed;
+    consumed.merge_from(std::move(donated));
+    expect(consumed.classify("exact.example") == RuleSet::Hit::EXACT &&
+               consumed.classify("sub.suffix.example") == RuleSet::Hit::SUFFIX && consumed.bad_lines == 2 && donated.empty(),
+           "private arrays must move into an empty destination without changing match types");
+    donated.add_exact("exact.example"); donated.add_exact("second.example"); donated.bad_lines = 3;
+    consumed.merge_from(std::move(donated));
+    expect(consumed.size() == 3 && consumed.bad_lines == 5 && donated.empty() && donated.bad_lines == 0,
+           "moving into nonempty sets must retain union, duplicate and diagnostic semantics");
+    consumed.merge_from(std::move(consumed));
+    expect(consumed.size() == 3 && consumed.bad_lines == 5, "self move must preserve the rule set");
+    std::string bytes;
+    uint32_t random = 1;
+    for (size_t index = 0; index < 250000; ++index) {
+        random = random * 1664525u + 1013904223u;
+        bytes.push_back(static_cast<char>(random >> 24));
+    }
+    for (const auto &input : {std::string{}, std::string(200000, 'x'), bytes}) {
+        const std::string header = "# generated\n";
+        std::string compressed;
+        const auto half = input.size() / 2;
+        expect(gz_compress_parts({header, std::string_view(input).substr(0, half), "", std::string_view(input).substr(half)}, compressed) &&
+                   compressed == legacy_gzip(header + input),
+               "streamed header/parts must equal the previous gzip bytes across empty, 64K and incompressible input");
+        expect(gz_compress_parts({}, compressed) && compressed == legacy_gzip(""), "empty parts must emit a valid empty gzip stream");
+    }
+
     RuleSet suffix;
     suffix.add_suffix("example.com");
     expect(suffix.classify("example.com") == RuleSet::Hit::SUFFIX,

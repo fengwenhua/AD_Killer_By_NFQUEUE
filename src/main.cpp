@@ -1011,8 +1011,10 @@ static int cmd_update(const std::string &test_url = "") {
             break;
         }
         report.status = "accepted";
-        hosts_rules += validation.hosts_rules;
-        adguard_rules += validation.adguard_rules;
+        if (hosts_rules.empty()) hosts_rules = std::move(validation.hosts_rules);
+        else hosts_rules += validation.hosts_rules;
+        if (adguard_rules.empty()) adguard_rules = std::move(validation.adguard_rules);
+        else adguard_rules += validation.adguard_rules;
         log_line("更新", "来源接受:Hosts %zu / AdGuard %zu / 拒绝 %zu / 有效率 %.2f%%",
                  validation.stats.accepted_hosts,
                  validation.stats.accepted_adguard,
@@ -1066,13 +1068,15 @@ static int cmd_update(const std::string &test_url = "") {
     // A source set may legitimately contain only one category (the default
     // sources are AdGuard-only). Keep both generated files nonempty text with
     // a comment header; do not relax empty/corrupt upstream stream validation.
-    if (!gz_compress_string("# AD_Killer_By_NFQUEUE generated Hosts rules\n" + hosts_rules, gz_hosts) ||
-        !gz_compress_string("# AD_Killer_By_NFQUEUE generated AdGuard rules\n" + adguard_rules, gz_adguard)) {
+    if (!gz_compress_parts({"# AD_Killer_By_NFQUEUE generated Hosts rules\n", hosts_rules}, gz_hosts) ||
+        !gz_compress_parts({"# AD_Killer_By_NFQUEUE generated AdGuard rules\n", adguard_rules}, gz_adguard)) {
         save_source_reports("publish_failed");
         log_line("更新", "规则 staging 压缩失败,保留旧规则");
         printf("{\"status\": \"error_download\"}\n");
         return 1;
     }
+    std::string().swap(hosts_rules);
+    std::string().swap(adguard_rules);
     if (WorkBudget::expired() || operation_closing()) {
         save_source_reports("budget_or_cancelled");
         log_line("更新", "整理规则后预算已到或取消，未创建 staging");
@@ -1093,6 +1097,8 @@ static int cmd_update(const std::string &test_url = "") {
     }
 
     RuleDB candidate;
+    std::string().swap(gz_hosts);
+    std::string().swap(gz_adguard);
     int staged_hosts = 0, staged_adguard = 0;
     bool hosts_valid = load_rule_file_checked(
         staged.hosts_path.c_str(), false, candidate, &staged_hosts, true);
