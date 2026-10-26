@@ -98,6 +98,10 @@ fuzz 时应使用完整 LLVM，并给各二进制传入持久 corpus 和 artifac
 `test_listing_and_release.py` 使用合成 GitHub 响应验证收录清单、main 全绿门禁、
 渠道与来源一致性、版本单调增长、禁止复用标签、草稿上传顺序及中断不公开。
 不创建真实发布；完整官方清单／ZIP 校验在 CI 的固定 SHA dry-run Action 中执行。
+还覆盖原始 CI 字节绑定、草稿发现、部分上传与明确恢复、响应丢失只读确认、
+设置变化、状态延迟、回执故障和重复点击。`test_release_transport.py` 检查只读
+客户端、artifact/asset 媒体类型、下载去凭据、HTTPS 与大小/期限限制；
+操作边界见 [发布中断恢复](../docs/发布中断恢复.md)。
 
 `test-nfqueue-integration` 会临时插入仅匹配本机测试端口的 IPv4/IPv6 mangle 规则，
 实际绑定 queue、启用 copy/maxlen/fail-open、接收 packet ID 和 payload、发送 ACCEPT

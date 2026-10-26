@@ -50,11 +50,11 @@ App 授权、门户登录和提交审核需要仓库所有者确认。配置提�
 
 1. 更新 `module/module.prop` 中的数字版本、正式 versionCode，以及 `CHANGELOG.md`。预览包的 versionCode 为正式值减一。新公开版本的 code 必须高于所有已发布的正式／预览版本及官方索引曾接受的最高值；不要通过删除旧发布来降低它。
 2. 提交推送，等待对应 **CI** 全部通过。保留该次 CI 的 run ID；不得使用 PR、分支构建或只通过 Android job 的 run。
-3. Actions → **Publish immutable release** → **Run workflow**，分支选择 `main`，填写 run ID、未用过的标签（例如 `v1.2.6`），选择 `stable` 或 `preview`。
+3. Actions → **Publish immutable release** → **Run workflow**，分支选择 `main`，填写 run ID、未用过的标签（例如 `v1.2.6`），选择 `stable` 或 `preview`，`operation` 保持 `publish`。
 4. 工作流按指定渠道下载原始 artifact，核验 CI SHA、源码版本、ZIP、校验和、更新 JSON 和发布说明。不会重新编译或把另一渠道的包冒充正式版。
 5. 所有检查通过后才创建 draft，上传唯一 ZIP、`.sha256`、`update.json`、`changelog.md`，核对远端摘要，再公开。正式版设为 Latest，预览版不设为 Latest；最后必须确认 GitHub 的 `immutable: true`。
 
-工作流若在上传中断，会留下草稿供核查，不会自动删除、覆盖或强行重跑。存在同名 Release（包括草稿）或标签均拒绝发布；检查失败应先核对现场，不能用 `--clobber`、移动 tag 或替换旧附件绕过。
+工作流若在上传中断，会留下草稿和回执供核查，不会自动删除、覆盖或强行重跑。普通发布仍拒绝占用同名 Release（包括草稿）或标签；仅可先 `inspect`，再按核验报告的 ID 与产物确认值显式恢复未公开草稿，详见 [发布中断恢复](发布中断恢复.md)。公开后核验未完成只读检查，不能用 `--clobber`、移动 tag 或替换旧附件绕过。
 
 现有 v1.2.5 的下载地址、附件与标签保持原样；发布新版本不会自动修改手机上已安装的模块。
 

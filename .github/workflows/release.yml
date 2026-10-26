@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       version:
-        description: 'Unused version tag matching the CI package, e.g. v1.2.6'
+        description: 'Version tag matching the CI package; publish requires an unused tag'
         required: true
         type: string
       channel:
@@ -17,6 +17,20 @@ on:
         type: choice
         default: stable
         options: [stable, preview]
+      operation:
+        description: 'Publish new, inspect read-only, or explicitly resume a reviewed draft'
+        required: true
+        type: choice
+        default: publish
+        options: [publish, inspect, resume]
+      draft_release_id:
+        description: 'Exact draft Release ID for resume; optional for inspect discovery'
+        required: false
+        type: string
+      confirm_manifest:
+        description: 'Exact manifest SHA-256 from the inspect report; required only by resume'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -32,13 +46,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6 / node24
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6 / node24
         with:
           python-version: '3.13'
       - name: Require owner acknowledgement of release immutability
+        if: inputs.operation != 'inspect'
         env:
           IMMUTABLE_RELEASES: ${{ vars.KERNELSU_IMMUTABLE_RELEASES }}
         run: |
@@ -52,10 +67,39 @@ jobs:
           CI_RUN_ID: ${{ inputs.ci_run_id }}
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_OPERATION: ${{ inputs.operation }}
         run: |
-          python3 scripts/publish_release.py prepare --run-id "$CI_RUN_ID" --version "$RELEASE_VERSION" --channel "$RELEASE_CHANNEL" --output release
-      - name: Create draft, upload and verify all assets, then publish once
+          if [ "$RELEASE_OPERATION" = publish ]; then
+            python3 scripts/publish_release.py prepare --run-id "$CI_RUN_ID" --version "$RELEASE_VERSION" --channel "$RELEASE_CHANNEL" --output release
+          else
+            python3 scripts/publish_release.py prepare --run-id "$CI_RUN_ID" --version "$RELEASE_VERSION" --channel "$RELEASE_CHANNEL" --output release --inspect-existing
+          fi
+      - name: Publish once or inspect and explicitly recover the selected draft
         env:
           GITHUB_TOKEN: ${{ github.token }}
           KERNELSU_IMMUTABLE_RELEASES: ${{ vars.KERNELSU_IMMUTABLE_RELEASES }}
-        run: python3 scripts/publish_release.py publish --output release
+          RELEASE_OPERATION: ${{ inputs.operation }}
+          DRAFT_RELEASE_ID: ${{ inputs.draft_release_id }}
+          CONFIRM_MANIFEST: ${{ inputs.confirm_manifest }}
+        run: |
+          case "$RELEASE_OPERATION" in
+            publish) python3 scripts/publish_release.py publish --output release ;;
+            inspect)
+              if [ -n "$DRAFT_RELEASE_ID" ]; then
+                python3 scripts/publish_release.py inspect --output release --release-id "$DRAFT_RELEASE_ID"
+              else
+                python3 scripts/publish_release.py inspect --output release
+              fi
+              ;;
+            resume) python3 scripts/publish_release.py resume --output release --release-id "$DRAFT_RELEASE_ID" --confirm-manifest "$CONFIRM_MANIFEST" ;;
+            *) echo 'Unknown release operation' >&2; exit 1 ;;
+          esac
+      - name: Preserve release receipt even after an interrupted request
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6 / node24
+        with:
+          name: AD-Killer-release-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          path: |
+            release/manifest.json
+            release/release-state.json
