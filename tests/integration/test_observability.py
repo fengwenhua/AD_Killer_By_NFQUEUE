@@ -52,6 +52,8 @@ def blocked_dns(count):
 def main():
     assert os.geteuid() == 0 and not DATA.exists(), 'requires clean disposable Linux/root'
     assert shutil.which('pgrep'), 'requires real pgrep to cover foreground self-discovery'
+    assert os.stat('/proc/self/ns/net').st_ino != os.stat(f'/proc/{os.getppid()}/ns/net').st_ino, (
+        'requires an isolated network; use tests/integration/run_observability.py')
     DATA.parent.mkdir(parents=True, exist_ok=True)
     daemon = None
     mounted = False
@@ -62,12 +64,17 @@ def main():
         wait(lambda: metrics().get('updated_at', 0) > 0, 'initial metric snapshot missing', process=daemon)
         assert metrics()['owner_pid'] == daemon.pid, 'foreground process did not become the metric owner'
         initial = (DATA/'metrics.conf').stat()
+        initial_metrics = metrics()
         # No packets/changes: one-second owner sampling must not rewrite this
         # file every second. The first low-frequency heartbeat is 15 s away.
         deadline = time.monotonic()+5
         while time.monotonic() < deadline:
             current = (DATA/'metrics.conf').stat()
-            assert (current.st_ino, current.st_mtime_ns) == (initial.st_ino, initial.st_mtime_ns), 'idle metric snapshot rewritten'
+            if (current.st_ino, current.st_mtime_ns) != (initial.st_ino, initial.st_mtime_ns):
+                latest = metrics()
+                changed = {key: (value, latest.get(key)) for key, value in initial_metrics.items()
+                           if latest.get(key) != value}
+                raise AssertionError(f'idle metric snapshot rewritten; changed fields: {changed}')
             assert daemon.poll() is None
             time.sleep(.1)
         # A second foreground launcher must still discover the existing owner;

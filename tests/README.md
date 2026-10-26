@@ -117,6 +117,11 @@ conntrack-tools 读取真实 IPv4/IPv6 连接，核验 CTNETLINK 掩码 PASS/BLO
 引擎启动前还执行 CLI 自启配置测试，验证默认暂停、配置持久化、旧配置缺省关闭和
 非法参数不写入；自启开关不能隐式启动或停止引擎。
 
+指标/日志集成通过 `tests/integration/run_observability.py` 进入独立网络命名空间，
+还需 `util-linux` 的 `unshare` 与 `iproute2` 的 `ip`。外层持续产生真实本机 DNS
+干扰流量，内层保留完整空闲不重写与精确日志计数断言，避免将 CI runner 的后台
+流量算入测试。不能创建命名空间时明确失败，不退回共享网络或跳过断言。
+
 `test-download-integration` 需要编译器、Python 3、curl、libcurl 和 OpenSSL，
 只启动临时回环 HTTP/TLS 服务并使用临时文件，不连接外部规则源。
 

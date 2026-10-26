@@ -27,7 +27,7 @@ jobs:
       - name: Install locked frontend dependencies
         run: npm --prefix frontend ci --include=dev --no-audit --no-fund
       - name: Install host dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang curl openssl iptables conntrack kmod procps shellcheck zlib1g-dev
+        run: sudo apt-get update && sudo apt-get install -y clang curl openssl iptables conntrack iproute2 util-linux kmod procps shellcheck zlib1g-dev
       - name: Shell syntax and static analysis
         run: |
           bash -n build.sh
