@@ -314,11 +314,15 @@ python3 "$ROOT/tests/test_edit_config.py" "$BUILD_DIR/edit_config_cli"
 python3 "$ROOT/tests/test_data_paths.py"
 
 ${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" \
-    "$ROOT/tests/test_module_update.cpp" "$ROOT/src/module_update.cpp" \
+    "$ROOT/tests/test_module_update.cpp" "$ROOT/src/module_update.cpp" "$ROOT/src/release_catalog.cpp" \
     "$ROOT/src/net.cpp" "$ROOT/src/net_policy.cpp" \
     "$ROOT/src/logging.cpp" "$ROOT/src/bounded_log.cpp" -ldl -lz \
     -o "$BUILD_DIR/test_module_update"
 "$BUILD_DIR/test_module_update"
+
+${CXX:-c++} $COMPILE_FLAGS -pthread -I"$ROOT/src" \
+    "$ROOT/tests/test_release_catalog.cpp" "$ROOT/src/release_catalog.cpp" -o "$BUILD_DIR/test_release_catalog"
+"$BUILD_DIR/test_release_catalog"
 
 ${CXX:-c++} $COMPILE_FLAGS -I"$ROOT/src" \
     "$ROOT/tests/test_module_package.cpp" -lz -o "$BUILD_DIR/test_module_package"

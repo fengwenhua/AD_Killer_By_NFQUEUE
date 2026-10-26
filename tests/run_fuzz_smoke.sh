@@ -57,9 +57,19 @@ $CXX $COMMON_FLAGS -I"$ROOT/src" \
     -o "$BUILD_DIR/fuzz_nfnetlink"
 
 RUNS=${FUZZ_RUNS:-500}
-for target in fuzz_packet fuzz_rules fuzz_nfnetlink; do
+$CXX $COMMON_FLAGS -I"$ROOT/src" \
+    "$ROOT/tests/fuzz/fuzz_release_json.cpp" "$ROOT/src/release_catalog.cpp" \
+    $DRIVER -o "$BUILD_DIR/fuzz_release_json"
+
+for target in fuzz_packet fuzz_rules fuzz_nfnetlink fuzz_release_json; do
     if [ "$mode" = libfuzzer ]; then
-        "$BUILD_DIR/$target" -runs="$RUNS" -max_len=4096 -print_final_stats=1
+        if [ "$target" = fuzz_release_json ]; then
+            mkdir "$BUILD_DIR/release-corpus"
+            cp "$ROOT"/tests/fuzz/corpus/release_json/*.json "$BUILD_DIR/release-corpus/"
+            "$BUILD_DIR/$target" "$BUILD_DIR/release-corpus" -runs="$RUNS" -max_len=4096 -print_final_stats=1
+        else
+            "$BUILD_DIR/$target" -runs="$RUNS" -max_len=4096 -print_final_stats=1
+        fi
     else
         "$BUILD_DIR/$target" "$RUNS"
     fi

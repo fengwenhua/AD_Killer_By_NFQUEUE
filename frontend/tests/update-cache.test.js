@@ -10,7 +10,7 @@ const info=()=>({version:ref('1.2.2'),versionCode:ref(12201),releaseChannel:ref(
 function fixture(version='1.2.3', preview=false) {
   const name=`AD_Killer_By_NFQUEUE-v${version}.zip`, url=`${RELEASES_URL}/download/v${version}/${name}`;
   return {tag_name:'v'+version,draft:false,prerelease:preview,html_url:`${RELEASES_URL}/tag/v${version}`,body:'GitHub notes <script>alert(1)</script>',
-    assets:[{name,size:500,browser_download_url:url},{name:name+'.sha256',browser_download_url:url+'.sha256'}]};
+    assets:[{name,size:500,browser_download_url:url},{name:name+'.sha256',size:96,browser_download_url:url+'.sha256'}]};
 }
 function memory() {
   const values=new Map();

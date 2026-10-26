@@ -54,6 +54,10 @@ Linux/root 环境；用法、固定输入与前后对照见
   共享 UID、重装/卸载/编号复用、旧缓存不授权、30 秒自动核实、未知保留与恢复、
   保存竞争及查询取消。Linux 仅模拟 Android 包目录，仍执行真实 CLI、双栈路由、
   NFQUEUE 和流量；不代替厂商分身真机验收，见 [应用名单生命周期](../docs/应用名单生命周期.md)。
+- `test_release_catalog` / `test_document.py` / `test_module_update.py`：严格有界 JSON、
+  发布字段精简、第二页有效附件、长日志和截取提示、总时间/字节预算、HTTP 206 与
+  未读完正文的拒绝、库初始化阻塞回收，以及静态元数据后备。
+  参数与边界见 [更新检查策略](../docs/更新检查策略.md)。
 
 - `test_packet`、`test_nfnetlink_parser`：IP、DNS、TLS/HTTP 和 netlink 边界解析；
 - `test_fast_response`：NXDOMAIN 的 ID/问题区/EDNS/压缩指针、TCP RST 序列号、
@@ -86,7 +90,8 @@ python3 tests/validate_manager_update.py dist/AD_Killer_By_NFQUEUE-v<版本>.zip
 `validate_manager_update.py`。这不是 KernelSU/APatch/Magisk 三端的真机安装证明。
 
 `tests/fuzz/` 中的 harness 分别直接调用 DNS/TLS/HTTP/IP、Hosts/AdGuard 和
-NFQUEUE netlink 解析入口。`FUZZ_CXX` 可指定支持 `-fsanitize=fuzzer` 的 Clang；
+NFQUEUE netlink 和发布 JSON 解析入口。发布目标包含有效与非法 JSON 种子，复制到临时
+corpus 后运行，不回写源码。`FUZZ_CXX` 可指定支持 `-fsanitize=fuzzer` 的 Clang；
 缺少 libFuzzer runtime 时烟测自动改用确定性随机驱动，仍保留 ASan/UBSan；长时间
 fuzz 时应使用完整 LLVM，并给各二进制传入持久 corpus 和 artifact 目录。
 

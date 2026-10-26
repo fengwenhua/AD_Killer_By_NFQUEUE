@@ -37,6 +37,12 @@ std::string download_prefix(const std::string &url, std::string &prefix,
 std::string download_prefix_status(const std::string &url, std::string &prefix,
                                    bool &limited, size_t byte_limit, long &http_status);
 
+// Complete HTTP 200 document, never an accepted prefix/206. At most 512 KiB;
+// enclosing WorkBudget scopes share time/body allowances. Library init/DNS
+// run under a parent watchdog; no temporary files or formal data writes.
+std::string download_document_status(const std::string &url, std::string &body,
+                                     size_t byte_limit, long &http_status);
+
 // libcurl 是否可用(dlopen 成功)
 bool net_curl_available();
 

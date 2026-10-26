@@ -26,7 +26,7 @@ def main():
                       const base='https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/releases';
                       const name=`AD_Killer_By_NFQUEUE-v${currentVersion}.zip`, url=`${base}/download/v${currentVersion}/${name}`;
                       value={tag_name:'v'+currentVersion,draft:false,prerelease:targetChannel==='preview',html_url:`${base}/tag/v${currentVersion}`,
-                        assets:[{name,size:500,browser_download_url:url},{name:name+'.sha256',browser_download_url:url+'.sha256'}]};
+                        assets:[{name,size:500,browser_download_url:url},{name:name+'.sha256',size:96,browser_download_url:url+'.sha256'}]};
                     } else if(command.includes(' --module-update-status')) value={version:ready,channel:targetChannel,rebootRequired:reboot};
                     else if(command.includes(' --module-update-download ')) {ready=currentVersion;value={status:'started',job_id:'987-654'};}
                     else if(command.includes(' --module-update-install ')) {reboot=true;value={status:'started',job_id:'987-655'};}

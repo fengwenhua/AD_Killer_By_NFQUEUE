@@ -7,6 +7,9 @@
 #include "sha256.h"
 #include "module_package.h"
 #include "task_context.h"
+#include "release_catalog.h"
+#include "bounded_json.h"
+#include "work_budget.h"
 
 #include <array>
 #include <cerrno>
@@ -32,15 +35,6 @@ constexpr const char *API = "https://api.github.com/repos/fengwenhua/AD_Killer_B
 constexpr const char *DIRECTORY = DATA_DIR "/module_updates";
 constexpr size_t MAX_PACKAGE_BYTES = 64u * 1024u * 1024u;
 
-std::array<unsigned, 3> version_parts(const std::string &text) {
-    std::array<unsigned, 3> result{};
-    size_t index = 0;
-    for (char ch : text) {
-        if (ch == '.') ++index;
-        else result[index] = result[index]*10 + unsigned(ch-'0');
-    }
-    return result;
-}
 bool valid_digest(const std::string &value) {
     if (value.size() != 64) return false;
     for (char c : value) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
@@ -131,27 +125,6 @@ std::string install_package(const std::string &path) {
 }
 }
 
-bool valid_version(const std::string &version) {
-    if (version.empty() || version.size() > 20) return false;
-    unsigned segments = 1, digits = 0;
-    for (char c : version) {
-        if (c == '.') { if (!digits || ++segments > 3) return false; digits=0; }
-        else if (c < '0' || c > '9' || ++digits > 6) return false;
-    }
-    return digits && segments >= 2;
-}
-bool newer_version(const std::string &candidate, const std::string &installed) {
-    return valid_version(candidate) && valid_version(installed) &&
-           version_parts(candidate) > version_parts(installed);
-}
-bool upgrade_allowed(const std::string &candidate, const std::string &installed,
-                     const std::string &installed_channel, const std::string &candidate_channel) {
-    if (candidate_channel != "stable" && candidate_channel != "preview") return false;
-    if (!valid_version(candidate) || !valid_version(installed)) return false;
-    const auto order = version_parts(candidate);
-    const auto current = version_parts(installed);
-    return order > current || (order == current && installed_channel == "preview" && candidate_channel == "stable");
-}
 std::string package_name(const std::string &version) {
     return valid_version(version) ? "AD_Killer_By_NFQUEUE-v"+version+".zip" : "";
 }
@@ -217,24 +190,53 @@ std::string ready_channel(const std::string &directory) {
     auto digest = receipt_digest(directory,version,channel);
     return !digest.empty() && verify_package(directory+"/package.zip",digest).empty() ? channel : "unknown";
 }
+static bool valid_metadata(const std::string &body) {
+    bounded_json::Value parsed;
+    if (!bounded_json::parse(body, parsed)) return false;
+    const auto text = [&](const char *key) -> std::string {
+        const auto value = parsed.get(key);
+        return value && value->kind == bounded_json::Kind::STRING ? value->text : "";
+    };
+    const auto version = text("version");
+    if (version.empty() || version.front() != 'v' || !valid_version(version.substr(1))) return false;
+    const auto code = parsed.get("versionCode"); uint64_t number = 0;
+    const auto channel = parsed.get("releaseChannel");
+    return text("module") == MODULE_ID && code && code->integer(number) && number > 0 && number <= INT32_MAX &&
+        (!channel || text("releaseChannel") == "stable") && valid_digest(text("sha256")) &&
+        text("zipUrl") == asset_url(version.substr(1)) &&
+        text("changelog") == std::string(REPO) + "/releases/download/" + version + "/changelog.md";
+}
 static int release_response(bool preview, bool notes) {
-    net_curl_init();
-    std::string body;
-    bool limited = false;
-    bool metadata = false;
-    bool api_request = false;
+#if defined(ADK_NFQ_TEST_RELEASE_TIME_MS)
+    WorkBudget total(ADK_NFQ_TEST_RELEASE_TIME_MS, release_catalog::TOTAL_BYTES);
+#else
+    WorkBudget total(release_catalog::TIME_MS, release_catalog::TOTAL_BYTES);
+#endif
+    std::string body, output, error;
+    bool metadata = false, api_request = false;
     long http_status = 0;
-    std::string error;
     if (!preview && !notes) {
-        error = download_prefix_status(std::string(REPO)+"/releases/latest/download/update.json",body,limited,32768,http_status);
+        error = download_document_status(std::string(REPO)+"/releases/latest/download/update.json", body, 32768, http_status);
+        if (error.empty() && !valid_metadata(body)) error = "正式版更新信息格式无效";
         metadata = error.empty();
+        if (metadata) output = "{\"update\":" + body + "}";
     }
-    if (notes || preview || !error.empty()) {
+    if (preview) {
         api_request = true;
-        error = download_prefix_status(std::string(API)+(notes ? "?per_page=1" : preview ? "?per_page=3" : "/latest"),body,limited,32768,http_status);
+        const auto result = release_catalog::scan(API, REPO, download_document_status);
+        error = result.error; http_status = result.http_status;
+        if (result.ok) output = result.json;
+    } else if (notes || !error.empty()) {
+        api_request = true;
+        error = download_document_status(std::string(API) + (notes ? "?per_page=1" : "/latest"), body, release_catalog::PAGE_BYTES, http_status);
+        if (error.empty()) {
+            const auto page = release_catalog::project(body, REPO, notes, !notes);
+            if (!page.valid) error = page.error;
+            else if (!page.candidates) error = notes ? "GitHub 暂无可用的发布日志" : "暂未找到包含有效安装包与校验和的正式版";
+            else output = page.json;
+        }
     }
-    if (error.empty() && limited) error = "Release 信息超过 32 KiB，请打开项目发布页查看";
-    net_curl_shutdown();
+    if (WorkBudget::expired()) error = "更新检查时间预算已耗尽，请稍后重试";
     if (!error.empty()) {
         if (api_request && (http_status == 403 || http_status == 429)) {
             error = "GitHub API 访问受限（HTTP " + std::to_string(http_status) + "），当前网络可能已用完匿名请求配额。请稍后重试或切换网络。";
@@ -245,11 +247,7 @@ static int release_response(bool preview, bool notes) {
         printf("{\"status\":\"error\",\"http_status\":%ld,\"message\":%s}\n",http_status,source_json_string(error).c_str());
         return 1;
     }
-    // The WebUI validates the JSON shape and only accepts this repository's
-    // exact versioned asset URLs. The backend never executes response content.
-    if (metadata) printf("{\"update\":%s}\n",body.c_str());
-    else printf("%s\n",body.c_str());
-    return 0;
+    puts(output.c_str()); return 0;
 }
 int release_info(bool preview) { return release_response(preview,false); }
 int release_notes() { return release_response(false,true); }

@@ -1,14 +1,11 @@
 #pragma once
+#include "module_version.h"
 #include <functional>
 #include <string>
 
 namespace module_update {
 using Fetch = std::function<std::string(const std::string &, const std::string &)>;
 using Prefix = std::function<std::string(const std::string &, std::string &, bool &, size_t)>;
-bool valid_version(const std::string &version);
-bool newer_version(const std::string &candidate, const std::string &installed);
-bool upgrade_allowed(const std::string &candidate, const std::string &installed,
-                     const std::string &installed_channel, const std::string &candidate_channel);
 std::string package_name(const std::string &version);
 std::string asset_url(const std::string &version);
 std::string verify_package(const std::string &path, const std::string &digest);

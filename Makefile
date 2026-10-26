@@ -23,6 +23,7 @@ test-download-integration:
 	python3 tests/integration/test_download_budget.py
 	python3 tests/integration/test_http_validators.py
 	python3 tests/integration/test_preview.py
+	python3 tests/integration/test_document.py
 
 test-update-integration:
 	sh tests/run_update_integration.sh

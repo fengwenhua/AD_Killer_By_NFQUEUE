@@ -123,6 +123,7 @@ async function show(id) {
         <ol v-if="updates.latestRelease && !updates.notesLoading" class="release-list">
           <li><div class="release-heading"><b>v{{ updates.latestRelease.version }}</b><span class="badge">{{ updates.latestRelease.preview ? '预览版' : '正式版' }}</span><time v-if="updates.latestRelease.date">{{ updates.latestRelease.date }}</time></div><h3>{{ updates.latestRelease.title }}</h3><pre class="release-body">{{ updates.latestRelease.body || '本次发布未填写更新说明。' }}</pre></li>
         </ol>
+        <p v-if="updates.latestRelease?.truncated && !updates.notesLoading" class="sync-note">日志较长，仅显示开头部分。完整内容可在 GitHub 查看。</p>
         <div class="release-actions"><ActionButton id="reloadReleaseNotes" icon="sync" :busy="updates.notesLoading" @click="reloadNotes">{{ updates.notesLoading ? '加载中…' : '重新加载' }}</ActionButton></div>
       </section></div>
     </div>

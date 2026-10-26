@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import zipfile
+from urllib.parse import urlparse, parse_qs
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = Path('/data/adb/AD_Killer_By_NFQUEUE')
@@ -30,24 +31,50 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if self.path.startswith('/api') and self.server.api_status != 200:
-            self.send_response(self.server.api_status)
-            self.end_headers()
-            self.wfile.write(b'{"message":"API rate limit exceeded"}')
-            return
+        self.server.requests.append(self.path)
+        base = f'http://127.0.0.1:{self.server.server_port}'
+        mode = self.server.mode
+        page = int(parse_qs(urlparse(self.path).query).get('page', ['1'])[0])
+        status = self.server.api_status if self.path.startswith('/api') else 200
+        if mode == 'bad_next' and page == 2: status = 429
+        if status != 200:
+            self.send_response(status); self.end_headers()
+            self.wfile.write(b'{"message":"API rate limit exceeded"}'); return
+        if mode == 'slow' and self.path.startswith('/api'): time.sleep(.6)
+        def release(version='1.1', preview=False):
+            name = f'AD_Killer_By_NFQUEUE-v{version}.zip'
+            url = f'{base}/releases/download/v{version}/{name}'
+            return {'tag_name': 'v'+version, 'draft': False, 'prerelease': preview,
+                    'html_url': f'{base}/releases/tag/v{version}', 'name': 'Release '+version,
+                    'body': '大'*160000 if mode == 'long' else 'x'*600000 if mode == 'too_large' else 'Notes from GitHub Release',
+                    'published_at': '2026-10-26T00:00:00Z',
+                    'assets': [{'name':name, 'size':len(PACKAGE), 'browser_download_url':url},
+                               {'name':name+'.sha256', 'size':96, 'browser_download_url':url+'.sha256'}]}
         if self.path.endswith('update.json'):
-            content = json.dumps({'version': 'v1.1'}).encode()
+            content = json.dumps({'module':'AD_Killer_By_NFQUEUE','version':'v1.1','versionCode':110,
+                                  'releaseChannel':'stable','sha256':DIGEST,
+                                  'zipUrl':base+'/releases/download/v1.1/'+NAME,
+                                  'changelog':base+'/releases/download/v1.1/changelog.md'}).encode()
+            if self.server.static_bad: content = b'{"version":"wrong"}'
         elif self.path == '/api?per_page=1':
-            content = json.dumps([{'tag_name': 'v1.1', 'body': 'Notes from GitHub Release'}]).encode()
+            content = json.dumps([release()], ensure_ascii=False).encode()
+        elif self.path.startswith('/api?per_page=5&page='):
+            if mode == 'short': entries = []
+            elif mode == 'limit' or (mode in ('pages','bad_next','malformed','slow') and page == 1):
+                entries = [{**release(), 'assets':[]} for _ in range(5)]
+            elif mode == 'pages': entries = [release(),release('1.2',True)]
+            else: entries = [release()]
+            content = json.dumps(entries,ensure_ascii=False).encode()
+            if mode == 'malformed' and page == 2: content = b'[{"tag_name":"v1.1"}'
+        elif self.path == '/api/latest': content = json.dumps(release(),ensure_ascii=False).encode()
         elif self.path.endswith('.sha256'):
             content = (('0'*64 if self.server.corrupt else DIGEST)+'  '+NAME+'\n').encode()
-        elif self.path.endswith('.zip'):
-            content = PACKAGE
+        elif self.path.endswith('.zip'): content = PACKAGE
         else:
-            content = json.dumps({'tag_name': 'v1.1', 'draft': False, 'prerelease': False}).encode()
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(content)
+            self.send_response(404); self.end_headers(); return
+        self.send_response(200); self.end_headers()
+        try: self.wfile.write(content)
+        except (BrokenPipeError, ConnectionResetError): pass
 
 
 def main():
@@ -57,6 +84,9 @@ def main():
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     server.corrupt = False
     server.api_status = 200
+    server.mode = "normal"
+    server.static_bad = False
+    server.requests = []
     threading.Thread(target=server.serve_forever, daemon=True).start()
     base = f'http://127.0.0.1:{server.server_port}'
     with tempfile.TemporaryDirectory(prefix='adk_module_update_cli_') as temporary:
@@ -65,7 +95,7 @@ def main():
             subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++17', '-O1', '-pthread', '-Wall', '-Wextra', '-Werror',
                         f'-DMODULE_VERSION="{version}"', f'-DMODULE_VERSION_CODE={code}', f'-DMODULE_RELEASE_CHANNEL="{channel}"',
                         '-DADK_NFQ_TEST_CURL_LIBRARY="libcurl.so.4"', '-DADK_NFQ_TEST_CURL_PROGRAM="/usr/bin/curl"',
-                        '-DADK_NFQ_TEST_INSTALL_WARNING_MS=100',
+                        '-DADK_NFQ_TEST_INSTALL_WARNING_MS=100', '-DADK_NFQ_TEST_RELEASE_TIME_MS=1000',
                         f'-DADK_NFQ_TEST_RELEASE_REPO="{base}"', f'-DADK_NFQ_TEST_RELEASE_API="{base}/api"',
                         '-I'+str(ROOT/'src'), *map(str, sorted((ROOT/'src').glob('*.cpp'))), '-ldl', '-lz', '-o', str(target)], check=True)
         build(binary, '1.0', 100, 'stable')
@@ -94,7 +124,7 @@ def main():
             assert empty['status'] == 'error_rules_empty' and '同步开源规则' in empty['message']
             assert (DATA/'state.conf').read_bytes() == before and not (DATA/'daemon.pid').exists()
             assert json.loads(command('--module-update-check', 'stable'))['update']['version'] == 'v1.1'
-            assert json.loads(command('--module-release-notes')) == [{'tag_name': 'v1.1', 'body': 'Notes from GitHub Release'}]
+            assert json.loads(command('--module-release-notes'))[0]['body'] == 'Notes from GitHub Release'
             command('--module-release-notes', 'unexpected', success=False)
             for status in (403, 429):
                 server.api_status = status
@@ -103,6 +133,28 @@ def main():
                     assert failure['http_status'] == status and '匿名请求配额' in failure['message']
                 assert 'update' in json.loads(command('--module-update-check', 'stable')), 'API quota should not break static stable metadata'
             server.api_status = 200
+            server.mode = 'pages'; server.requests.clear()
+            versions = json.loads(command('--module-update-check', 'preview'))
+            assert [item['tag_name'] for item in versions] == ['v1.1','v1.2']
+            assert all('body' not in item for item in versions)
+            assert server.requests == ['/api?per_page=5&page=1','/api?per_page=5&page=2']
+            server.mode = 'long'
+            assert len(command('--module-update-check','preview')) < 2000, 'check must omit long bodies/API metadata'
+            notes = json.loads(command('--module-release-notes'))[0]
+            assert notes['body_truncated'] and len(notes['body'].encode()) <= 16000 and notes['body'].startswith('大')
+            for mode, expected_requests in (('limit',4),('short',1),('malformed',2),('bad_next',2),('too_large',1)):
+                server.mode = mode; server.requests.clear()
+                failure = json.loads(command('--module-update-check','preview',success=False))
+                assert failure['status'] == 'error' and 'update' not in failure, (mode,failure)
+                assert len(server.requests) == expected_requests, (mode,server.requests)
+                if mode == 'bad_next': assert failure['http_status'] == 429
+            server.mode = 'slow'; started = time.monotonic()
+            assert json.loads(command('--module-update-check','preview',success=False))['status'] == 'error'
+            assert time.monotonic()-started < 3, 'page two must share page one deadline'
+            server.mode = 'normal'; server.static_bad = True; server.requests.clear()
+            assert json.loads(command('--module-update-check','stable'))[0]['tag_name'] == 'v1.1'
+            assert server.requests == ['/releases/latest/download/update.json','/api/latest']
+            server.static_bad = False
             command('--module-update-download', '1.0', success=False)
             command('--module-update-download', '../bad', success=False)
             command('--module-update-download', '1.1', 'invalid', success=False)

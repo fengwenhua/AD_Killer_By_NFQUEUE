@@ -13,6 +13,17 @@ function fixture(version = '1.2', prerelease = false) {
 const ok = value => ({code:0,stdout:JSON.stringify(value),stderr:''});
 const info = () => ({verified:ref(true),mismatch:ref(false),version:ref('1.1')});
 
+test('release assets require unique canonical ZIP/checksum URLs and bounded integer sizes', () => {
+  const good = fixture();
+  for (const assets of [
+    [...good.assets,good.assets[0]], [...good.assets,{name:good.assets[1].name}],
+    [{...good.assets[0],browser_download_url:'https://evil.example/file.zip'},good.assets[1]],
+    [good.assets[0],{...good.assets[1],size:0}], [good.assets[0],{...good.assets[1],size:513}],
+    [good.assets[0],{...good.assets[1],size:'96'}], [good.assets[0],{...good.assets[1],size:1.2}],
+  ]) assert.equal(parseRelease({...good,assets}),null);
+  assert.equal(parseRelease({...good,body:undefined}).notes,'');
+});
+
 test('same-version preview upgrades to stable, never in reverse or downwards; unknown stays honest', () => {
   for (const channel of ['stable','preview','unknown']) {
     assert.equal(upgradeAllowed({version:'1.2.2',preview:false},'1.2.2',channel),channel==='preview');
@@ -167,6 +178,8 @@ test('release notes use only the latest published entry, no local history or ass
   assert.equal(value.version,'1.2'); assert.equal(value.preview,true);
   assert.equal(value.title,'Preview'); assert.equal(value.date,'2026-10-21');
   assert.equal(value.body,newest.body,'external text stays text, not HTML');
+  assert.equal(latestReleaseNotes([{...newest,body_truncated:true}]).truncated,true);
+  assert.equal(value.truncated,false);
   assert.equal(latestReleaseNotes([{...newest,body:null}]).body,'');
   for (const bad of [null,[],fixture(),[{...newest,draft:true}],[{...newest,tag_name:null}],[{...newest,html_url:'https://evil.example'}]]) assert.equal(latestReleaseNotes(bad),null);
 });

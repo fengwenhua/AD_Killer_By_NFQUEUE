@@ -750,7 +750,7 @@ std::string supervised_libcurl(const std::string &url, const std::string &temp_p
 
 namespace {
 struct PrefixContext {
-    std::string bytes; size_t limit = 4096; bool limited = false; long http_status = 0;
+    std::string bytes; size_t limit = 4096; bool limited = false, whole = false; long http_status = 0;
     TransferCancellation cancellation;
 };
 
@@ -761,7 +761,7 @@ size_t write_prefix(char *data, size_t size, size_t count, void *user) {
     const size_t incoming = size * count;
     const size_t take = std::min(incoming, context.limit - context.bytes.size());
     context.bytes.append(data, take);
-    if (context.bytes.size() == context.limit) {
+    if (incoming > take || (!context.whole && context.bytes.size() == context.limit)) {
         context.limited = true;
         return 0; // intentional CURLE_WRITE_ERROR, even if Range was ignored
     }
@@ -769,12 +769,14 @@ size_t write_prefix(char *data, size_t size, size_t count, void *user) {
 }
 
 std::string prefix_libcurl(const std::string &url, PrefixContext &context) {
+    const auto timeout_ms = WorkBudget::remaining_ms(15000);
+    if (!timeout_ms) return "下载时间预算已耗尽";
     void *easy = p_easy_init();
     if (!easy) return "curl 初始化失败";
     int options = configure_transfer_cancellation(easy, context.cancellation);
     options |= p_easy_setopt(easy, CURLOPT_URL_, url.c_str());
     const std::string range = "0-" + std::to_string(context.limit - 1);
-    options |= p_easy_setopt(easy, CURLOPT_RANGE_, range.c_str());
+    if (!context.whole) options |= p_easy_setopt(easy, CURLOPT_RANGE_, range.c_str());
     options |= p_easy_setopt(easy, CURLOPT_WRITEFUNCTION_, write_prefix);
     options |= p_easy_setopt(easy, CURLOPT_WRITEDATA_, &context);
     options |= p_easy_setopt(easy, CURLOPT_FAILONERROR_, 1L);
@@ -787,14 +789,15 @@ std::string prefix_libcurl(const std::string &url, PrefixContext &context) {
     options |= p_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER_, 1L);
     options |= p_easy_setopt(easy, CURLOPT_SSL_VERIFYHOST_, 2L);
     options |= p_easy_setopt(easy, CURLOPT_NOSIGNAL_, 1L);
-    options |= p_easy_setopt(easy, CURLOPT_CONNECTTIMEOUT_, 5L);
-    options |= p_easy_setopt(easy, CURLOPT_TIMEOUT_, 15L);
+    options |= p_easy_setopt(easy, CURLOPT_CONNECTTIMEOUT_MS_, static_cast<long>(std::min<uint64_t>(5000, timeout_ms)));
+    options |= p_easy_setopt(easy, CURLOPT_TIMEOUT_MS_, static_cast<long>(timeout_ms));
     const int performed = options ? -1 : p_easy_perform(easy);
     long status = 0;
     char *effective = nullptr;
     const bool info = p_easy_getinfo(easy, CURLINFO_RESPONSE_CODE_, &status) == 0 &&
                       p_easy_getinfo(easy, CURLINFO_EFFECTIVE_URL_, &effective) == 0;
-    const bool valid = info && effective && validate_download_url(effective) && status >= 200 && status < 300;
+    const bool valid = info && effective && validate_download_url(effective) &&
+        (context.whole ? status == 200 : status >= 200 && status < 300);
     context.http_status = status;
     p_easy_cleanup(easy);
     if (context.cancellation.cancelled || operation_closing()) return "卸载已请求，预览已安全取消";
@@ -803,6 +806,8 @@ std::string prefix_libcurl(const std::string &url, PrefixContext &context) {
 }
 
 std::string prefix_exec(const std::string &url, PrefixContext &context) {
+    const auto timeout_ms = WorkBudget::remaining_ms(15000);
+    if (!timeout_ms) return "下载时间预算已耗尽";
     static const char *paths[] = {
 #if defined(ADK_NFQ_TEST_CURL_PROGRAM)
         ADK_NFQ_TEST_CURL_PROGRAM,
@@ -814,10 +819,11 @@ std::string prefix_exec(const std::string &url, PrefixContext &context) {
     if (!program) return "没有支持片段预览的安全 curl 后端";
     std::vector<std::string> arguments = {program, "--disable", "--globoff", "--fail", "--silent", "--show-error",
         "--location", "--max-redirs", "5", "--proto", "=http,https", "--proto-redir", https_download(url) ? "=https" : "=http,https",
-        "--connect-timeout", "5", "--max-time", "15", "--range", "0-" + std::to_string(context.limit - 1),
+        "--connect-timeout", "5", "--max-time", std::to_string(timeout_ms / 1000) + "." + std::to_string(1000 + timeout_ms % 1000).substr(1),
         // Small prefixes must reach the pipe without waiting for a stdio block
         // to fill (the server may deliberately stream the tail very slowly).
         "--include", "--suppress-connect-headers", "--no-buffer", "--output", "-", "--", url};
+    if (!context.whole) arguments.insert(arguments.end() - 2, {"--range", "0-" + std::to_string(context.limit - 1)});
     std::vector<char *> argv;
     for (auto &argument : arguments) argv.push_back(const_cast<char *>(argument.c_str()));
     argv.push_back(nullptr);
@@ -870,7 +876,7 @@ std::string prefix_exec(const std::string &url, PrefixContext &context) {
                 if (protocol.compare(0, 5, "HTTP/") != 0) { error = "预览响应头非法"; break; }
                 if (status >= 100 && status < 200) continue;
                 if (status >= 300 && status < 400) continue;
-                if (status < 200 || status >= 300) { error = "预览 HTTP 状态 " + std::to_string(status); break; }
+                if (status < 200 || status >= 300 || (context.whole && status != 200)) { error = "预览 HTTP 状态 " + std::to_string(status); break; }
                 body = true; chunk.swap(headers);
             }
             if (!body && header_bytes + headers.size() > 32768) error = "预览响应头过大";
@@ -899,6 +905,93 @@ std::string prefix_exec(const std::string &url, PrefixContext &context) {
         error = "预览 HTTP/TLS 请求失败";
     return error;
 }
+
+// A library call may block in initialization or a synchronous resolver. Only
+// the fresh, verified single-threaded CLI forks library work; the parent owns
+// the deadline, pipe cap and still-unreaped process group.
+struct DocumentReply {
+    uint32_t magic = 0x41444b32, available = 0, status = 0, limited = 0, bytes = 0;
+    char error[512] {};
+};
+std::string supervised_document(const std::string &url, PrefixContext &context, bool &unavailable) {
+    unavailable = false;
+    int descriptors[2];
+    if (!result_pipe(descriptors)) return "无法创建更新信息管道";
+    const pid_t parent = getpid(), child = fork();
+    if (child < 0) { close(descriptors[0]); close(descriptors[1]); return "无法创建更新信息子进程"; }
+    if (!child) {
+        close(descriptors[0]);
+        if (setpgid(0, 0) || !inherit_task_lease()) _exit(127);
+#if defined(__linux__)
+        if (prctl(PR_SET_PDEATHSIG, SIGKILL) || getppid() != parent) _exit(127);
+#else
+        (void)parent;
+#endif
+        DocumentReply reply;
+        reply.available = net_curl_available();
+        if (reply.available) {
+            const auto error = prefix_libcurl(url, context);
+            reply.status = static_cast<uint32_t>(context.http_status);
+            reply.limited = context.limited; reply.bytes = static_cast<uint32_t>(context.bytes.size());
+            if (!error.empty()) std::snprintf(reply.error, sizeof(reply.error), "%s",
+                error.size() < sizeof(reply.error) ? error.c_str() : "更新信息下载失败");
+        }
+        const auto send = [&](const char *bytes, size_t size) {
+            size_t sent = 0;
+            while (sent < size) {
+                const auto count = write(descriptors[1], bytes + sent, size - sent);
+                if (count < 0 && errno == EINTR) continue;
+                if (count <= 0) return false;
+                sent += static_cast<size_t>(count);
+            }
+            return true;
+        };
+        const bool sent = send(reinterpret_cast<const char *>(&reply), sizeof(reply)) &&
+            send(context.bytes.data(), context.bytes.size());
+        close(descriptors[1]); _exit(sent ? 0 : 127);
+    }
+    close(descriptors[1]); setpgid(child, child);
+    const bool group_owned = getpgid(child) == child;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(WorkBudget::remaining_ms(20000));
+    std::string wire, error;
+    bool owned = true, eof = false;
+    const auto maximum = sizeof(DocumentReply) + context.limit;
+    while (true) {
+        if (operation_closing()) { error = "卸载已请求，更新检查已取消"; break; }
+        if (WorkBudget::expired() || std::chrono::steady_clock::now() >= deadline) { error = "更新检查时间预算已耗尽"; break; }
+        char chunk[8192];
+        const auto count = read(descriptors[0], chunk, sizeof(chunk));
+        if (count > 0) {
+            if (static_cast<size_t>(count) > maximum - wire.size()) { error = "更新信息子进程输出过大"; break; }
+            wire.append(chunk, static_cast<size_t>(count));
+        } else if (!count) eof = true;
+        else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) { error = "更新信息管道读取失败"; break; }
+        siginfo_t info {};
+        if (waitid(P_PID, child, &info, WEXITED | WNOHANG | WNOWAIT) < 0) {
+            if (errno == EINTR) continue;
+            owned = errno != ECHILD; error = "更新信息子进程身份无法确认"; break;
+        }
+        if (eof && info.si_pid == child) break;
+        if (count <= 0) { pollfd descriptor{descriptors[0], POLLIN | POLLHUP, 0}; poll(&descriptor, 1, 10); }
+    }
+    close(descriptors[0]);
+    const auto finished = finish_owned_child(child, owned, group_owned);
+    if (!finished.reaped || !finished.group_gone) {
+        task_unconfirmed_network_writer = true;
+        return "无法确认更新信息子进程退出，停止后续请求";
+    }
+    if (!error.empty()) return error;
+    DocumentReply reply;
+    if (wire.size() < sizeof(reply)) return "更新信息子进程结果不完整";
+    std::memcpy(&reply, wire.data(), sizeof(reply));
+    if (finished.exit_code || reply.magic != 0x41444b32 || reply.available > 1 || reply.status > 599 || reply.limited > 1 ||
+        reply.bytes > context.limit || wire.size() != sizeof(reply) + reply.bytes || !std::memchr(reply.error, 0, sizeof(reply.error)))
+        return "更新信息子进程结果无效";
+    unavailable = !reply.available;
+    context.bytes.assign(wire.data() + sizeof(reply), reply.bytes);
+    context.http_status = reply.status; context.limited = reply.limited;
+    return reply.error;
+}
 } // namespace
 
 std::string download_prefix(const std::string &url, std::string &prefix, bool &limited, size_t byte_limit) {
@@ -923,6 +1016,28 @@ std::string download_prefix_status(const std::string &url, std::string &prefix, 
     } else error = prefix_exec(url, context);
     http_status = context.http_status;
     if (error.empty()) { prefix = std::move(context.bytes); limited = context.limited; }
+    return error;
+}
+
+std::string download_document_status(const std::string &url, std::string &body, size_t byte_limit, long &http_status) {
+    body.clear(); http_status = 0;
+    if (!byte_limit || byte_limit > 512u * 1024u) return "更新信息大小限制非法";
+    if (task_unconfirmed_network_writer) return "先前下载进程尚未确认退出";
+    if (operation_closing() || WorkBudget::expired()) return "更新检查已取消或时间预算耗尽";
+    std::string error;
+    if (!validate_download_url(url, &error)) return error;
+    WorkBudget::Reservation allowance(byte_limit);
+    if (!allowance.amount()) return "更新检查累计下载量已达上限";
+    PrefixContext context;
+    context.limit = static_cast<size_t>(allowance.amount()); context.whole = true;
+    bool unavailable = true;
+    if (can_fork_libcurl()) error = supervised_document(url, context, unavailable);
+    if (unavailable && error.empty()) error = prefix_exec(url, context);
+    http_status = context.http_status;
+    if (!task_unconfirmed_network_writer && error.empty()) allowance.settle(context.bytes.size());
+    if (WorkBudget::expired()) return "更新检查时间预算已耗尽";
+    if (context.limited) return "更新信息超过本次大小上限";
+    if (error.empty()) body = std::move(context.bytes);
     return error;
 }
 

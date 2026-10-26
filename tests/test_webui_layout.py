@@ -41,6 +41,7 @@ window.previewModuleCheckDelay = 0;
 window.previewModuleCheckFails = false;
 window.previewNativeBusy = [];
 window.previewReleaseNotesFails = false;
+window.previewReleaseNotesTruncated = false;
 window.previewRulesEmpty = false;
 window.previewEngineState = "stopped";
 window.previewRoutingActive = true;
@@ -93,12 +94,12 @@ window.ksu = {
     else if(command.includes(" --module-release-notes")) {
       previewNativeBusy.push({kind:'notes',busy:document.querySelector('#reloadReleaseNotes')?.getAttribute('aria-busy')==='true'});
       errno=previewReleaseNotesFails?1:0;
-      text=JSON.stringify(errno?{status:'error',http_status:403,message:'GitHub API 访问受限（HTTP 403），当前网络可能已用完匿名请求配额。'}:[{tag_name:"v9.0",draft:false,prerelease:true,name:"最新发布说明",published_at:"2026-10-21T08:00:00Z",html_url:"https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/releases/tag/v9.0",body:"来自 GitHub Release 的更新日志\n\n- 新版改进\n- 安全显示 <img src=x onerror=alert(1)>"}]);
+      text=JSON.stringify(errno?{status:'error',http_status:403,message:'GitHub API 访问受限（HTTP 403），当前网络可能已用完匿名请求配额。'}:[{tag_name:"v9.0",draft:false,prerelease:true,name:"最新发布说明",published_at:"2026-10-21T08:00:00Z",html_url:"https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/releases/tag/v9.0",body_truncated:previewReleaseNotesTruncated,body:"来自 GitHub Release 的更新日志\n\n- 新版改进\n- 安全显示 <img src=x onerror=alert(1)>"}]);
     }
     else if(command.includes(" --module-update-check")) {
       previewNativeBusy.push({kind:'check',busy:document.querySelector('#getUpdate')?.getAttribute('aria-busy')==='true'});
       const version="9.0", name="AD_Killer_By_NFQUEUE-v9.0.zip", base="https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/releases";
-      text=JSON.stringify({tag_name:"v"+version,draft:false,prerelease:false,html_url:base+"/tag/v"+version,body:"测试发布说明 <img src=x onerror=alert(1)>",assets:[{name,size:500,browser_download_url:base+"/download/v"+version+"/"+name},{name:name+".sha256",browser_download_url:base+"/download/v"+version+"/"+name+".sha256"}]});
+      text=JSON.stringify({tag_name:"v"+version,draft:false,prerelease:false,html_url:base+"/tag/v"+version,body:"测试发布说明 <img src=x onerror=alert(1)>",assets:[{name,size:500,browser_download_url:base+"/download/v"+version+"/"+name},{name:name+".sha256",size:96,browser_download_url:base+"/download/v"+version+"/"+name+".sha256"}]});
       if(previewModuleCheckFails){errno=1;text=JSON.stringify({status:'error',http_status:403,message:'GitHub API 访问受限（HTTP 403），当前网络可能已用完匿名请求配额。'});}
     }
     else if(command.includes(" --module-update-download ")) {previewModuleReady="9.0";text=JSON.stringify({status:"started",job_id:"987-654"});}
@@ -1002,6 +1003,10 @@ def module_update_regression(browser, errors, screenshots=None):
         expect(page.locator('.release-body')).to_contain_text('来自 GitHub Release')
         assert page.locator('.release-list > li').count() == 1
         assert page.locator('.release-body img').count() == 0
+        assert page.get_by_text('日志较长，仅显示开头部分。完整内容可在 GitHub 查看。').count() == 0
+        page.evaluate('previewReleaseNotesTruncated=true')
+        page.locator('#reloadReleaseNotes').click()
+        expect(page.get_by_text('日志较长，仅显示开头部分。完整内容可在 GitHub 查看。')).to_be_visible()
         assert page.evaluate('previewNativeBusy.every(item=>item.busy)'), 'native bridge was called before busy DOM rendered'
         if screenshots:
             page.screenshot(path=str(screenshots / f'release-notes-v12-{width}.png'))

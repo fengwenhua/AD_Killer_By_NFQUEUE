@@ -8,6 +8,7 @@ export function latestReleaseNotes(response) {
       typeof value.tag_name !== 'string' || !value.tag_name.startsWith('v') || !versionParts(version) ||
       value.html_url !== `${RELEASES_URL}/tag/v${version}`) return null;
   return { version, preview: value.prerelease,
+    truncated: value.body_truncated === true,
     title: typeof value.name === 'string' ? value.name.slice(0, 200) : `v${version}`,
     body: typeof value.body === 'string' ? value.body.slice(0, 16000) : '',
     date: typeof value.published_at === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value.published_at) ? value.published_at.slice(0, 10) : '' };
@@ -34,9 +35,12 @@ export function parseRelease(value) {
   if (!versionParts(version) || value.html_url !== `${RELEASES_URL}/tag/v${version}` || !Array.isArray(value.assets)) return null;
   const name = `AD_Killer_By_NFQUEUE-v${version}.zip`;
   const zipUrl = `${RELEASES_URL}/download/v${version}/${name}`;
-  const zip = value.assets.find(asset => asset.name === name && asset.browser_download_url === zipUrl);
-  const checksum = value.assets.find(asset => asset.name === name + '.sha256' && asset.browser_download_url === zipUrl + '.sha256');
-  if (!zip || !checksum || !Number.isSafeInteger(zip.size) || zip.size < 4 || zip.size > 64*1024*1024) return null;
+  const zips = value.assets.filter(asset => asset?.name === name);
+  const checksums = value.assets.filter(asset => asset?.name === name + '.sha256');
+  const zip = zips[0], checksum = checksums[0];
+  if (zips.length !== 1 || checksums.length !== 1 || zip.browser_download_url !== zipUrl ||
+      checksum.browser_download_url !== zipUrl + '.sha256' || !Number.isSafeInteger(zip.size) || zip.size < 4 || zip.size > 64*1024*1024 ||
+      !Number.isSafeInteger(checksum.size) || checksum.size < 1 || checksum.size > 512) return null;
   return { version, preview: value.prerelease, url: value.html_url,
     notes: typeof value.body === 'string' ? value.body.slice(0, 8000) : '', size: zip.size };
 }
