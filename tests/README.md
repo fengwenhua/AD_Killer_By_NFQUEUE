@@ -104,7 +104,9 @@ verdict，并验证 verdict 写 PASS/BLOCK connmark 后，同一连接的下一�
 真实 socket 测试断言被拦截 DNS/TCP/QUIC 在 0.5 秒内收到 NXDOMAIN、reset、
 port-unreachable，而非仅断言原请求未到达；正常请求仍能到达，原生和无 GLUE_CT
 路径均覆盖双栈。该入口要求 NET_RAW，用于向本地测试发起者返回快速失败。
-此入口还需 `conntrack`（Debian/Ubuntu：`apt-get install conntrack`）。独立使用
+此入口还需 `conntrack` 和提供真实 `pgrep` 的 `procps`（Debian/Ubuntu：
+`apt-get install conntrack procps`）。前台启动回归必须保留真实进程发现路径，
+验证启动者不误认自身为旧守护，重复启动仍复用已有守护。独立使用
 conntrack-tools 读取真实 IPv4/IPv6 连接，核验 CTNETLINK 掩码 PASS/BLOCK 更新保留
 所有非模块位、非法输入不写入、连接缺失不创建；再以仅测试构建宏模拟无 GLUE_CT
 内核，重跑同一套完整引擎测试。生产包没有可由环境变量开启的测试绕过开关。

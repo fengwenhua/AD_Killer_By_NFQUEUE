@@ -214,10 +214,10 @@ static int cmd_install() {
 // 守护进程检测(pgrep + pid 文件)
 // [M] 方括号技巧避免 pgrep 匹配到 pgrep 自身的命令行
 // 返回 pid(>0)或 -1
-static int find_daemon_pid() {
+static int find_daemon_pid(int excluded_pid = -1) {
     // 先查 pid 文件(比 pgrep 快;同时校验 cmdline)
     int pid = read_daemon_pid();
-    if (pid > 0) return pid;
+    if (pid > 0 && pid != excluded_pid) return pid;
     // 兜底:pgrep(兼容 pid 文件丢失/旧版本残留)
     const auto found = run_process({"pgrep", "-f", "[A]D_Killer_By_NFQUEUEd? --daemon"}, 1000, 8192);
     if (!found.ok()) return -1;
@@ -225,6 +225,7 @@ static int find_daemon_pid() {
     std::string line;
     while (std::getline(rows, line)) {
         if (!parse_integer_arg(line.c_str(), pid)) continue;
+        if (pid == excluded_pid) continue;
         if (is_daemon_pid(pid)) {
             return pid;
         }
@@ -321,7 +322,10 @@ static int cmd_start(bool boot = false, bool foreground = false) {
         self[nl] = 0;
     }
 
-    int old = find_daemon_pid();
+    // A foreground launcher already has "--daemon" in argv, but has not
+    // acquired the lifetime lock or started the engine yet. Do not discover
+    // that launcher as the existing owner; still check every other candidate.
+    int old = find_daemon_pid(foreground ? static_cast<int>(getpid()) : -1);
     if (!dispatched && old > 0) {
         const auto freezer = daemon_cgroup_status(old);
         if (freezer.state == FreezerState::UNKNOWN) {

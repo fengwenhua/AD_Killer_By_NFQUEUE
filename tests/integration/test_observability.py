@@ -24,9 +24,13 @@ def metrics():
             (line.split('=', 1) for line in path.read_text().splitlines()) if key != 'owner_boot'}
 
 
-def wait(test, description, seconds=15):
+def wait(test, description, seconds=15, process=None):
     deadline = time.monotonic()+seconds
     while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            output, _ = process.communicate(timeout=1)
+            detail = output[-4096:].decode('utf-8', errors='replace')
+            raise AssertionError(f'{description}: daemon PID {process.pid} exited ({process.returncode}): {detail}')
         if test():
             return
         time.sleep(.05)
@@ -47,14 +51,16 @@ def blocked_dns(count):
 
 def main():
     assert os.geteuid() == 0 and not DATA.exists(), 'requires clean disposable Linux/root'
+    assert shutil.which('pgrep'), 'requires real pgrep to cover foreground self-discovery'
     DATA.parent.mkdir(parents=True, exist_ok=True)
     daemon = None
     mounted = False
     try:
         subprocess.run([BINARY, '--install'], check=True, capture_output=True)
         (DATA/'custom_rules.txt').write_text('ads.example.org\n')
-        daemon = subprocess.Popen([BINARY, '--daemon', '--foreground'], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        wait(lambda: metrics().get('updated_at', 0) > 0, 'initial metric snapshot missing')
+        daemon = subprocess.Popen([BINARY, '--daemon', '--foreground'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        wait(lambda: metrics().get('updated_at', 0) > 0, 'initial metric snapshot missing', process=daemon)
+        assert metrics()['owner_pid'] == daemon.pid, 'foreground process did not become the metric owner'
         initial = (DATA/'metrics.conf').stat()
         # No packets/changes: one-second owner sampling must not rewrite this
         # file every second. The first low-frequency heartbeat is 15 s away.
@@ -64,6 +70,11 @@ def main():
             assert (current.st_ino, current.st_mtime_ns) == (initial.st_ino, initial.st_mtime_ns), 'idle metric snapshot rewritten'
             assert daemon.poll() is None
             time.sleep(.1)
+        # A second foreground launcher must still discover the existing owner;
+        # excluding its own PID must not bypass the single-daemon protection.
+        duplicate = subprocess.run([BINARY, '--daemon', '--foreground'], capture_output=True, timeout=5)
+        assert duplicate.returncode == 0 and json.loads(duplicate.stdout.splitlines()[-1])['status'] == 'running', duplicate
+        assert int((DATA/'daemon.pid').read_text()) == daemon.pid and daemon.poll() is None
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind(('127.0.0.1', 80)); listener.listen(1); listener.settimeout(3)

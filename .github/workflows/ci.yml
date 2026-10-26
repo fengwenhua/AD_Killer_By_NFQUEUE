@@ -16,7 +16,7 @@ permissions:
 jobs:
   host-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -27,7 +27,7 @@ jobs:
       - name: Install locked frontend dependencies
         run: npm --prefix frontend ci --include=dev --no-audit --no-fund
       - name: Install host dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang curl openssl iptables conntrack kmod shellcheck zlib1g-dev
+        run: sudo apt-get update && sudo apt-get install -y clang curl openssl iptables conntrack kmod procps shellcheck zlib1g-dev
       - name: Shell syntax and static analysis
         run: |
           bash -n build.sh
