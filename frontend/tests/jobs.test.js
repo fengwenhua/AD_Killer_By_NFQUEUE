@@ -12,7 +12,7 @@ const page = (bytes, extra = {}) => ok({ status: 'ok', data_base64: Buffer.from(
 const lifetime = () => ({ active: true, waits: [], async wait(ms) { this.waits.push(ms); } });
 const feedback = () => ({ log() {}, toast() {}, consoleOpen: ref(false) });
 const denied = { getItem() { throw Error('denied'); }, setItem() { throw Error('denied'); }, removeItem() { throw Error('denied'); } };
-const settle = async condition => { for (let i = 0; i < 100 && !condition(); ++i) await new Promise(resolve => setTimeout(resolve, 1)); assert.ok(condition()); };
+const settle = async (condition, attempts = 100) => { for (let i = 0; i < attempts && !condition(); ++i) await new Promise(resolve => setTimeout(resolve, 1)); assert.ok(condition()); };
 
 test('job logs stream split UTF-8, bound display tails, reset epochs and reject bad chunk schemas', async () => {
   const bytes = new TextEncoder().encode('中文😀'), calls = [];
@@ -126,5 +126,128 @@ test('module downloads recover from backend identity with denied storage, withou
   try {
     await model.resume(); assert.equal(model.canInstall.value, true); assert.equal(model.ready.value, '1.3');
     assert.ok(commands.every(cmd => !/--module-update-(download|install) /.test(cmd)));
+  } finally { scope.stop(); }
+});
+
+test('historical completed synchronization stays silent across WebUI remounts', async () => {
+  for (const [status, exit_code] of [['success', 0], ['failed', 1], ['interrupted', 255]]) {
+    for (let opened = 0; opened < 2; opened++) {
+      const scope = effectScope(), commands = [], notices = [], history = ref([]);
+      const ui = { ...feedback(), toast: text => notices.push(text) };
+      const job = { status, exit_code, job_id: id, type: 'rules' };
+      const api = {
+        command: async cmd => { commands.push(cmd); return ok(cmd === '--jobs-list' ? { status: 'ok', jobs: [job] } : job); },
+        readJobChunk: async () => page([]),
+        readFile: async () => `job_id=${id}\npublish_status=published\ngeneration=999-111\nsource_count=1\naccepted_sources=1\n\n[source_0]\nurl=https://example.org/list\nstatus=accepted\n`,
+      };
+      const model = scope.run(() => useSync(api, ui, history, async () => {}, denied));
+      try {
+        await model.resume(); await settle(() => !model.busy.value);
+        assert.deepEqual(notices, [], 'opening must not announce a previously completed task');
+        assert.equal(ui.consoleOpen.value, false, 'old failures must not reopen the console');
+        assert.match(model.message.value, /上次同步/);
+        assert.equal(history.value.length, 1, 'historical source results remain available');
+        assert.equal(commands.includes('--update-start'), false);
+      } finally { scope.stop(); }
+    }
+  }
+});
+
+test('completed job found only in saved storage is recovered without a completion toast', async () => {
+  const scope = effectScope(), notices = [], commands = []; let stored = id;
+  const storage = { getItem() { return stored; }, setItem(_, value) { stored = value; }, removeItem() { stored = null; } };
+  const api = {
+    command: async cmd => { commands.push(cmd); return ok(cmd === '--jobs-list' ? { status: 'ok', jobs: [] } : { status: 'success', exit_code: 0, job_id: id, type: 'rules' }); },
+    readJobChunk: async () => page([]), readFile: async () => '',
+  };
+  const model = scope.run(() => useSync(api, { ...feedback(), toast: text => notices.push(text) }, ref([]), async () => {}, storage));
+  try {
+    await model.resume(); await settle(() => !model.busy.value);
+    assert.deepEqual(notices, []);
+    assert.equal(stored, null);
+    assert.equal(commands.includes('--update-start'), false);
+    assert.equal(model.kind.value, 'success');
+  } finally { scope.stop(); }
+});
+
+test('manual synchronization completion is announced once and later history reads are silent', async () => {
+  const scope = effectScope(), notices = [], commands = []; let starts = 0;
+  let job = { status: 'success', exit_code: 0, job_id: id, type: 'rules' };
+  const api = {
+    command: async cmd => {
+      commands.push(cmd);
+      if (cmd === '--jobs-list') return ok({ status: 'ok', jobs: [job] });
+      if (cmd === '--update-start') {
+        job = { ...job, job_id: `123-${457 + starts++}` };
+        return ok({ status: 'started', job_id: job.job_id });
+      }
+      return ok(job);
+    },
+    readJobChunk: async () => page([]), readFile: async () => '',
+  };
+  const model = scope.run(() => useSync(api, { ...feedback(), toast: text => notices.push(text) }, ref([]), async () => {}, denied));
+  try {
+    await model.start();
+    assert.deepEqual(notices, ['规则已同步完成']);
+    await model.resume(); await settle(() => !model.busy.value);
+    assert.deepEqual(notices, ['规则已同步完成']);
+    await model.start();
+    assert.deepEqual(notices, ['规则已同步完成', '规则已同步完成']);
+    assert.equal(starts, 2);
+  } finally { scope.stop(); }
+});
+
+test('recovering a genuinely running synchronization still announces its completion', async () => {
+  const scope = effectScope(), notices = [];
+  const api = {
+    command: async cmd => ok(cmd === '--jobs-list'
+      ? { status: 'ok', jobs: [{ job_id: id, type: 'rules', status: 'running' }] }
+      : { status: 'success', exit_code: 0, job_id: id, type: 'rules' }),
+    readJobChunk: async () => page([]), readFile: async () => '',
+  };
+  const model = scope.run(() => useSync(api, { ...feedback(), toast: text => notices.push(text) }, ref([]), async () => {}, denied));
+  try {
+    await model.resume(); await settle(() => !model.busy.value);
+    assert.deepEqual(notices, ['规则已同步完成']);
+  } finally { scope.stop(); }
+});
+
+test('an unfinished manual result keeps its notification when explicit recovery finishes', async () => {
+  const scope = effectScope(), notices = []; let started = false, reads = 0;
+  const job = { status: 'success', exit_code: 0, job_id: id, type: 'rules' };
+  const api = {
+    command: async cmd => {
+      if (cmd === '--jobs-list') return ok({ status: 'ok', jobs: started ? [job] : [] });
+      if (cmd === '--update-start') { started = true; return ok({ status: 'started', job_id: id }); }
+      return ok(job);
+    },
+    readJobChunk: async () => page([]),
+    readFile: async () => { if (++reads === 1) throw Error('bridge read failed'); return ''; },
+  };
+  const model = scope.run(() => useSync(api, { ...feedback(), toast: text => notices.push(text) }, ref([]), async () => {}, denied));
+  try {
+    await model.start(); assert.equal(model.uncertain.value, true); assert.deepEqual(notices, []);
+    await model.resume(); await settle(() => !model.busy.value);
+    assert.deepEqual(notices, ['规则已同步完成']);
+    await model.resume(); await settle(() => !model.busy.value);
+    assert.deepEqual(notices, ['规则已同步完成']);
+  } finally { scope.stop(); }
+});
+
+test('a saved job observed running after an empty index still announces completion', async () => {
+  const scope = effectScope(), notices = []; let polls = 0;
+  const api = {
+    command: async cmd => ok(cmd === '--jobs-list' ? { status: 'ok', jobs: [] }
+      : { job_id: id, type: 'rules', status: ++polls === 1 ? 'running' : 'success', exit_code: 0 }),
+    readJobChunk: async () => page([]), readFile: async () => '',
+  };
+  const storage = { getItem() { return id; }, setItem() {}, removeItem() {} };
+  const model = scope.run(() => useSync(api, { ...feedback(), toast: text => notices.push(text) }, ref([]), async () => {}, storage));
+  try {
+    await model.resume(); await settle(() => polls === 1);
+    assert.deepEqual(notices, []);
+    await settle(() => !model.busy.value, 2000);
+    assert.equal(polls, 2);
+    assert.deepEqual(notices, ['规则已同步完成']);
   } finally { scope.stop(); }
 });

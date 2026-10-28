@@ -238,6 +238,39 @@ def apply_health_regression(browser, errors):
         page.close()
 
 
+def historical_sync_notification_regression(browser, errors):
+    for status, exit_code in (('success', 0), ('failed', 1), ('interrupted', 255)):
+        page = browser.new_page(viewport={'width': 393, 'height': 852}, reduced_motion='reduce')
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        job = {'job_id': '123-456', 'type': 'rules', 'status': status, 'exit_code': exit_code}
+        page.add_init_script(mock_script() + '\npreviewJobs=[' + json.dumps(job) + '];\n' + r'''
+previewJobOverrides['123-456']=previewJobs[0];
+window.syncToastHistory=[];
+new MutationObserver(()=>{
+  const text=document.querySelector('#toast')?.textContent;
+  if(text) syncToastHistory.push(text);
+}).observe(document,{subtree:true,childList:true,characterData:true});
+''')
+        for opened in range(2):
+            if opened:
+                page.reload()
+            else:
+                page.goto((ROOT / 'module/webroot/index.html').as_uri())
+            expect(page.locator('#updateStatus')).to_contain_text('上次同步：')
+            expect(page.locator('#syncBtn')).to_have_attribute('aria-busy', 'false')
+            assert page.evaluate('syncToastHistory') == [], 'opening announced a historical synchronization'
+            assert not page.evaluate("previewCommands.some(c=>c.endsWith(' --update-start'))")
+        if status == 'success':
+            page.locator('#syncBtn').click()
+            expect(page.locator('#toast')).to_have_text('规则已同步完成')
+            assert page.evaluate("previewCommands.filter(c=>c.endsWith(' --update-start')).length") == 1
+            page.reload()
+            expect(page.locator('#updateStatus')).to_contain_text('上次同步：')
+            expect(page.locator('#syncBtn')).to_have_attribute('aria-busy', 'false')
+            assert page.evaluate('syncToastHistory') == [], 'reopening repeated the manual completion toast'
+        page.close()
+
+
 def background_job_recovery_regression(browser, errors):
     for theme in ('light', 'dark'):
         page = browser.new_page(viewport={'width': 320, 'height': 852}, color_scheme=theme, reduced_motion='reduce')
@@ -1374,6 +1407,7 @@ def main():
             freezer_health_regression(browser, errors)
             cleanup_health_regression(browser, errors)
             apply_health_regression(browser, errors)
+            historical_sync_notification_regression(browser, errors)
             background_job_recovery_regression(browser, errors)
             source_cache_regression(browser, errors)
             quic_setting_regression(browser, errors)

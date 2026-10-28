@@ -9,7 +9,7 @@ export function useSync(api, feedback, history, refresh, storage = getStorage())
   const life = useLifetime();
   const busy = ref(false), uncertain = ref(false), pendingId = ref('');
   const message = ref('同步完成后保存到本地，并更新当前规则。'), kind = ref('');
-  let tracking;
+  let tracking, pendingNotificationId = '';
   function status(text, statusKind = '') { message.value = text; kind.value = statusKind; }
   function remember(id) { try { id ? storage?.setItem('ad-killer-by-nfqueue-update-job', id) : storage?.removeItem('ad-killer-by-nfqueue-update-job'); } catch { /* unavailable storage */ } }
   function unknown(text) { uncertain.value = true; status(text, 'warning'); }
@@ -38,11 +38,14 @@ export function useSync(api, feedback, history, refresh, storage = getStorage())
     } catch { if (life.active) unknown('任务结果未确认，点击“继续查询”从后台恢复。'); }
     finally { if (life.active) busy.value = false; }
   }
-  async function track(id, type = 'rules') {
+  async function track(id, type = 'rules', { notifyCompletion = true } = {}) {
     if (tracking) return tracking;
+    // Recovered terminal jobs are history; keep live/manual intent across an uncertain result.
+    let notify = notifyCompletion || pendingNotificationId === id;
+    if (type === 'rules' && notify) pendingNotificationId = id;
     pendingId.value = id; uncertain.value = false; busy.value = true;
     if (type === 'rules') remember(id);
-    status(type === 'source' ? '发现后台来源测试，正在核实其结束状态；尚未同步规则。' : '后台正在下载与校验规则…');
+    status(type === 'source' ? '发现后台来源测试，正在核实其结束状态；尚未同步规则。' : notify ? '后台正在下载与校验规则…' : '正在读取上次同步结果…');
     tracking = (async () => {
       const outcome = await observeJob(api, id, life, {
         types: ['rules', 'source'],
@@ -51,7 +54,11 @@ export function useSync(api, feedback, history, refresh, storage = getStorage())
           if (chunk.delta) feedback.log(chunk.delta);
         },
         onState(state, text, logError) {
-          if (state.status === 'running') status((type === 'source' ? '来源测试仍在后台运行' : text.trim().split(/\r?\n/).pop()?.replace(/^\[[^\]]*\]\s*\[[^\]]*\]\s*/, '') || '后台正在处理规则') + (logError ? '；日志片段暂不可用，任务状态已读取。' : ''));
+          if (state.status === 'running') {
+            notify = true;
+            if (type === 'rules') pendingNotificationId = id;
+            status((type === 'source' ? '来源测试仍在后台运行' : text.trim().split(/\r?\n/).pop()?.replace(/^\[[^\]]*\]\s*\[[^\]]*\]\s*/, '') || '后台正在处理规则') + (logError ? '；日志片段暂不可用，任务状态已读取。' : ''));
+          }
         },
         onRetry: () => status('暂时无法核实任务状态，正在退避重试；不会重复同步。', 'warning'),
       });
@@ -76,10 +83,14 @@ export function useSync(api, feedback, history, refresh, storage = getStorage())
       const failure = text.trim().split(/\r?\n/).reverse().find(line => /失败|拒绝|错误|无法|不可用|超限/.test(line));
       const final = ok ? summary?.message || (partial ? '部分来源失败，成功来源已合并保存；请查看诊断日志。' : cached ? '规则已同步，部分来源使用缓存；请查看来源核验时间。' : '规则同步任务已完成；请核实概览中的生效状态。') : state.status === 'interrupted' ? '更新进程意外中断，发布结果未确认；请核查当前规则。' : '同步失败：' + (failure || '请展开诊断日志查看详情');
       const finalKind = ok ? partial || cached ? 'warning' : 'success' : 'error';
-      feedback.log(final, finalKind === 'success' ? 'ok' : finalKind === 'error' ? 'error' : '');
-      status(final + (outcome.logError ? ' 日志片段未能完整读取。' : ''), finalKind);
-      if (!ok) feedback.consoleOpen.value = true;
-      feedback.toast(ok ? partial ? '同步完成，但部分来源失败' : cached ? '规则已同步，部分来源使用缓存' : '规则已同步完成' : '同步失败');
+      const resultMessage = (notify ? '' : '上次同步：') + final;
+      feedback.log(resultMessage, finalKind === 'success' ? 'ok' : finalKind === 'error' ? 'error' : '');
+      status(resultMessage + (outcome.logError ? ' 日志片段未能完整读取。' : ''), finalKind);
+      if (notify) {
+        if (!ok) feedback.consoleOpen.value = true;
+        feedback.toast(ok ? partial ? '同步完成，但部分来源失败' : cached ? '规则已同步，部分来源使用缓存' : '规则已同步完成' : '同步失败');
+      }
+      if (pendingNotificationId === id) pendingNotificationId = '';
       await refresh();
     })();
     try { await tracking; }
@@ -94,8 +105,8 @@ export function useSync(api, feedback, history, refresh, storage = getStorage())
       try { id ||= storage?.getItem('ad-killer-by-nfqueue-update-job'); } catch { /* no storage */ }
       const found = await discover();
       if (!life.active || found.cancelled) return;
-      if (found.job) { void track(found.job.job_id, found.job.type); return; }
-      if (validJob(id)) { void track(id); return; }
+      if (found.job) { void track(found.job.job_id, found.job.type, { notifyCompletion: found.job.status === 'running' }); return; }
+      if (validJob(id)) { void track(id, 'rules', { notifyCompletion: false }); return; }
       if (found.unknown) { unknown('后台任务索引未能核实。点击“继续查询”，不会创建新同步。'); return; }
       uncertain.value = false; pendingId.value = ''; remember(null);
       const report = parseSourceSummary(await api.readFile(PATHS.sources));
