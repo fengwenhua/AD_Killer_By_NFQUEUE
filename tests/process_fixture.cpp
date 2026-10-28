@@ -12,7 +12,10 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "descendant") == 0) {
         const pid_t child = fork();
         if (child < 0) return 2;
-        if (child != 0) { printf("%d\n", child); return 0; }
+        // The fixture intentionally leaves a descendant holding stdout/stderr.
+        // Exit the parent immediately after publishing its PID; sanitizer exit
+        // hooks may wait on that live descendant and invalidate this scenario.
+        if (child != 0) { printf("%d\n", child); fflush(stdout); _exit(0); }
         for (;;) pause();
     }
     if (strcmp(argv[1], "sleep") == 0) { sleep(5); return 0; }

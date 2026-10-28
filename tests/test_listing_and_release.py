@@ -182,6 +182,7 @@ class PublicationTests(unittest.TestCase):
     def test_untrusted_or_incomplete_ci(self):
         for key, value in [('status', 'in_progress'), ('conclusion', 'failure'), ('head_branch', 'topic'),
                            ('event', 'pull_request'), ('path', '.github/workflows/other.yml'),
+                           ('path', '.github/workflows/fuzz.yml'),
                            ('head_repository', {'full_name': 'attacker/fork'})]:
             with self.subTest(key=key):
                 github = FakeGitHub()

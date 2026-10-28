@@ -1,0 +1,56 @@
+name: Extended fuzz
+
+on:
+  schedule:
+    - cron: '23 19 * * 0'
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Seconds per target (eight targets); no build or publication'
+        type: choice
+        default: '300'
+        options: ['60', '300', '600']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extended-fuzz-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  extended-fuzz:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6 / node24
+        with:
+          persist-credentials: false
+      - name: Install fuzz dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+      - name: Restore and retain successful main-only corpora
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5 / node24
+        with:
+          path: dist/fuzz/corpus
+          key: ${{ runner.os }}-fuzz-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ runner.os }}-fuzz-v1-
+      - name: Stateful and structured extended fuzz
+        env:
+          FUZZ_CXX: clang++
+          FUZZ_REQUIRE_LIBFUZZER: '1'
+          FUZZ_SECONDS: ${{ inputs.seconds || '300' }}
+        run: make fuzz-smoke
+      - name: Retain reports, corpora and crash inputs even on failure
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6 / node24
+        with:
+          name: AD_Killer_By_NFQUEUE-extended-fuzz-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            dist/fuzz/report.json
+            dist/fuzz/compiler-probe.log
+            dist/fuzz/logs
+            dist/fuzz/artifacts
+            dist/fuzz/corpus

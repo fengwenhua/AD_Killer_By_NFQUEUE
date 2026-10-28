@@ -24,6 +24,12 @@
       "reviewed_ref": "v6",
       "runtime": "node24",
       "action_yaml_sha256": "3760874f860e631be3d785d0589ade7cecb541eeac6f581989a814a2c99fc94f"
+    },
+    "actions/cache": {
+      "sha": "caa296126883cff596d87d8935842f9db880ef25",
+      "reviewed_ref": "v5",
+      "runtime": "node24",
+      "action_yaml_sha256": "c04edf35104c16c8944076df01561748bac9cd10941417e467a236e508e52dda"
     }
   }
 }

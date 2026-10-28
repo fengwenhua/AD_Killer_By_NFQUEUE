@@ -9,6 +9,12 @@ WebUI 回调接口；测试同时构建并检查离线页面，不依赖提交�
 ```bash
 make test
 
+# CI 可独立调用；本地 make test 仍包含全部三组
+make test-native
+make test-native-sanitize
+make test-frontend
+make test-contracts
+
 # 同时验证 data/out_rules 的 gzip 与 rule_stats.conf 一致性
 make test-rules
 
@@ -18,6 +24,7 @@ CXX=clang++ KEEP_TEST_BUILD=1 make test
 # libFuzzer + ASan/UBSan 短程烟测（默认每个入口 500 次）
 make fuzz-smoke
 FUZZ_RUNS=10000 make fuzz-smoke
+FUZZ_REQUIRE_LIBFUZZER=1 FUZZ_SECONDS=300 make fuzz-smoke
 
 # 全套测试启用 -Werror、ASan 与 UBSan
 make test-sanitize
@@ -188,3 +195,6 @@ IPv4/IPv6 DNS 否定回答、TCP reset、QUIC 不可达与正常 HTTP 放行并�
 所有防火墙/守护操作均用桩隔离，不访问手机。源码位于 `tests/audit/`，只有编译产物和
 测试数据使用临时目录。它刻意断言当前问题，**不是修复后的通过证明，也不接入默认 CI**；
 修复后需迁移成正确行为回归。覆盖范围与限制见[探针说明](audit/README.md)。
+
+CI 分组、八个 fuzz 入口、定时语料与崩溃回归流程见
+[CI 与模糊测试](../docs/CI与模糊测试.md)。

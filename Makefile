@@ -1,7 +1,19 @@
-.PHONY: test test-rules test-sanitize test-nfqueue-integration test-engine-integration test-cgroup-integration test-download-integration test-update-integration fuzz-smoke benchmark profile-rule-memory
+.PHONY: test test-native test-native-sanitize test-frontend test-contracts test-rules test-sanitize test-nfqueue-integration test-engine-integration test-cgroup-integration test-download-integration test-update-integration fuzz-smoke benchmark profile-rule-memory
 
 test:
 	sh tests/run_host_tests.sh
+
+test-native:
+	sh tests/run_native_tests.sh
+
+test-native-sanitize:
+	STRICT=1 SANITIZE=1 sh tests/run_native_tests.sh
+
+test-frontend:
+	sh tests/run_frontend_tests.sh
+
+test-contracts:
+	sh tests/run_contract_tests.sh
 
 test-rules:
 	CHECK_RULE_ARTIFACTS=1 sh tests/run_host_tests.sh

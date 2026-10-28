@@ -5,7 +5,8 @@
 #include <string>
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-    std::string line(reinterpret_cast<const char *>(data), size);
+    std::string line;
+    if (size) line.assign(reinterpret_cast<const char *>(data), size);
     RuleDB hosts;
     parse_hosts_line(line, hosts);
     hosts.black.classify(line);

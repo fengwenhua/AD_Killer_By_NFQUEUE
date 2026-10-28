@@ -19,13 +19,6 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6 / node24
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6 / node24
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Install locked frontend dependencies
-        run: npm --prefix frontend ci --include=dev --no-audit --no-fund
       - name: Install host dependencies
         run: sudo apt-get update && sudo apt-get install -y clang curl openssl iptables conntrack iproute2 util-linux kmod procps shellcheck zlib1g-dev
       - name: Shell syntax and static analysis
@@ -33,16 +26,18 @@ jobs:
           bash -n build.sh
           for script in module/*.sh tests/*.sh; do sh -n "$script"; done
           shellcheck -e SC2086,SC2154 build.sh module/*.sh tests/*.sh
-      - name: Strict host tests
-        run: STRICT=1 make test
+      - name: Python contracts and packaging behavior
+        run: make test-contracts
+      - name: Strict native host tests
+        run: STRICT=1 make test-native
       - name: Real HTTP/TLS download integration
         run: CXX=clang++ make test-download-integration
       - name: Real rule publishing and asynchronous update jobs
         run: sudo env CXX=clang++ make test-update-integration
       - name: ASan and UBSan suite
-        run: make test-sanitize
+        run: make test-native-sanitize
       - name: Parser fuzz smoke
-        run: FUZZ_CXX=clang++ FUZZ_RUNS=1000 make fuzz-smoke
+        run: FUZZ_CXX=clang++ FUZZ_RUNS=1000 FUZZ_REQUIRE_LIBFUZZER=1 make fuzz-smoke
       - name: Real kernel NFQUEUE IPv4/IPv6 integration
         run: CXX=clang++ make test-nfqueue-integration
       - name: Real engine routing and protocol integration
@@ -51,6 +46,17 @@ jobs:
         run: sudo env CXX=clang++ IPTABLES_BACKEND=legacy make test-engine-integration
       - name: Real manager freezer and daemon isolation regression
         run: sudo env CXX=clang++ make test-cgroup-integration
+      - name: Retain fuzz diagnostics and crash inputs
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6 / node24
+        with:
+          name: AD_Killer_By_NFQUEUE-fuzz-smoke
+          if-no-files-found: ignore
+          path: |
+            dist/fuzz/report.json
+            dist/fuzz/compiler-probe.log
+            dist/fuzz/logs
+            dist/fuzz/artifacts
 
   webui-layout:
     runs-on: ubuntu-latest
@@ -65,9 +71,7 @@ jobs:
       - name: Build and test Vue frontend
         run: |
           npm --prefix frontend ci --include=dev --no-audit --no-fund
-          npm --prefix frontend test
-          npm --prefix frontend run build
-          python3 tests/test_webui_contract.py module/webroot/index.html
+          make test-frontend
           RELEASE_CHANNEL=preview npm --prefix frontend run build -- --outDir ../dist/webui-channel-preview
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6 / node24
         with:

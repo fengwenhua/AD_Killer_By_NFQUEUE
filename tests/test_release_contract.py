@@ -60,7 +60,7 @@ def main() -> None:
     all_workflows = '\n'.join(path.read_text() for path in (ROOT / '.github/workflows').glob('*.yml'))
     for action, minimum in (
         ("checkout", 6), ("setup-node", 6), ("setup-python", 6),
-        ("upload-artifact", 6),
+        ("upload-artifact", 6), ("cache", 5),
     ):
         refs = re.findall(rf"uses:\s*actions/{action}@([^\s#]+)", all_workflows)
         assert refs, f"workflow must exercise actions/{action}"
