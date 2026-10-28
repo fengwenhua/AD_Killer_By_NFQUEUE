@@ -2,6 +2,7 @@
 
 #include "rule_stream.h"
 #include "rules.h"
+#include "logging.h"
 
 #include <algorithm>
 #include <cctype>
@@ -193,6 +194,45 @@ void deduplicate_rule_text(std::string &text) {
     output.reserve(bytes);
     for (const auto &line : lines) { output.append(line.data(), line.size()); output.push_back('\n'); }
     text.swap(output);
+}
+
+bool CanonicalRuleChunks::append(std::string &&chunk) {
+    if (chunk.empty()) return true;
+    if (chunk.back() != '\n' || chunk.size() > byte_limit_ - bytes_) return false;
+    const auto lines = static_cast<size_t>(std::count(chunk.begin(), chunk.end(), '\n'));
+    if (lines > line_limit_ - lines_) return false;
+    const auto bytes = chunk.size();
+    // Avoid retaining many partly filled source allocations in the usual small
+    // lists. Coalesce only within 8 MiB; large lists transfer ownership directly.
+    constexpr size_t small_block = 8u * 1024u * 1024u;
+    if (!chunks_.empty() && bytes <= small_block &&
+        chunks_.back().size() <= small_block - bytes) {
+        chunks_.back().append(chunk);
+        std::string().swap(chunk);
+    } else {
+        chunks_.push_back(std::move(chunk));
+    }
+    bytes_ += bytes;
+    lines_ += lines;
+    return true;
+}
+
+bool CanonicalRuleChunks::compress_gzip(std::string_view prefix, std::string &output) {
+    std::vector<std::string_view> lines;
+    lines.reserve(lines_);
+    for (const auto &chunk : chunks_) {
+        for (size_t begin = 0; begin < chunk.size();) {
+            const auto end = chunk.find('\n', begin); // append accepted only complete lines
+            if (end != begin) lines.emplace_back(chunk.data() + begin, end - begin);
+            begin = end + 1;
+        }
+    }
+    std::sort(lines.begin(), lines.end());
+    lines.erase(std::unique(lines.begin(), lines.end()), lines.end());
+    if (!gz_compress_lines(prefix, lines, output)) return false;
+    std::vector<std::string>().swap(chunks_);
+    bytes_ = lines_ = 0;
+    return true;
 }
 
 std::string serialize_source_reports(const std::vector<SourceUpdateReport> &reports,

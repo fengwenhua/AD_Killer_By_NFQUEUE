@@ -316,37 +316,74 @@ bool gz_compress_string(const std::string &in, std::string &out) {
     return gz_compress_parts({in}, out);
 }
 
-bool gz_compress_parts(std::initializer_list<std::string_view> parts, std::string &out) {
-    z_stream zs;
-    memset(&zs, 0, sizeof(zs));
+namespace {
+
+template<class Producer>
+bool gz_compress_generated(const Producer &produce, std::string &out) {
+    z_stream zs{};
     if (deflateInit2(&zs, 9, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK)
         return false;
     out.clear();
-    char buf[65536];
-    for (const auto &part : parts) {
+    char buffer[65536];
+    const auto send = [&](std::string_view part) {
         for (size_t offset = 0; offset < part.size();) {
-            const auto bytes = std::min<size_t>(sizeof(buf), part.size() - offset);
+            const auto bytes = std::min<size_t>(sizeof(buffer), part.size() - offset);
             zs.next_in = reinterpret_cast<Bytef *>(const_cast<char *>(part.data() + offset));
             zs.avail_in = static_cast<uInt>(bytes);
             while (zs.avail_in) {
-                zs.next_out = reinterpret_cast<Bytef *>(buf);
-                zs.avail_out = sizeof(buf);
-                if (deflate(&zs, Z_NO_FLUSH) != Z_OK) {
-                    deflateEnd(&zs); out.clear(); return false;
-                }
-                out.append(buf, sizeof(buf) - zs.avail_out);
+                zs.next_out = reinterpret_cast<Bytef *>(buffer);
+                zs.avail_out = sizeof(buffer);
+                if (deflate(&zs, Z_NO_FLUSH) != Z_OK) return false;
+                out.append(buffer, sizeof(buffer) - zs.avail_out);
             }
             offset += bytes;
         }
-    }
-    int ret;
+        return true;
+    };
+    if (!produce(send)) { deflateEnd(&zs); out.clear(); return false; }
+    int result;
     do {
-        zs.next_out = (Bytef *)buf;
-        zs.avail_out = sizeof(buf);
-        ret = deflate(&zs, Z_FINISH);
-        out.append(buf, sizeof(buf) - zs.avail_out);
-    } while (ret == Z_OK);
+        zs.next_out = reinterpret_cast<Bytef *>(buffer);
+        zs.avail_out = sizeof(buffer);
+        result = deflate(&zs, Z_FINISH);
+        out.append(buffer, sizeof(buffer) - zs.avail_out);
+    } while (result == Z_OK);
     deflateEnd(&zs);
-    if (ret != Z_STREAM_END) { out.clear(); return false; }
+    if (result != Z_STREAM_END) { out.clear(); return false; }
     return true;
+}
+
+}  // namespace
+
+bool gz_compress_parts(std::initializer_list<std::string_view> parts, std::string &out) {
+    return gz_compress_generated([&](const auto &send) {
+        for (const auto &part : parts) if (!send(part)) return false;
+        return true;
+    }, out);
+}
+
+bool gz_compress_lines(std::string_view prefix, const std::vector<std::string_view> &lines,
+                       std::string &out) {
+    return gz_compress_generated([&](const auto &send) {
+        if (!send(prefix)) return false;
+        char buffer[65536];
+        size_t used = 0;
+        const auto append = [&](std::string_view text) {
+            while (!text.empty()) {
+                const auto bytes = std::min(sizeof(buffer) - used, text.size());
+                memcpy(buffer + used, text.data(), bytes);
+                used += bytes;
+                text.remove_prefix(bytes);
+                if (used == sizeof(buffer)) {
+                    if (!send(std::string_view(buffer, used))) return false;
+                    used = 0;
+                }
+            }
+            return true;
+        };
+        for (const auto &line : lines) {
+            if (!append(line) || !append("\n")) return false;
+        }
+        return !used || send(std::string_view(buffer, used));
+    }, out);
 }

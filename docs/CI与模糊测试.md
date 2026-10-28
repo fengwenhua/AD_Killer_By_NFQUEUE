@@ -33,7 +33,7 @@ host-tests、webui-layout、android-build 全部成功，且该次运行的其�
 | 目标 | 重点覆盖 |
 | --- | --- |
 | packet | IPv4/IPv6、DNS、HTTP、完整/多记录 TLS、快速拒绝响应 |
-| rules | Hosts/AdGuard、白名单、修饰符、字节与域名边界 |
+| rules | Hosts/AdGuard、白名单、修饰符、字节与域名边界，以及分块排序/gzip 全字节对照 |
 | nfnetlink | NFQUEUE 消息、属性长度、ACK 与截断 |
 | release_json | 有界 JSON、发布字段投影、正文和 UTF-8 |
 | reassembly | 分段、乱序、重叠、重传、SYN/FIN/RST、序号回绕、缓存容量与超时 |

@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct SourceRuleStats {
@@ -57,6 +58,28 @@ SourceValidationResult validate_rule_source_file(
 
 // Canonical, sorted unique lines (no header); used by live and offline merges.
 void deduplicate_rule_text(std::string &text);
+
+// Own validated, LF-terminated chunks without a whole-category text copy.
+// Small allocations may coalesce when combined text is at most 8 MiB.
+// Sorting uses views into these immutable chunks; successful compression releases
+// the source buffers only after zlib has consumed every view. No temporary files.
+class CanonicalRuleChunks {
+public:
+    explicit CanonicalRuleChunks(size_t byte_limit = MAX_RULE_DECOMPRESSED_BYTES,
+                                 size_t line_limit = MAX_RULE_LINES)
+        : byte_limit_(byte_limit), line_limit_(line_limit) {}
+    CanonicalRuleChunks(const CanonicalRuleChunks &) = delete;
+    CanonicalRuleChunks &operator=(const CanonicalRuleChunks &) = delete;
+    bool append(std::string &&chunk);
+    bool empty() const { return bytes_ == 0; }
+    size_t size() const { return bytes_; }
+    bool compress_gzip(std::string_view prefix, std::string &output);
+
+private:
+    std::vector<std::string> chunks_;
+    size_t bytes_ = 0, lines_ = 0;
+    size_t byte_limit_, line_limit_;
+};
 
 std::string serialize_source_reports(const std::vector<SourceUpdateReport> &reports,
                                      const std::string &publish_status,

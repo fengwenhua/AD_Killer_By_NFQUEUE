@@ -7,7 +7,7 @@ import zipfile
 
 TARGETS = {
     'packet': ['packet.cpp'],
-    'rules': ['rules.cpp', 'rule_stream.cpp', 'rule_bundle.cpp', 'logging.cpp', 'bounded_log.cpp'],
+    'rules': ['source_validator.cpp', 'rules.cpp', 'rule_stream.cpp', 'rule_bundle.cpp', 'logging.cpp', 'bounded_log.cpp'],
     'nfnetlink': ['nfnetlink_parser.cpp'],
     'release_json': ['release_catalog.cpp'],
     'reassembly': ['tcp_reassembly.cpp', 'packet.cpp'],

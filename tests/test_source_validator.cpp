@@ -1,4 +1,5 @@
 #include "source_validator.h"
+#include "logging.h"
 
 #include <cstdlib>
 #include <fstream>
@@ -20,9 +21,73 @@ void expect(bool condition, const char *message) {
     }
 }
 
+std::string decode_gzip(const std::string &encoded, size_t expected_size) {
+    std::string decoded(expected_size + 1, '\0');
+    z_stream stream{};
+    expect(inflateInit2(&stream, 15 + 16) == Z_OK, "gzip oracle should initialize");
+    stream.next_in = reinterpret_cast<Bytef *>(const_cast<char *>(encoded.data()));
+    stream.avail_in = static_cast<uInt>(encoded.size());
+    stream.next_out = reinterpret_cast<Bytef *>(decoded.data());
+    stream.avail_out = static_cast<uInt>(decoded.size());
+    const auto result = inflate(&stream, Z_FINISH);
+    expect(result == Z_STREAM_END && stream.total_in == encoded.size(), "gzip must be a complete single member");
+    decoded.resize(stream.total_out);
+    inflateEnd(&stream);
+    return decoded;
+}
+
+void check_chunks(std::vector<std::string> inputs) {
+    std::string aggregate;
+    std::set<std::string> oracle;
+    CanonicalRuleChunks chunks;
+    for (auto &input : inputs) {
+        aggregate += input;
+        for (size_t at = 0; at < input.size();) {
+            const auto end = input.find('\n', at);
+            if (end != at) oracle.insert(input.substr(at, end - at));
+            at = end + 1;
+        }
+        expect(chunks.append(std::move(input)), "line-aligned validated chunks must be admitted");
+    }
+    const std::string header = "# fixed rule header\n";
+    std::string expected = header;
+    for (const auto &line : oracle) expected += line + '\n';
+    deduplicate_rule_text(aggregate);
+    std::string previous, actual;
+    expect(gz_compress_parts({header, aggregate}, previous), "previous complete-text gzip must succeed");
+    expect(chunks.compress_gzip(header, actual), "view-sorted gzip must succeed");
+    expect(actual == previous, "chunk sorting must preserve complete gzip bytes");
+    expect(decode_gzip(actual, expected.size()) == expected, "independent full ordered set must match decoded gzip");
+    expect(chunks.empty() && chunks.size() == 0, "consumed source buffers must be released after compression");
+}
+
+void chunk_tests() {
+    check_chunks({});
+    check_chunks({"", "\n\n"});
+    check_chunks({"z\nb\n", "\na\nb\n", "a\r\n", std::string("\0x\n", 3)});
+    check_chunks({std::string(131071, 'x') + "\n", "a\n"});
+    std::vector<std::string> inputs(17);
+    for (unsigned n = 0; n < 30000; ++n) {
+        inputs[n % inputs.size()] += (n % 31 == 0 ? "@@" : "") + std::string(n % 200, 'a' + n % 23) +
+                                    std::to_string(n % 8000) + ".example\n";
+    }
+    check_chunks(std::move(inputs));
+    CanonicalRuleChunks bounded(5, 2);
+    expect(bounded.append("a\n") && bounded.append("b\n"), "chunks may fill line budget exactly");
+    std::string partial = "z", too_many = "\n", oversized = "zz\n";
+    expect(!bounded.append(std::move(partial)) && partial == "z", "partial lines must fail without consuming input");
+    expect(!bounded.append(std::move(too_many)) && too_many == "\n", "line overflow must preserve the prior chunks");
+    expect(!bounded.append(std::move(oversized)) && oversized == "zz\n", "byte overflow must preserve the prior chunks");
+    expect(bounded.size() == 4, "refused chunks must not alter accounting");
+    std::string encoded;
+    expect(bounded.compress_gzip("", encoded) && decode_gzip(encoded, 4) == "a\nb\n", "failed admission cannot publish partial bytes");
+    expect(bounded.append("c\n") && bounded.compress_gzip("", encoded) && decode_gzip(encoded, 2) == "c\n", "compression must reset both byte and line budgets");
+}
+
 }  // namespace
 
 int main() {
+    chunk_tests();
     for (const auto &item : std::vector<std::pair<std::string, std::string>>{
              {"", ""}, {"\n\n", ""}, {"z\nb\na", "a\nb\nz\n"},
              {"long-before-short\na\nlong-before-short\n\n", "a\nlong-before-short\n"},
