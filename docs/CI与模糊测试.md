@@ -91,6 +91,10 @@ libFuzzer，缺少运行库直接失败，不把回退结果当作覆盖引导 f
 主机与 sanitizer 完整用例、分组独立性、失败即停止、语料预算/链接隔离及缺少
 libFuzzer 的 CI 拒绝另有回归。
 
-v1.2.8 的完整 CI 40366870975 约 32 分钟，大部分耗时来自两套引擎集成及原生
-sanitizer。此轮减少了重复工作并扩大覆盖，不承诺 CI 总时长按相同倍数下降；
-改动后实际 job 时长待 GitHub 完整运行记录。上述均不替代手机或 24 小时长稳验收。
+v1.2.8 的完整 CI 40366870975 中 host-tests 用时 32:02；O13 提交 a3e8248 的
+[完整 CI 40641961757](https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/actions/runs/40641961757)
+全部通过，host-tests 29:52、webui-layout 3:11、android-build 2:26；改前后者分别
+为 3:57 和 2:17。原始时间记录在本地 dist/o13-validation/github-timings.json。
+这是各一次真实运行，包含机器、编译和依赖下载波动，不能把全部差值归因于去重。
+两套引擎和原生 sanitizer 仍占主要耗时；减少重复执行与扩大覆盖不承诺固定倍数
+加速。上述均不替代手机或 24 小时长稳验收。

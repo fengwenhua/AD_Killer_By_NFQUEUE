@@ -198,3 +198,7 @@ IPv4/IPv6 DNS 否定回答、TCP reset、QUIC 不可达与正常 HTTP 放行并�
 
 CI 分组、八个 fuzz 入口、定时语料与崩溃回归流程见
 [CI 与模糊测试](../docs/CI与模糊测试.md)。
+
+离线设备报告汇总使用 `scripts/summarize_device_baseline.py`，无需 ADB。
+13 项回归覆盖会话/时钟/缺失、计数与瞬时量、输入变化、配额/链接/异常 JSON、
+私密字段与独占输出；用法见 [设备基线协议](../docs/设备基线采集协议.md)。
