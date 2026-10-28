@@ -12,6 +12,7 @@ trap 'rm -rf -- "$BUILD_DIR"' EXIT HUP INT TERM
     '-DADK_NFQ_TEST_CURL_PROGRAM="/usr/bin/curl"' \
     -I"$ROOT/src" "$ROOT"/src/*.cpp -ldl -lz -o "$BUILD_DIR/AD_Killer_By_NFQUEUE"
 python3 "$ROOT/tests/integration/test_update.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE"
+python3 "$ROOT/tests/integration/test_sync_concurrency.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE"
 python3 "$ROOT/tests/integration/test_job_identity.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE"
 python3 "$ROOT/tests/integration/test_operation_gate.py" "$BUILD_DIR/AD_Killer_By_NFQUEUE"
 PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT/tests/integration/test_sync_budget.py"

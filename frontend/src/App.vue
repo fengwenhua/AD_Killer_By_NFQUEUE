@@ -4,6 +4,7 @@ import { createApi } from './services/api.js';
 import { useEngine } from './composables/useEngine.js';
 import { useSources } from './composables/useSources.js';
 import { useSync } from './composables/useSync.js';
+import { useSyncSettings } from './composables/useSyncSettings.js';
 import { useApps } from './composables/useApps.js';
 import { useCustomRules } from './composables/useCustomRules.js';
 import { useFeedback } from './composables/useFeedback.js';
@@ -29,6 +30,7 @@ const custom = reactive(useCustomRules(api, feedbackRaw));
 const preferencesRaw = useUiPreferences(), preferences = reactive(preferencesRaw);
 const previews = reactive(useSourcePreview(api, preferencesRaw.characters));
 const sync = reactive(useSync(api, feedbackRaw, sourcesRaw.history, engineRaw.refresh));
+const syncSettings = reactive(useSyncSettings(api));
 const { theme, toggle: toggleTheme } = useTheme();
 const moduleInfoRaw = useModuleInfo(api), moduleInfo = reactive(moduleInfoRaw);
 const moduleUpdate = reactive(useModuleUpdate(api,moduleInfoRaw,feedbackRaw));
@@ -38,7 +40,7 @@ const { leaving, selected, navigate } = useNavigationMotion(page, mainElement, t
 const pages = [{ id: 'home', label: '概览', icon: 'home' }, { id: 'apps', label: '应用名单', icon: 'apps' }, { id: 'rules', label: '规则管理', icon: 'rules' }, { id: 'settings', label: '设置', icon: 'settings' }];
 onMounted(async () => {
   feedback.log('AD Killer 控制台已就绪');
-  await Promise.all([engine.refresh(), custom.load(), sources.load(), moduleInfo.load()]);
+  await Promise.all([engine.refresh(), custom.load(), sources.load(), moduleInfo.load(), syncSettings.load()]);
   void moduleUpdate.initialize();
   await apps.load();
   await sync.resume();
@@ -63,7 +65,7 @@ onMounted(async () => {
     <section id="home" class="page" aria-label="概览" :data-active="page === 'home' || undefined" :data-leaving="leaving.includes('home') || undefined" :inert="page !== 'home'"><HomeView :engine="engine" :sync="sync" :apps="apps" :feedback="feedback" :module-info="moduleInfo" /></section>
     <section id="apps" class="page" aria-label="应用名单" :data-active="page === 'apps' || undefined" :data-leaving="leaving.includes('apps') || undefined" :inert="page !== 'apps'"><AppsView :apps="apps" :engine="engine" /></section>
     <section id="rules" class="page" aria-label="规则管理" :data-active="page === 'rules' || undefined" :data-leaving="leaving.includes('rules') || undefined" :inert="page !== 'rules'"><RulesView :sources="sources" :custom="custom" :previews="previews" /></section>
-    <section id="settings" class="page" aria-label="设置" :data-active="page === 'settings' || undefined" :data-leaving="leaving.includes('settings') || undefined" :inert="page !== 'settings'"><SettingsView :module-info="moduleInfo" :preferences="preferences" :updates="moduleUpdate" /></section>
+    <section id="settings" class="page" aria-label="设置" :data-active="page === 'settings' || undefined" :data-leaving="leaving.includes('settings') || undefined" :inert="page !== 'settings'"><SettingsView :module-info="moduleInfo" :preferences="preferences" :updates="moduleUpdate" :sync-settings="syncSettings" /></section>
   </main>
   <SourcePreview :model="previews" />
   <div id="toast" role="status" :class="{ show: feedback.toastText }">{{ feedback.toastText }}</div>

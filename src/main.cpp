@@ -42,6 +42,7 @@
 #include "operation_gate.h"
 #include "uninstall.h"
 #include "work_budget.h"
+#include "source_prefetch.h"
 #include "source_sync.h"
 #include "source_staging.h"
 #include "app_catalog.h"
@@ -159,6 +160,7 @@ static int cmd_install() {
         ok = write_initial_config(FILE_STATE_CONF,
                           "version=2\n"
                           "source_defaults_version=1\n"
+                          "sync_concurrency=10\n"
                           "mode=2\n"
                           "scope=0\n"
                           "dev_mode=true\n"
@@ -836,7 +838,7 @@ static int cmd_apps_apply(const std::string &target, const std::string &expected
 }
 
 // ---------------------------------------------------------------------------
-// --update:拉取规则源(支持 gzip)→ 逐行归类 → 原子落盘 → 热重载
+// --update:并发拉取规则源(支持 gzip)→ 逐行归类 → 原子落盘 → 热重载
 // 失败输出:{"status": "error_download"}
 static int cmd_update(const std::string &test_url = "") {
 #if defined(ADK_NFQ_TEST_SYNC_TASK_MS)
@@ -849,7 +851,7 @@ static int cmd_update(const std::string &test_url = "") {
 #else
     constexpr uint64_t source_ms = 90 * 1000;
 #endif
-    WorkBudget task_budget(task_ms, 256u * 1024u * 1024u);
+    WorkBudget task_budget(task_ms, 256u * 1024u * 1024u, true);
     if (!ensure_dirs()) {
         printf("{\"status\": \"error_storage\"}\n");
         return 1;
@@ -860,6 +862,7 @@ static int cmd_update(const std::string &test_url = "") {
         printf("{\"status\": \"busy\"}\n");
         return 2;
     }
+    const int concurrency = test_url.empty() ? sync_concurrency_value(read_conf_value(FILE_STATE_CONF, "sync_concurrency")) : 1;
     auto collect_history = [] {
         struct stat info {};
         if (lstat(DIR_RULESETS, &info) && errno == ENOENT) return;
@@ -889,7 +892,9 @@ static int cmd_update(const std::string &test_url = "") {
             return 1;
         }
         retain_builtin_source(entries);
-        for (const auto &entry : entries) if (entry.enabled) urls.push_back(entry.url);
+        std::set<std::string> enabled;
+        for (const auto &entry : entries)
+            if (entry.enabled && enabled.insert(entry.url).second) urls.push_back(entry.url);
     }
     if (urls.empty()) {
         write_file_atomic(FILE_SOURCE_STATS, serialize_source_reports(
@@ -903,12 +908,13 @@ static int cmd_update(const std::string &test_url = "") {
     CanonicalRuleChunks adguard_rules;
     size_t aggregate_content_bytes = 0;
     size_t aggregate_source_lines = 0;
-    std::vector<SourceUpdateReport> source_reports;
+    std::vector<SourceUpdateReport> source_reports(urls.size());
+    size_t source_index = 0;
     PublishedSourceStats published;
     const char *update_job = getenv("ADK_NFQ_UPDATE_JOB");
     auto record_source_report = [&](SourceUpdateReport &report) {
         report.checked_at = now_epoch();
-        source_reports.push_back(report);
+        source_reports[source_index] = report;
     };
 
     auto save_source_reports = [&](const char *publish_status) {
@@ -933,10 +939,14 @@ static int cmd_update(const std::string &test_url = "") {
             log_line("缓存", "来源缓存不可用或清理未确认，本次仍可完整下载: %s", cache_error.c_str());
     }
 
-    for (auto &url : urls) {
+    log_line("更新", "并发同步：最多 %d 个来源，下载后按完整来源集校验发布", concurrency);
+    SourcePrefetch prefetch(urls, source_staging.path(), cache.get(), concurrency, source_ms, task_budget);
+    SourceDownload download;
+    while (prefetch.next(source_index, download)) {
+        const auto &url = urls[source_index];
         if (task_unconfirmed_network_writer || WorkBudget::expired() || operation_closing()) break;
         if (!task_progress("downloading")) return 1;
-        WorkBudget source_budget(source_ms, is_builtin_source(url) ?
+        WorkBudget source_budget(source_ms - std::min(source_ms, download.elapsed_ms), is_builtin_source(url) ?
             128u * 1024u * 1024u : MAX_RULE_INPUT_BYTES);
         SourceUpdateReport report;
         report.url = url;
@@ -945,7 +955,7 @@ static int cmd_update(const std::string &test_url = "") {
         RuleStreamLimits source_limits;
         source_limits.output_bytes = MAX_RULE_DECOMPRESSED_BYTES - aggregate_content_bytes;
         source_limits.lines = MAX_RULE_LINES - aggregate_source_lines;
-        auto sync = synchronize_rule_source(source_staging.path(), url, source_limits, cache.get(), cache_keys);
+        auto sync = synchronize_rule_source(source_staging.path(), url, source_limits, cache.get(), cache_keys, &download);
         auto validation = std::move(sync.validation);
         report.downloaded_bytes = sync.downloaded_bytes;
         report.provenance = sync.provenance; report.warning = sync.warning;
@@ -996,11 +1006,14 @@ static int cmd_update(const std::string &test_url = "") {
         record_source_report(report);
     }
 
-    for (size_t i = source_reports.size(); i < urls.size(); ++i) {
+    prefetch.stop(); // Reap/cancel every outstanding writer before staging or returning.
+    for (size_t i = 0; i < urls.size(); ++i) {
+        if (!source_reports[i].status.empty()) continue;
         SourceUpdateReport skipped;
-        skipped.url = urls[i]; skipped.status = "not_attempted";
+        skipped.url = urls[i]; skipped.status = prefetch.started(i) ? "content_rejected" : "not_attempted";
         skipped.format = is_builtin_source(urls[i]) ? "hagezi-pro-minus-fake" : source_format_name(recipe_source_format(urls[i]));
-        skipped.reason = "earlier_source_failed_or_budget_cancelled";
+        skipped.reason = prefetch.started(i) ? "parallel_source_cancelled" : "earlier_source_failed_or_budget_cancelled";
+        source_index = i;
         record_source_report(skipped);
     }
 
@@ -1457,6 +1470,23 @@ static int cmd_status_fast() {
     return 0;
 }
 
+static int cmd_sync_settings() {
+    printf("{\"status\":\"ok\",\"concurrency\":%d,\"default\":%d,\"maximum\":%d}\n",
+        sync_concurrency_value(read_conf_value(FILE_STATE_CONF, "sync_concurrency")),
+        SYNC_CONCURRENCY_DEFAULT, SYNC_CONCURRENCY_MAX);
+    return 0;
+}
+static int cmd_sync_concurrency(const char *argument) {
+    int count = 0;
+    if (!parse_integer_arg(argument, count) || count < 1 || count > SYNC_CONCURRENCY_MAX) {
+        puts("{\"status\":\"error_argument\",\"message\":\"并发数量必须是 1–20 之间的整数\"}"); return 1;
+    }
+    if (!ensure_dirs() || !write_conf_value(FILE_STATE_CONF, "sync_concurrency", std::to_string(count).c_str())) {
+        puts("{\"status\":\"error_storage\",\"message\":\"并发设置保存未确认，请重新读取核实\"}"); return 1;
+    }
+    return cmd_sync_settings(); // Next sync only; no daemon reload or start.
+}
+
 // ---------------------------------------------------------------------------
 // --version-status:版本 JSON
 static int cmd_version_status() {
@@ -1575,6 +1605,8 @@ static void usage() {
             "  AD_Killer_By_NFQUEUE --module-update-install VERSION [stable|preview] 后台安装已校验模块\n"
             "  AD_Killer_By_NFQUEUE --module-update-status 查询安装包与重启状态\n"
             "  AD_Killer_By_NFQUEUE --uninstall        停止并验证清理，默认删除本模块全部数据\n"
+            "  AD_Killer_By_NFQUEUE --sync-settings    读取规则同步并发设置\n"
+            "  AD_Killer_By_NFQUEUE --sync-concurrency 1..20 保存下次同步并发数（默认 10）\n"
             "  AD_Killer_By_NFQUEUE --sources-list     读取启用/停用来源 JSON\n"
             "  AD_Killer_By_NFQUEUE --sources-save     从 stdin 校验并原子保存来源\n"
             "  AD_Killer_By_NFQUEUE --source-test URL  后台测试单源，不发布规则\n"
@@ -1704,6 +1736,8 @@ int main(int argc, char **argv) {
     }
     if (arg == "--status")         return cmd_status();
     if (arg == "--status-fast")    return cmd_status_fast();
+    if (arg == "--sync-settings") { if (argc != 2) return 1; return cmd_sync_settings(); }
+    if (arg == "--sync-concurrency") { if (argc != 3) return 1; return writer([&] { return cmd_sync_concurrency(argv[2]); }); }
     if (arg == "--version-status") return cmd_version_status();
     if (arg == "--mode") {
         if (argc < 3) { usage(); return 1; }

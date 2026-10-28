@@ -53,6 +53,7 @@ def main():
 
         try:
             command('--install')
+            command('--sync-concurrency', '1')  # This case intentionally measures serial deadline exhaustion.
             sources('/seed')
             command('--update')
             manifest = (DATA / 'rules.current').read_bytes()
@@ -75,6 +76,23 @@ def main():
             sources('/seed')
             command('--update')
             assert (DATA / 'rules.current').read_bytes() == manifest, 'next task inherited the previous deadline'
+            # The same slow inputs now fit when their network work overlaps.
+            command('--sync-concurrency', '2')
+            sources('/slow-a', '/slow-b', '/unreached')
+            command('--update')
+            concurrent_manifest = (DATA / 'rules.current').read_bytes()
+            assert concurrent_manifest != manifest
+            # Parallel workers still share ONE total deadline. A second wave
+            # times out; queued sources never start and the complete set stays.
+            paths = ['/slow-1', '/slow-2', '/slow-3', '/slow-4', '/unreached-1', '/unreached-2']
+            sources(*paths)
+            server.requests.clear()
+            started = time.monotonic()
+            command('--update', success=False)
+            assert time.monotonic() - started < 2.5
+            assert set(server.requests) == set(paths[:4]), server.requests
+            assert (DATA / 'rules.current').read_bytes() == concurrent_manifest
+            assert not (DATA / 'source_staging').exists()
             print('real sync task budget: multiple slow sources, no further requests, no partial publication, old generation and fresh-task recovery passed')
         finally:
             server.shutdown()

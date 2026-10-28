@@ -116,6 +116,7 @@ def main():
 
         try:
             command('--install')
+            command('--sync-concurrency', '1')  # Cache transaction scenarios require deterministic request order.
             configure('/a', '/b')
             command('--update')
             assert rules() == {'a.example.org', 'b.example.org'}

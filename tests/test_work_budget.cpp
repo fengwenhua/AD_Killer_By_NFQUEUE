@@ -2,6 +2,8 @@
 #include <cassert>
 #include <iostream>
 #include <type_traits>
+#include <sys/wait.h>
+#include <unistd.h>
 
 int main() {
     static_assert(!std::is_copy_constructible<WorkBudget>::value, "scopes cannot be copied");
@@ -41,5 +43,22 @@ int main() {
         assert(none.amount() == 0);
     }
     assert(!WorkBudget::active && WorkBudget::remaining_bytes(9) == 9);
+    {
+        WorkBudget shared(5000, 20000, true);
+        pid_t children[8];
+        for (auto &pid : children) {
+            pid = fork(); assert(pid >= 0);
+            if (!pid) {
+                WorkBudget::Reservation stream(20000, true);
+                const bool accepted = stream.consume(4000);
+                stream.settle(accepted ? 4000 : 0);
+                _exit(accepted ? 0 : 1);
+            }
+        }
+        int accepted = 0;
+        for (auto pid : children) { int status = 0; assert(waitpid(pid, &status, 0) == pid && WIFEXITED(status)); accepted += WEXITSTATUS(status) == 0; }
+        assert(accepted == 5 && WorkBudget::remaining_bytes(20000) == 0);
+        shared.cancel(); assert(WorkBudget::expired());
+    }
     std::cout << "work budgets: nested monotonic deadlines, cumulative caps, conservative reservations and single refunds passed\n";
 }

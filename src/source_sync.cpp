@@ -18,59 +18,84 @@ std::string source_identity_key(const std::string &url) {
     return source_cache_key(url, is_builtin_source(url) ? "hagezi-pro-minus-fake" : source_format_name(recipe_source_format(url)), source_component_urls(url));
 }
 
+SourceDownload prepare_source_download(const std::string &directory, const std::string &url,
+                                      SourceCache *cache, size_t first_part) {
+    const auto started = WorkBudget::Clock::now();
+    SourceDownload download;
+    const auto urls = source_component_urls(url);
+    std::string error;
+    download.cached = cache && cache->available() && cache->load(source_identity_key(url), urls, time(nullptr), download.previous, error);
+    for (size_t i = 0; i < urls.size(); ++i)
+        download.parts.push_back(directory + "/source-download-" + std::to_string(first_part + i) + ".part");
+    download.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(WorkBudget::Clock::now() - started).count();
+    return download;
+}
+
+void fetch_source_download(const std::string &url, SourceDownload &download, bool use_cache) {
+    const auto started = WorkBudget::Clock::now();
+    const auto urls = source_component_urls(url);
+    const auto remaining = WorkBudget::remaining_ms(90000);
+    WorkBudget network(use_cache ? std::min<uint64_t>(70000, remaining * 4 / 5) : remaining, UINT64_MAX);
+    for (size_t i = 0; i < urls.size(); ++i) {
+        log_line(is_builtin_source(url) ? "HaGeZi" : "更新", "拉取: %s", urls[i].c_str());
+        const auto validators = download.cached ? download.previous.components[i].validators : HttpValidators{};
+        auto response = download_file_response(urls[i], download.parts[i], validators);
+        if (response.error.empty() && response.not_modified && download.cached &&
+            response.effective_url != download.previous.components[i].effective_url) {
+            log_line("更新", "304 最终地址与缓存不匹配，预算内重新完整下载: %s", urls[i].c_str());
+            const auto bytes = response.bytes;
+            response = download_file_response(urls[i], download.parts[i]);
+            response.bytes += bytes;
+        }
+        const bool failed = !response.error.empty();
+        download.responses.push_back(std::move(response));
+        if (failed) break;
+    }
+    download.elapsed_ms += std::chrono::duration_cast<std::chrono::milliseconds>(WorkBudget::Clock::now() - started).count();
+}
+
 SourceSyncResult synchronize_rule_source(const std::string &directory, const std::string &url,
                                          const RuleStreamLimits &limits, SourceCache *cache,
-                                         const std::set<std::string> &protected_keys) {
+                                         const std::set<std::string> &protected_keys, SourceDownload *prepared) {
     SourceSyncResult result;
     const auto urls = source_component_urls(url);
     const auto key = source_identity_key(url);
-    CachedSource previous;
+    auto local = prepared ? SourceDownload{} : prepare_source_download(directory, url, cache);
+    auto &download = prepared ? *prepared : local;
+    const auto &previous = download.previous;
+    const bool cached = download.cached;
     std::string cache_error;
-    const bool cached = cache && cache->available() && cache->load(key, urls, time(nullptr), previous, cache_error);
-    std::vector<std::string> parts;
-    for (size_t i = 0; i < urls.size(); ++i) parts.push_back(directory + "/source-download-" + std::to_string(i) + ".part");
+    const auto &parts = download.parts;
     struct Cleanup {
         const std::vector<std::string> &parts;
         ~Cleanup() { if (!task_unconfirmed_network_writer) for (const auto &path : parts) unlink(path.c_str()); }
     } cleanup {parts};
+    if (!prepared) fetch_source_download(url, download, cache != nullptr);
     std::vector<CachedComponent> components;
     std::string fresh_error;
     bool revalidated = false;
-    {
-        // Keep part of the source deadline for local fallback validation. An
-        // inner network timeout must not expire the enclosing cache budget.
-        const auto remaining = WorkBudget::remaining_ms(90000);
-        WorkBudget network(cache ? std::min<uint64_t>(70000, remaining * 4 / 5) : remaining, UINT64_MAX);
-        for (size_t i = 0; i < urls.size(); ++i) {
-            log_line(is_builtin_source(url) ? "HaGeZi" : "更新", "拉取: %s", urls[i].c_str());
-            HttpValidators validators = cached ? previous.components[i].validators : HttpValidators{};
-            auto response = download_file_response(urls[i], parts[i], validators);
-            result.downloaded_bytes += response.bytes;
-            if (response.error.empty() && response.not_modified && cached &&
-                response.effective_url != previous.components[i].effective_url) {
-                log_line("更新", "304 最终地址与缓存不匹配，预算内重新完整下载: %s", urls[i].c_str());
-                response = download_file_response(urls[i], parts[i]);
-                result.downloaded_bytes += response.bytes;
-            }
-            if (!response.error.empty()) { fresh_error = response.error; result.download_failed = true; break; }
-            CachedComponent component;
-            if (response.not_modified) {
-                if (!cached) { fresh_error = "304_without_verified_cache"; result.download_failed = true; break; }
-                component = previous.components[i];
-                if (!response.validators.etag.empty()) component.validators.etag = response.validators.etag;
-                if (!response.validators.last_modified.empty()) component.validators.last_modified = response.validators.last_modified;
-                revalidated = true;
-            } else {
-                component.path = parts[i]; component.url = urls[i]; component.effective_url = response.effective_url;
-                component.bytes = response.bytes; component.validators = response.validators; component.fetched_at = time(nullptr);
-                // response.bytes includes retry bodies; the cached file is the
-                // final successful representation, not the request's total.
-                struct stat info {};
-                if (stat(component.path.c_str(), &info) || info.st_size <= 0) { fresh_error = "downloaded_file_unavailable"; result.download_failed = true; break; }
-                component.bytes = static_cast<uint64_t>(info.st_size);
-            }
-            components.push_back(std::move(component));
+    for (size_t i = 0; i < urls.size(); ++i) {
+        if (i >= download.responses.size()) { fresh_error = "source_download_incomplete"; result.download_failed = true; break; }
+        const auto &response = download.responses[i];
+        result.downloaded_bytes += response.bytes;
+        if (!response.error.empty()) { fresh_error = response.error; result.download_failed = true; break; }
+        CachedComponent component;
+        if (response.not_modified) {
+            if (!cached) { fresh_error = "304_without_verified_cache"; result.download_failed = true; break; }
+            component = previous.components[i];
+            if (!response.validators.etag.empty()) component.validators.etag = response.validators.etag;
+            if (!response.validators.last_modified.empty()) component.validators.last_modified = response.validators.last_modified;
+            revalidated = true;
+        } else {
+            component.path = parts[i]; component.url = urls[i]; component.effective_url = response.effective_url;
+            component.bytes = response.bytes; component.validators = response.validators; component.fetched_at = time(nullptr);
+            // response.bytes includes retry bodies; the cached file is the
+            // final successful representation, not the request's total.
+            struct stat info {};
+            if (stat(component.path.c_str(), &info) || info.st_size <= 0) { fresh_error = "downloaded_file_unavailable"; result.download_failed = true; break; }
+            component.bytes = static_cast<uint64_t>(info.st_size);
         }
+        components.push_back(std::move(component));
     }
     const auto validate = [&](const std::vector<CachedComponent> &selected) {
         RuleStreamLimits remaining = limits;

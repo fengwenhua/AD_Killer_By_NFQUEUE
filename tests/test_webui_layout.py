@@ -51,6 +51,7 @@ window.previewDaemonImageCurrent = true;
 window.previewStartFails = true;
 window.previewStartDelay = 0;
 window.previewMetrics = {status:'current',owner_verified:true,owner_pid:123,owner_started:100,owner_boot:'12345678-1234-1234-1234-123456789abc',age_ms:0,updated_at:1792610000,block_suffix_hits:120,block_exact_hits:34,blocked_retransmits:999,quic_rejects:99};
+window.previewSyncConcurrency=10;
 window.previewSettings = {mode:2,scope:0,autostart:false,block_quic:false,dev_mode:false};
 window.previewApplySerial=1;
 window.previewApplyResult='applied';
@@ -81,6 +82,8 @@ window.ksu = {
     else if(command.includes(" --jobs-list")) {
       errno=previewJobDiscoveryFails?1:0;text=JSON.stringify(errno?{status:'unverified'}:{status:'ok',jobs:previewJobs});
     }
+    else if(command.endsWith(" --sync-settings")) text=JSON.stringify({status:'ok',concurrency:previewSyncConcurrency,default:10,maximum:20});
+    else if(command.includes(" --sync-concurrency ")) { previewSyncConcurrency=Number(command.split(' ').pop());text=JSON.stringify({status:'ok',concurrency:previewSyncConcurrency,default:10,maximum:20}); }
     else if(command.includes(" --config-read ")) {
       const target=command.split(' ').pop();
       text=JSON.stringify({status:'ok',target,revision:'a'.repeat(64),content:target==='custom'?'ads.example.com\n@@safe.example.org\n':''});
@@ -268,6 +271,33 @@ new MutationObserver(()=>{
             expect(page.locator('#updateStatus')).to_contain_text('上次同步：')
             expect(page.locator('#syncBtn')).to_have_attribute('aria-busy', 'false')
             assert page.evaluate('syncToastHistory') == [], 'reopening repeated the manual completion toast'
+        page.close()
+
+
+def sync_settings_regression(browser, errors):
+    for theme in ('light', 'dark'):
+        page = browser.new_page(viewport={'width': 320, 'height': 852}, color_scheme=theme, reduced_motion='reduce')
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.add_init_script(mock_script())
+        page.goto((ROOT / 'module/webroot/index.html').as_uri())
+        page.locator('nav [data-page="settings"]').click()
+        expect(page.locator('[data-settings-entry="sync"]')).to_contain_text('10 个并发')
+        page.locator('[data-settings-entry="sync"]').click()
+        expect(page.locator('#syncConcurrency')).to_have_value('10')
+        page.locator('#syncConcurrency').fill('21')
+        page.locator('#saveSyncSettings').click()
+        expect(page.locator('#syncSettingsStatus')).to_contain_text('1–20')
+        assert not page.evaluate("previewCommands.some(c=>c.includes(' --sync-concurrency '))")
+        page.locator('#syncConcurrency').fill('20')
+        page.locator('#saveSyncSettings').click()
+        expect(page.locator('#syncSettingsStatus')).to_contain_text('下次同步时生效')
+        assert page.evaluate('previewSyncConcurrency') == 20
+        page.locator('#settingsBack').click()
+        expect(page.locator('[data-settings-entry="sync"]')).to_contain_text('20 个并发')
+        page.locator('[data-settings-entry="sync"]').click()
+        expect(page.locator('#syncConcurrency')).to_have_value('20')
+        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
+        assert not page.evaluate("previewCommands.some(c=>/ --(?:update-start|start|stop|reload)$/.test(c))")
         page.close()
 
 
@@ -819,7 +849,7 @@ def settings_and_status_regression(browser, errors, screenshots):
             expect(page.locator('#settingsMenu')).to_be_visible()
             page.wait_for_function("!document.querySelector('main').classList.contains('sliding')")
             assert halo.evaluate('e=>getComputedStyle(e).animationPlayState') == 'paused'
-            assert page.locator('button.settings-entry:visible').count() == 4
+            assert page.locator('button.settings-entry:visible').count() == 5
             assert not page.locator('#previewCharacters').is_visible()
             assert not page.locator('#aboutModule').is_visible()
             assert not page.locator('#releaseNotes').is_visible()
@@ -993,7 +1023,7 @@ def module_update_regression(browser, errors, screenshots=None):
         assert auto.locator('.settings-entry-icon').count() == 1
         labels=page.locator('#settingsMenu .settings-entry-label, #settingsMenu .switch-copy label').all()
         assert max(label.bounding_box()['x'] for label in labels)-min(label.bounding_box()['x'] for label in labels) <= 1
-        assert page.locator('#settingsMenu').evaluate("e=>Array.from(e.children).map(c=>c.classList.contains('settings-auto')?'auto':c.dataset.settingsEntry).join(',')") == 'preview,auto,updates,releases,about'
+        assert page.locator('#settingsMenu').evaluate("e=>Array.from(e.children).map(c=>c.classList.contains('settings-auto')?'auto':c.dataset.settingsEntry).join(',')") == 'sync,preview,auto,updates,releases,about'
         page.locator('[data-settings-entry="updates"]').click()
         assert not page.evaluate("previewCommands.some(c=>c.includes('--module-update-check'))")
         switch=page.locator('#updatePreview')
@@ -1408,6 +1438,7 @@ def main():
             cleanup_health_regression(browser, errors)
             apply_health_regression(browser, errors)
             historical_sync_notification_regression(browser, errors)
+            sync_settings_regression(browser, errors)
             background_job_recovery_regression(browser, errors)
             source_cache_regression(browser, errors)
             quic_setting_regression(browser, errors)

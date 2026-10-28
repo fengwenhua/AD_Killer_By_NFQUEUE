@@ -200,6 +200,7 @@ struct DownloadContext {
     bool write_failed = false;
     TransferCancellation cancellation;
     HttpResponseHeaders headers;
+    WorkBudget::Reservation *credit = nullptr;
 };
 
 size_t capture_download_header(char *data, size_t size, size_t count, void *userdata) {
@@ -222,6 +223,7 @@ size_t write_download(char *data, size_t size, size_t count, void *userdata) {
         context->bytes = context->maximum;
         return 0;
     }
+    if (context->credit && !context->credit->consume(bytes)) { context->too_large = true; return 0; }
     size_t written = fwrite(data, 1, bytes, context->file);
     context->bytes += bytes;
     if (written != bytes) context->write_failed = true;
@@ -248,7 +250,7 @@ bool valid_download_file(const std::string &path) {
 std::string download_via_libcurl(const std::string &url,
                                  const std::string &temp_path, size_t maximum = MAX_RULE_DOWNLOAD_BYTES,
                                  size_t *transferred = nullptr, const HttpValidators &request = {},
-                                 DownloadResponse *response = nullptr) {
+                                 DownloadResponse *response = nullptr, WorkBudget::Reservation *credit = nullptr) {
     if (transferred) *transferred = 0;
     const auto timeout_ms = WorkBudget::remaining_ms(300000);
     if (!timeout_ms) return "下载时间预算已耗尽";
@@ -269,6 +271,7 @@ std::string download_via_libcurl(const std::string &url,
     }
 
     DownloadContext context;
+    context.credit = credit;
     context.file = file;
     context.maximum = maximum;
     char error_buffer[256] = {0};
@@ -627,7 +630,7 @@ struct LibraryReply {
 std::string supervised_libcurl(const std::string &url, const std::string &temp_path, bool &unavailable,
                               const HttpValidators &request, DownloadResponse &response) {
     unavailable = false;
-    WorkBudget::Reservation body(MAX_RULE_DOWNLOAD_BYTES);
+    WorkBudget::Reservation body(MAX_RULE_DOWNLOAD_BYTES, true);
     if (WorkBudget::expired()) { body.settle(0); return "下载时间预算已耗尽"; }
     if (!body.amount()) return "累计下载正文预算已耗尽";
     int descriptors[2];
@@ -670,7 +673,7 @@ std::string supervised_libcurl(const std::string &url, const std::string &temp_p
         if (reply.available) {
             size_t transferred = 0;
             DownloadResponse received;
-            const auto error = download_via_libcurl(url, temp_path, body.amount(), &transferred, request, &received);
+            const auto error = download_via_libcurl(url, temp_path, body.amount(), &transferred, request, &received, &body);
             reply.bytes = transferred;
             reply.http_status = received.http_status;
             reply.flags = (received.not_modified ? 1u : 0u) | (received.transient ? 2u : 0u);

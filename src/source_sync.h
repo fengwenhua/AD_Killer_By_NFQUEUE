@@ -2,6 +2,7 @@
 
 #include "source_cache.h"
 #include "source_validator.h"
+#include "net.h"
 #include <set>
 
 struct SourceSyncResult {
@@ -12,10 +13,24 @@ struct SourceSyncResult {
     bool download_failed = false;
 };
 
+// Download processes own only their distinct files. Cache admission, parsing,
+// cache transactions and final publication remain in the coordinator process.
+struct SourceDownload {
+    CachedSource previous;
+    bool cached = false;
+    std::vector<std::string> parts;
+    std::vector<DownloadResponse> responses;
+    uint64_t elapsed_ms = 0;
+};
+SourceDownload prepare_source_download(const std::string &directory, const std::string &url,
+                                      SourceCache *cache, size_t first_part = 0);
+void fetch_source_download(const std::string &url, SourceDownload &download, bool use_cache);
+
 std::vector<std::string> source_component_urls(const std::string &url);
 std::string source_identity_key(const std::string &url);
 // Caller supplies an enclosing source/task WorkBudget and holds .update.lock.
 // Null cache is the test-only path: fresh requests, no cache reads or writes.
 SourceSyncResult synchronize_rule_source(const std::string &directory, const std::string &url,
                                          const RuleStreamLimits &limits, SourceCache *cache,
-                                         const std::set<std::string> &protected_keys);
+                                         const std::set<std::string> &protected_keys,
+                                         SourceDownload *prepared = nullptr);

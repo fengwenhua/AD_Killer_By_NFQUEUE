@@ -4,7 +4,8 @@ import UiIcon from '../components/UiIcon.vue';
 import ActionButton from '../components/ActionButton.vue';
 import SettingSwitch from '../components/SettingSwitch.vue';
 import { PREVIEW_MIN, PREVIEW_MAX } from '../composables/useUiPreferences.js';
-const props = defineProps({ moduleInfo: Object, preferences: Object, updates: Object });
+import { SYNC_MAX } from '../composables/useSyncSettings.js';
+const props = defineProps({ moduleInfo: Object, preferences: Object, updates: Object, syncSettings: Object });
 const active = ref(''), root = ref(null), heading = ref(null);
 const scrolled = ref(false);
 let scrollPane;
@@ -16,6 +17,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => scrollPane?.removeEventListener('scroll', trackScroll));
 const entries = [
+  { id: 'sync', title: '规则同步', icon: 'sync' },
   { id: 'preview', title: '内容预览', icon: 'rules' },
   { id: 'updates', title: '检查更新', icon: 'download' },
   { id: 'releases', title: '更新日志', icon: 'sync' },
@@ -64,12 +66,22 @@ async function show(id) {
         <button type="button" class="settings-entry" :data-settings-entry="entry.id" :aria-controls="'settings-' + entry.id" @click="show(entry.id)">
           <span class="settings-entry-icon"><UiIcon :name="entry.icon" /></span>
           <span class="settings-entry-label">{{ entry.title }}</span>
-          <span class="settings-entry-value" :data-update="entry.id === 'updates' && updates.available || undefined">{{ entry.id === 'preview' ? preferences.characters + ' 字符' : entry.id === 'updates' ? (updates.checking ? '检查中…' : updates.available ? '有更新' : '手动检查') : entry.id === 'releases' ? '最新发布' : 'v' + moduleInfo.version }}</span>
+          <span class="settings-entry-value" :data-update="entry.id === 'updates' && updates.available || undefined">{{ entry.id === 'sync' ? (syncSettings.ready ? syncSettings.count + ' 个并发' : '未读取') : entry.id === 'preview' ? preferences.characters + ' 字符' : entry.id === 'updates' ? (updates.checking ? '检查中…' : updates.available ? '有更新' : '手动检查') : entry.id === 'releases' ? '最新发布' : 'v' + moduleInfo.version }}</span>
           <UiIcon name="chevron" />
         </button>
       </template>
     </div>
     <div v-show="!!active" class="settings-detail">
+      <section v-show="active === 'sync'" id="settings-sync" class="card preview-settings" aria-labelledby="syncSettingsTitle">
+        <h2 id="syncSettingsTitle">规则同步</h2>
+        <form novalidate @submit.prevent="syncSettings.save">
+          <label for="syncConcurrency">同步并发数量</label>
+          <p id="syncConcurrencyHelp" class="subtle">默认 10，可设置 1–{{ SYNC_MAX }}。多个来源同时下载，全部校验通过后一次性更新规则。网络较慢或设备资源紧张时可调低。</p>
+          <div class="row"><input id="syncConcurrency" v-model="syncSettings.draft" class="search" type="number" inputmode="numeric" min="1" :max="SYNC_MAX" step="1" :disabled="!syncSettings.ready || syncSettings.busy" :aria-invalid="!!syncSettings.error" aria-describedby="syncConcurrencyHelp syncSettingsStatus"><ActionButton id="saveSyncSettings" variant="primary" :busy="syncSettings.busy" :disabled="!syncSettings.ready" @click="syncSettings.save">{{ syncSettings.busy ? '保存中…' : '保存设置' }}</ActionButton></div>
+          <p id="syncSettingsStatus" class="sync-note" :data-kind="syncSettings.error ? 'error' : 'success'" role="status">{{ syncSettings.error || syncSettings.message }}</p>
+          <button v-if="!syncSettings.ready" type="button" class="btn" :disabled="syncSettings.busy" @click="syncSettings.load">重新读取</button>
+        </form>
+      </section>
       <section v-show="active === 'preview'" id="settings-preview" class="card preview-settings" aria-labelledby="previewSettingsTitle">
         <h2 id="previewSettingsTitle">内容预览</h2>
         <form novalidate @submit.prevent="preferences.save">

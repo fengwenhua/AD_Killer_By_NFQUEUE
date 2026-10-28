@@ -27,7 +27,7 @@ bool valid_name(const std::string &name) {
     return name.size() <= 96 && name.size() > 4 && name.compare(0, 4, "job-") == 0 && name.find_first_not_of("0123456789-", 4) == std::string::npos;
 }
 bool part_name(const std::string &name) {
-    for (int index = 0; index < 2; ++index) {
+    for (int index = 0; index < 130; ++index) {
         const auto part = "source-download-" + std::to_string(index) + ".part";
         if (name == part) return true;
         const auto prefix = part + ".tmp.";
@@ -51,7 +51,7 @@ bool remove_parts(int fd) {
         const std::string name = item->d_name;
         if (name == "." || name == "..") continue;
         struct stat info {};
-        if (files.size() >= 4 || !part_name(name) || fstatat(fd, name.c_str(), &info, AT_SYMLINK_NOFOLLOW) ||
+        if (files.size() >= 260 || !part_name(name) || fstatat(fd, name.c_str(), &info, AT_SYMLINK_NOFOLLOW) ||
             !S_ISREG(info.st_mode) || info.st_uid != geteuid() || info.st_nlink != 1 || (info.st_mode & 0077)) { ok = false; break; }
         files.push_back(name);
     }

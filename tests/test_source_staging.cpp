@@ -50,6 +50,12 @@ int main(int argc, char **argv) {
     finish(children[1], base / "release-1");
     { SourceStaging next(base); assert(next.ok() && !fs::exists(stages[1])); }
     assert(!fs::exists(base / "source_staging"));
+    {
+        SourceStaging staging(base); assert(staging.ok());
+        for (int index : {0, 2, 40, 128, 129})
+            put(fs::path(staging.path()) / ("source-download-" + std::to_string(index) + ".part"));
+    }
+    assert(!fs::exists(base / "source_staging"));
     const auto outside = base / "outside";
     put(outside);
     fs::path unsafe;
