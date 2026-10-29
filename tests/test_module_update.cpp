@@ -33,6 +33,8 @@ int main() {
         assert(module_update::upgrade_allowed("1.2.2","1.2.2",installed,"stable") == (std::string(installed)=="preview"));
     }
     assert(!module_update::upgrade_allowed("1.2","1.1","preview","unknown"));
+    assert(module_update::upgrade_allowed("1.2.10","1.2.9","preview","preview"));
+    assert(!module_update::upgrade_allowed("1.2.9","1.2.9","preview","preview"));
     assert(module_update::asset_url("../bad").empty());
     char pattern[] = "/tmp/adk_module_update.XXXXXX";
     char *created = mkdtemp(pattern); assert(created);

@@ -30,6 +30,7 @@ test('same-version preview upgrades to stable, never in reverse or downwards; un
     assert.equal(upgradeAllowed({version:'1.2.2',preview:true},'1.2.2',channel),false);
     assert.equal(upgradeAllowed({version:'1.2.2',preview:false},'1.2.1',channel),true);
     assert.equal(upgradeAllowed({version:'1.2.1',preview:false},'1.2.2',channel),false);
+    assert.equal(upgradeAllowed({version:'1.2.10',preview:true},'1.2.9',channel),true);
   }
   for (const releases of [[fixture('1.2.2',true),fixture('1.2.2')],[fixture('1.2.2'),fixture('1.2.2',true)]])
     assert.equal(selectRelease(releases,true).preview,false);
