@@ -27,6 +27,7 @@ import stat
 
 from validate_listing import properties, unique_object, validate_manifest
 from release_receipt import Receipt, atomic_json, fingerprint
+from ci_policy import REQUIRED_JOBS
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tests'))
@@ -35,7 +36,6 @@ from validate_manager_update import validate_manager_update
 REPOSITORY = 'fengwenhua/AD_Killer_By_NFQUEUE'
 API = 'https://api.github.com/repos/' + REPOSITORY
 REPO = 'https://github.com/' + REPOSITORY
-REQUIRED_JOBS = {'host-tests', 'webui-layout', 'android-build'}
 MAX_DOWNLOAD = 128 * 1024 * 1024
 READ_ATTEMPTS = 4
 

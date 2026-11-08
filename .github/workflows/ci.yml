@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -14,11 +14,11 @@ permissions:
   contents: read
 
 jobs:
-  host-tests:
+  host-unit:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6 / node24
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 / node24
       - name: Install host dependencies
         run: sudo apt-get update && sudo apt-get install -y clang curl openssl iptables conntrack iproute2 util-linux kmod procps shellcheck zlib1g-dev
       - name: Shell syntax and static analysis
@@ -30,25 +30,37 @@ jobs:
         run: make test-contracts
       - name: Strict native host tests
         run: STRICT=1 make test-native
+      - name: Real kernel NFQUEUE IPv4/IPv6 integration
+        run: CXX=clang++ make test-nfqueue-integration
+      - name: Real manager freezer and daemon isolation regression
+        run: sudo env CXX=clang++ make test-cgroup-integration
+
+  host-download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 / node24
+      - name: Install host dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang curl openssl iptables conntrack iproute2 util-linux kmod procps shellcheck zlib1g-dev
       - name: Real HTTP/TLS download integration
         run: CXX=clang++ make test-download-integration
       - name: Real rule publishing and asynchronous update jobs
         run: sudo env CXX=clang++ make test-update-integration
+
+  host-sanitize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 / node24
+      - name: Install host dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang curl openssl iptables conntrack iproute2 util-linux kmod procps shellcheck zlib1g-dev
       - name: ASan and UBSan suite
         run: make test-native-sanitize
       - name: Parser fuzz smoke
         run: FUZZ_CXX=clang++ FUZZ_RUNS=1000 FUZZ_REQUIRE_LIBFUZZER=1 make fuzz-smoke
-      - name: Real kernel NFQUEUE IPv4/IPv6 integration
-        run: CXX=clang++ make test-nfqueue-integration
-      - name: Real engine routing and protocol integration
-        run: sudo env CXX=clang++ make test-engine-integration
-      - name: Real engine legacy iptables integration
-        run: sudo env CXX=clang++ IPTABLES_BACKEND=legacy make test-engine-integration
-      - name: Real manager freezer and daemon isolation regression
-        run: sudo env CXX=clang++ make test-cgroup-integration
       - name: Retain fuzz diagnostics and crash inputs
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6 / node24
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7 / node24
         with:
           name: AD_Killer_By_NFQUEUE-fuzz-smoke
           if-no-files-found: ignore
@@ -58,12 +70,44 @@ jobs:
             dist/fuzz/logs
             dist/fuzz/artifacts
 
+  engine-nft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 / node24
+      - name: Install host dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang curl openssl iptables conntrack iproute2 util-linux kmod procps shellcheck zlib1g-dev
+      - name: Real engine routing and protocol integration
+        run: sudo env CXX=clang++ IPTABLES_BACKEND=nft make test-engine-integration
+
+  engine-legacy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 / node24
+      - name: Install host dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang curl openssl iptables conntrack iproute2 util-linux kmod procps shellcheck zlib1g-dev
+      - name: Real engine legacy iptables integration
+        run: sudo env CXX=clang++ IPTABLES_BACKEND=legacy make test-engine-integration
+
+  host-tests:
+    needs: [host-unit, host-download, host-sanitize, engine-nft, engine-legacy]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 / node24
+      - name: Require every host shard to pass
+        env:
+          CI_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 scripts/ci_policy.py
+
   webui-layout:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6 / node24
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6 / node24
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 / node24
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7 / node24
         with:
           node-version: '24'
           cache: npm
@@ -73,7 +117,7 @@ jobs:
           npm --prefix frontend ci --include=dev --no-audit --no-fund
           make test-frontend
           RELEASE_CHANNEL=preview npm --prefix frontend run build -- --outDir ../dist/webui-channel-preview
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6 / node24
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7 / node24
         with:
           python-version: '3.13'
       - name: Install browser test dependencies
@@ -92,7 +136,7 @@ jobs:
         run: |
           python tests/test_webui_performance.py --verify
           python tests/test_webui_performance.py --verify --running
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6 / node24
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7 / node24
         if: always()
         with:
           name: AD_Killer_By_NFQUEUE-WebUI-preview
@@ -102,8 +146,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6 / node24
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6 / node24
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 / node24
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7 / node24
         with:
           node-version: '24'
           cache: npm
@@ -123,7 +167,7 @@ jobs:
           python3 tests/validate_module_zip.py dist/AD_Killer_By_NFQUEUE-v*.zip
           python3 tests/verify_checksum.py dist/AD_Killer_By_NFQUEUE-v*.zip
           python3 tests/validate_manager_update.py dist/AD_Killer_By_NFQUEUE-v*.zip
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6 / node24
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7 / node24
         with:
           name: AD_Killer_By_NFQUEUE-module
           path: |
@@ -139,7 +183,7 @@ jobs:
           python3 tests/verify_checksum.py dist/preview/AD_Killer_By_NFQUEUE-v*.zip
           python3 tests/validate_manager_update.py dist/preview/AD_Killer_By_NFQUEUE-v*.zip
           python3 tests/test_release_channels.py dist
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6 / node24
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7 / node24
         with:
           name: AD_Killer_By_NFQUEUE-module-preview
           path: |

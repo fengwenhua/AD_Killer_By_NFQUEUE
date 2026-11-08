@@ -7,10 +7,10 @@
 
 | 入口 | 内容 | 普通 CI 所属任务 |
 | --- | --- | --- |
-| `make test-native` | C++ 单元与使用编译夹具的 Python 行为测试 | host-tests，严格编译 |
-| `make test-native-sanitize` | 同一组原生测试，ASan/UBSan，UB 不恢复继续执行 | host-tests |
+| `make test-native` | C++ 单元与使用编译夹具的 Python 行为测试 | host-unit，严格编译 |
+| `make test-native-sanitize` | 同一组原生测试，ASan/UBSan，UB 不恢复继续执行 | host-sanitize |
 | `make test-frontend` | Node/Vue 单元、离线构建及产物契约 | webui-layout |
-| `make test-contracts` | Python 打包、生命周期、发布、采集器和测试编排验证 | host-tests |
+| `make test-contracts` | Python 打包、生命周期、发布、采集器和测试编排验证 | host-unit |
 
 纯契约组不依赖 Node 或已生成的 WebUI。原生组仍保留实际编译程序的行为回归，
 并非把其中的 Python 驱动删掉。浏览器、HTTP/TLS、规则/模块更新、NFQUEUE、
@@ -21,9 +21,36 @@ nft/legacy 引擎和冻结隔离门禁均保留。Android 的两次正式构建�
 Node 安装和两次前端构建。本地 `make test-rules` 的额外规则产物验证仍可使用。
 
 正式发布继续只接受 `.github/workflows/ci.yml` 的 main push/显式完整 CI，要求
-host-tests、webui-layout、android-build 全部成功，且该次运行的其他任务也无失败或
-跳过。本次未增加普通 CI job，所以必需 job 名不变。纯文档快速路径未启用。
+五个主机分组、host-tests 汇总、webui-layout、android-build 全部成功，且该次运行的
+其他任务也无失败或跳过。必需任务集合由 `scripts/ci_policy.py` 与发布工具共享，
+汇总任务显示成功也不能绕过缺失的分组。纯文档快速路径未启用。
 扩展 fuzz 工作流不能作为发布的 CI 输入，离线发布测试已覆盖此拒绝。
+
+## 2026-11-08：主机测试并行与 PR 去重
+
+基线为 v1.2.11 的 [CI 42183785057](https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/actions/runs/42183785057)：
+主机串行任务 1870 秒（31:10），Android 141 秒，前端 251 秒。主机中普通原生
+测试 115 秒、HTTP/TLS 78 秒、规则/更新 267 秒、ASan/UBSan 329 秒、fuzz 31 秒、
+NFQUEUE 6 秒、两轮引擎分别 488/485 秒、冻结隔离 53 秒。
+
+按独立 runner 分成以下五组，避免真实防火墙、冻结和卸载测试在同一系统并发争抢状态：
+
+| 分组 | 保留的测试 | 基线步骤时间之和，不含启动和排队 |
+| --- | --- | --- |
+| host-unit | Shell、Python 契约、严格原生、NFQUEUE、冻结隔离 | 约 3 分钟 |
+| host-download | HTTP/TLS、完整规则和异步更新集成 | 约 5 分 45 秒 |
+| host-sanitize | 完整 ASan/UBSan 和八入口 fuzz 烟测 | 约 6 分钟 |
+| engine-nft | 显式 nft 后端的完整引擎集成 | 约 8 分 8 秒 |
+| engine-legacy | legacy 后端的完整引擎集成 | 约 8 分 5 秒 |
+
+这五组同时调度；host-tests 在所有组结束后执行，任何失败、取消、跳过或缺少
+分组都返回失败。新增回归覆盖汇总 CLI 的退出状态，以及汇总为绿但某个组缺失/
+失败时发布工具必须拒绝的情况。没有缩短原测试、降低 fuzz 次数或取消 sanitizer、
+双栈/双后端、卸载和可复现构建。预期关键路径约 9—12 分钟，实际受 runner
+性能和排队影响，需要以新 CI 的实测结果为准；runner 总工作量与原方案接近。
+
+触发方式改为 main 的 push、PR 和手动运行，避免同一依赖分支 push 与 PR 同时
+产生两套完整测试。没有 PR 的开发分支可手动运行 CI；main 合并后仍会完整验证。
 
 ## 八个 fuzz 入口
 

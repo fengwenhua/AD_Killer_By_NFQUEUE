@@ -16,6 +16,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import publish_release as release
+from ci_policy import HOST_SHARDS
 import release_receipt
 from release_metadata import generate
 from package_module import write_checksum
@@ -198,6 +199,18 @@ class PublicationTests(unittest.TestCase):
         github.jobs[0]['conclusion'] = 'skipped'
         with self.assertRaises(ValueError):
             release.check_run(github, '123')
+
+    def test_green_aggregate_cannot_hide_missing_or_skipped_shards(self):
+        for name in HOST_SHARDS:
+            for state in ('missing', 'skipped', 'failure', 'cancelled'):
+                with self.subTest(name=name, state=state):
+                    github = FakeGitHub()
+                    if state == 'missing':
+                        github.jobs = [job for job in github.jobs if job['name'] != name]
+                    else:
+                        next(job for job in github.jobs if job['name'] == name)['conclusion'] = state
+                    self.assertTrue(any(job['name'] == 'host-tests' and job['conclusion'] == 'success' for job in github.jobs))
+                    with self.assertRaises(ValueError): release.check_run(github, '123')
 
     def test_preview_is_never_latest_or_stable(self):
         with zipfile.ZipFile(self.package, 'w') as archive:
