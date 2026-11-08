@@ -2,9 +2,12 @@
 from pathlib import Path
 import json
 import re
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from ci_policy import HOST_SHARDS, REQUIRED_JOBS
 
 
 def require_all(text: str, values: tuple[str, ...], label: str) -> None:
@@ -38,6 +41,21 @@ def main() -> None:
         'release/release-state.json', 'if: always()',
     ), 'explicit gated immutable publication')
     assert '\n  push:' not in publication, 'a push must not publish automatically'
+    jobs = dict(re.findall(r'^  ([a-z][a-z0-9-]*):\n(.*?)(?=^  [a-z]|\Z)', workflow, re.M | re.S))
+    assert REQUIRED_JOBS <= jobs.keys(), 'CI must declare every mandatory test job'
+    for shard in HOST_SHARDS:
+        assert not re.search(r'^    needs:', jobs[shard], re.M), 'host shards must execute independently'
+    needs = re.search(r'^    needs: \[([^\]]+)\]', jobs['host-tests'], re.M)
+    assert needs and {name.strip() for name in needs[1].split(',')} == HOST_SHARDS
+    require_all(jobs['host-tests'], ('if: always()', 'CI_NEEDS_JSON: ${{ toJSON(needs) }}',
+                                    'python3 scripts/ci_policy.py'), 'fail-closed host aggregate')
+    for target in ('test-contracts', 'test-native', 'test-native-sanitize', 'test-download-integration',
+                   'test-update-integration', 'test-nfqueue-integration', 'test-cgroup-integration', 'fuzz-smoke'):
+        assert len(re.findall(r'\bmake ' + re.escape(target) + r'(?=\s|$)', workflow)) == 1, 'test missing or duplicated: ' + target
+    assert len(re.findall(r'\bmake test-engine-integration(?=\s|$)', workflow)) == 2
+    assert 'IPTABLES_BACKEND=nft make test-engine-integration' in jobs['engine-nft']
+    assert 'IPTABLES_BACKEND=legacy make test-engine-integration' in jobs['engine-legacy']
+    require_all(workflow, ('branches: [main]', '  pull_request:', '  workflow_dispatch:'), 'one PR run and trusted main runs')
     require_all(workflow, (
         "RELEASE_CHANNEL=preview", "tests/test_release_channels.py",
         "tests/test_webui_update_channels.py", "name: AD_Killer_By_NFQUEUE-module-preview",
