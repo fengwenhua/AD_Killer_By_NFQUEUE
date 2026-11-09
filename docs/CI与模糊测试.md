@@ -52,6 +52,13 @@ NFQUEUE 6 秒、两轮引擎分别 488/485 秒、冻结隔离 53 秒。
 触发方式改为 main 的 push、PR 和手动运行，避免同一依赖分支 push 与 PR 同时
 产生两套完整测试。没有 PR 的开发分支可手动运行 CI；main 合并后仍会完整验证。
 
+实测结果：联合 PR 的 [CI 42468188786](https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/actions/runs/42468188786)
+八项全部通过，任务执行窗口 8:19，从创建到完成含调度为 8:38。两个 PR 合并后的
+[main CI 42469894622](https://github.com/fengwenhua/AD_Killer_By_NFQUEUE/actions/runs/42469894622)
+也八项全绿，创建时间 2026-11-08 10:05:06 UTC、完成时间 10:13:57 UTC，完整耗时
+8:51。相较原先约 31 分钟的串行关键路径，本轮实测缩短约 72%；不同 runner 和
+排队情况仍会影响后续耗时。这些是完整 CI 的验证结果，不代表手机性能变化。
+
 ## 八个 fuzz 入口
 
 `tests/run_fuzz_smoke.sh` 调用 `tests/fuzz/run.py`；种子由
