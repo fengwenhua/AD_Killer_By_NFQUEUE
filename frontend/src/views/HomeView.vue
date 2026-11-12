@@ -3,6 +3,7 @@ import ActionButton from '../components/ActionButton.vue';
 import SettingSwitch from '../components/SettingSwitch.vue';
 import DiagnosticConsole from '../components/DiagnosticConsole.vue';
 import UiIcon from '../components/UiIcon.vue';
+import SyncProgress from '../components/SyncProgress.vue';
 defineProps({ engine: Object, sync: Object, apps: Object, feedback: Object, moduleInfo: Object });
 </script>
 
@@ -38,8 +39,9 @@ defineProps({ engine: Object, sync: Object, apps: Object, feedback: Object, modu
           <div class="metric"><b id="ruleTotal">{{ engine.total === null ? '—' : engine.total.toLocaleString() }}</b><span>{{ engine.state?.running ? '生效快照规则' : '上次本地统计' }}</span></div>
           <div class="metric"><b id="allowTotal">{{ apps.selected.size }} 个</b><span id="appMetricLabel">{{ apps.noun }}应用</span></div>
         </div>
-        <ActionButton id="syncBtn" icon="sync" :busy="sync.busy" :disabled="!engine.ready" @click="sync.start"><span id="syncLabel">{{ sync.busy ? '正在查询…' : sync.uncertain ? '继续查询同步' : '同步开源规则' }}</span></ActionButton>
+        <ActionButton id="syncBtn" icon="sync" :busy="sync.busy" :disabled="!engine.ready" @click="sync.start"><span id="syncLabel">{{ sync.busy ? '正在同步…' : sync.uncertain ? '继续查询同步' : '同步开源规则' }}</span></ActionButton>
         <p id="updateStatus" class="sync-note" :data-kind="sync.kind" role="status">{{ sync.message }}</p>
+        <SyncProgress :progress="sync.progress" :busy="sync.busy" />
       </section>
       <section class="card settings-card">
         <h2>拦截与启动设置</h2>

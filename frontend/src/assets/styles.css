@@ -182,6 +182,31 @@ textarea { min-height: 180px; font: 14px/1.7 ui-monospace, Menlo, monospace; res
 .startup-diagnosis details { margin-top: 8px; color: var(--muted); font-size: 12px; }
 .startup-diagnosis pre { user-select: text; -webkit-user-select: text; }
 .source-history { margin-top: 10px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.setting-field { margin-top: 18px; }
+.sync-progress { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 14px; }
+.sync-progress-heading, .sync-source-heading { display: flex; gap: 10px; align-items: start; justify-content: space-between; font-size: 12px; }
+.sync-progress-heading > span, .sync-source-heading > span { flex: none; color: var(--muted); }
+.sync-progress progress { display: block; width: 100%; height: 7px; margin: 12px 0; accent-color: var(--main); }
+.sync-counts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; color: var(--muted); font-size: 12px; }
+.sync-counts b { color: var(--text); margin-left: 4px; }
+.sync-counts [data-failed] b { color: var(--bad); }
+.sync-source-results { margin-top: 14px; font-size: 12px; }
+.sync-source-results summary { cursor: pointer; padding: 6px 0; min-height: 44px; }
+.sync-source-results ul { list-style: none; padding: 0; margin: 8px 0 0; max-height: 300px; overflow: auto; overscroll-behavior: contain; }
+.sync-source-results li { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.sync-source-heading b { min-width: 0; overflow-wrap: anywhere; }
+.sync-source-results .subtle { margin: 6px 0 0; }
+.source-filter { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px 0; }
+.source-filter button { min-height: 44px; min-width: 44px; border: 1px solid var(--line); border-radius: 20px; padding: 7px 12px; font: inherit; font-size: 12px; background: var(--surface); color: var(--muted); }
+.source-filter button[aria-pressed='true'] { background: var(--main-soft); border-color: var(--main); color: var(--main); }
+.source-extra { margin: 10px 0; font-size: 12px; color: var(--muted); }
+.source-extra summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+.source-extra pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+.source-top .source-url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-sync-state { padding: 3px 8px; border-radius: 6px; background: var(--input); }
+.sync-source-heading [data-kind='error'], .source-sync-state[data-kind='error'] { color: var(--bad); }
+.sync-source-heading [data-kind='success'], .source-sync-state[data-kind='success'] { color: var(--ok); }
+.sync-source-heading [data-kind='warning'], .source-sync-state[data-kind='warning'] { color: var(--warn); }
 .source-sync-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-bottom: 4px; }
 .source-sync-state { font-weight: 600; }
 .rule-section { padding: 0; }
@@ -284,8 +309,15 @@ nav button.active .icon { stroke-width: 2; }
 .update-status p { font-size: 12px; line-height: 1.8; margin: 6px 0 0; overflow-wrap: anywhere; }
 .update-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .update-actions .btn { flex: 1 1 120px; }
-.update-confirm { display: grid; gap: 12px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
-.update-confirm p { font-size: 12px; line-height: 1.8; margin: 0; }
+.update-target { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 0; border-top: 1px solid var(--line); }
+.update-target small, .update-target b { display: block; }
+.update-target small { color: var(--muted); font-size: 11px; margin-bottom: 5px; }
+.update-target b { font-size: 22px; overflow-wrap: anywhere; }
+.update-dialog { width: min(440px, calc(100% - 32px)); max-height: 80dvh; overflow: auto; border: 1px solid var(--line); border-radius: 22px; padding: 24px; background: var(--surface); color: var(--text); box-shadow: 0 24px 80px #0005; }
+.update-dialog::backdrop { background: #0008; }
+.update-dialog h2 { font-size: 18px; overflow-wrap: anywhere; }
+.update-dialog p { font-size: 13px; line-height: 1.8; }
+.update-dialog .update-actions { margin-top: 20px; }
 .github-link { display: flex; align-items: center; gap: 12px; min-height: 80px; padding: 16px; border-radius: 18px; background: var(--input); color: var(--text); text-decoration: none; margin-top: 24px; }
 .github-link > span:not(.github-mark) { flex: 1; min-width: 0; }
 .github-mark { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: 13px; background: var(--surface); color: var(--main); }

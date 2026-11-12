@@ -340,13 +340,14 @@ size_t prune_update_jobs(const std::string &directory, size_t keep, const std::s
         const auto observed = observe_update_job(directory, finished[i].id, proc);
         if (observed.lease != 0) continue;
         bool safe = true;
-        for (const char *suffix : {".state", ".log", ".lease"}) {
+        for (const char *suffix : {".state", ".log", ".lease", ".progress"}) {
             struct stat info {};
             if (lstat((base + suffix).c_str(), &info)) { if (errno != ENOENT) safe = false; }
             else if (!S_ISREG(info.st_mode) || info.st_uid != geteuid() || info.st_nlink != 1) safe = false;
         }
         if (!safe || unlink((base + ".state").c_str())) continue;
         ++removed; unlink((base + ".log").c_str()); unlink((base + ".lease").c_str());
+        unlink((base + ".progress").c_str());
     }
     return removed;
 }

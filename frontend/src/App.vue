@@ -64,7 +64,7 @@ onMounted(async () => {
          search, native details state and in-flight job observers. -->
     <section id="home" class="page" aria-label="概览" :data-active="page === 'home' || undefined" :data-leaving="leaving.includes('home') || undefined" :inert="page !== 'home'"><HomeView :engine="engine" :sync="sync" :apps="apps" :feedback="feedback" :module-info="moduleInfo" /></section>
     <section id="apps" class="page" aria-label="应用名单" :data-active="page === 'apps' || undefined" :data-leaving="leaving.includes('apps') || undefined" :inert="page !== 'apps'"><AppsView :apps="apps" :engine="engine" /></section>
-    <section id="rules" class="page" aria-label="规则管理" :data-active="page === 'rules' || undefined" :data-leaving="leaving.includes('rules') || undefined" :inert="page !== 'rules'"><RulesView :sources="sources" :custom="custom" :previews="previews" /></section>
+    <section id="rules" class="page" aria-label="规则管理" :data-active="page === 'rules' || undefined" :data-leaving="leaving.includes('rules') || undefined" :inert="page !== 'rules'"><RulesView :sources="sources" :custom="custom" :previews="previews" :sync="sync" /></section>
     <section id="settings" class="page" aria-label="设置" :data-active="page === 'settings' || undefined" :data-leaving="leaving.includes('settings') || undefined" :inert="page !== 'settings'"><SettingsView :module-info="moduleInfo" :preferences="preferences" :updates="moduleUpdate" :sync-settings="syncSettings" /></section>
   </main>
   <SourcePreview :model="previews" />

@@ -39,12 +39,12 @@ void fetch_source_download(const std::string &url, SourceDownload &download, boo
     for (size_t i = 0; i < urls.size(); ++i) {
         log_line(is_builtin_source(url) ? "HaGeZi" : "更新", "拉取: %s", urls[i].c_str());
         const auto validators = download.cached ? download.previous.components[i].validators : HttpValidators{};
-        auto response = download_file_response(urls[i], download.parts[i], validators);
+        auto response = download_file_response(urls[i], download.parts[i], validators, !download.managed_retries);
         if (response.error.empty() && response.not_modified && download.cached &&
             response.effective_url != download.previous.components[i].effective_url) {
             log_line("更新", "304 最终地址与缓存不匹配，预算内重新完整下载: %s", urls[i].c_str());
             const auto bytes = response.bytes;
-            response = download_file_response(urls[i], download.parts[i]);
+            response = download_file_response(urls[i], download.parts[i], {}, !download.managed_retries);
             response.bytes += bytes;
         }
         const bool failed = !response.error.empty();
@@ -56,12 +56,13 @@ void fetch_source_download(const std::string &url, SourceDownload &download, boo
 
 SourceSyncResult synchronize_rule_source(const std::string &directory, const std::string &url,
                                          const RuleStreamLimits &limits, SourceCache *cache,
-                                         const std::set<std::string> &protected_keys, SourceDownload *prepared) {
+                                         const std::set<std::string> &protected_keys, SourceDownload *prepared, bool allow_fallback) {
     SourceSyncResult result;
     const auto urls = source_component_urls(url);
     const auto key = source_identity_key(url);
     auto local = prepared ? SourceDownload{} : prepare_source_download(directory, url, cache);
     auto &download = prepared ? *prepared : local;
+    result.downloaded_bytes = download.prior_downloaded_bytes;
     const auto &previous = download.previous;
     const bool cached = download.cached;
     std::string cache_error;
@@ -70,11 +71,12 @@ SourceSyncResult synchronize_rule_source(const std::string &directory, const std
         const std::vector<std::string> &parts;
         ~Cleanup() { if (!task_unconfirmed_network_writer) for (const auto &path : parts) unlink(path.c_str()); }
     } cleanup {parts};
-    if (!prepared) fetch_source_download(url, download, cache != nullptr);
+    if (!prepared && !download.reuse_fresh_cache) fetch_source_download(url, download, cache != nullptr);
     std::vector<CachedComponent> components;
     std::string fresh_error;
     bool revalidated = false;
-    for (size_t i = 0; i < urls.size(); ++i) {
+    if (download.reuse_fresh_cache && cached) components = previous.components;
+    for (size_t i = 0; !download.reuse_fresh_cache && i < urls.size(); ++i) {
         if (i >= download.responses.size()) { fresh_error = "source_download_incomplete"; result.download_failed = true; break; }
         const auto &response = download.responses[i];
         result.downloaded_bytes += response.bytes;
@@ -123,19 +125,21 @@ SourceSyncResult synchronize_rule_source(const std::string &directory, const std
     } else if (fresh_error.empty()) fresh_error = "source_budget_or_cancelled";
 
     if (fresh_error.empty() && result.validation.accepted) {
-        result.provenance = revalidated ? "revalidated" : "downloaded";
-        if (revalidated) {
-            result.cache_verified_at = time(nullptr);
+        result.provenance = download.reuse_fresh_cache ? "cache_fresh" : revalidated ? "revalidated" : "downloaded";
+        if (revalidated || download.reuse_fresh_cache) {
+            result.cache_verified_at = download.reuse_fresh_cache ? previous.verified_at : time(nullptr);
+            result.cache_age_seconds = time(nullptr) - result.cache_verified_at;
             result.cache_fetched_at = components.front().fetched_at;
             for (const auto &component : components) result.cache_fetched_at = std::min(result.cache_fetched_at, component.fetched_at);
         }
-        if (cache && cache->available() && !cache->commit(key, components, time(nullptr), protected_keys, cache_error))
+        // Local reuse never extends the network verification timestamp.
+        if (!download.reuse_fresh_cache && cache && cache->available() && !cache->commit(key, components, time(nullptr), protected_keys, cache_error))
             log_line("缓存", "来源已校验，但缓存未能确认保存: %s (%s)", url.c_str(), cache_error.c_str());
     } else {
         result.validation.accepted = false;
         result.validation.reason = fresh_error;
         if (cached && !previous.fresh(time(nullptr), cache->policy().fallback_seconds)) result.validation.reason += "; cache_expired";
-        if (cached && previous.fresh(time(nullptr), cache->policy().fallback_seconds) && !WorkBudget::expired() &&
+        if (allow_fallback && cached && previous.fresh(time(nullptr), cache->policy().fallback_seconds) && !WorkBudget::expired() &&
             !operation_closing() && !task_unconfirmed_network_writer && task_progress("validating")) {
             auto fallback = validate(previous.components);
             if (fallback.accepted) {

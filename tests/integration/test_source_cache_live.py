@@ -116,7 +116,7 @@ def main():
 
         try:
             command('--install')
-            command('--sync-concurrency', '1')  # Cache transaction scenarios require deterministic request order.
+            command('--sync-options', '1', '0', '1')  # Cache transaction scenarios require deterministic request order.
             configure('/a', '/b')
             command('--update')
             assert rules() == {'a.example.org', 'b.example.org'}
@@ -151,7 +151,7 @@ def main():
             server.requests.clear()
             command('--update', success=False)
             assert (DATA / 'rules.current').read_bytes() == before
-            assert [row[0] for row in server.requests] == ['/a', '/a'], 'failed complete set kept requesting later sources'
+            assert [row[0] for row in server.requests] == ['/a', '/a', '/b'], 'other sources must finish while the complete generation stays unchanged'
             assert 'cache_expired' in (DATA / 'source_stats.conf').read_text()
 
             # A future timestamp cannot authorize cached fallback after rollback.
@@ -169,10 +169,12 @@ def main():
             command('--update')
             assert server.requests[0] == ('/a', None) and rules() == {'a.example.org', 'b2.example.org'}
             before = (DATA / 'rules.current').read_bytes()
+            command('--sync-options', '1', '0', '0')  # Isolate admission integrity from deliberate retry recovery.
             server.corrupt = record('/a').parent / 'body-0'
             command('--update', success=False)
             assert (DATA / 'rules.current').read_bytes() == before and rules() == {'a.example.org', 'b2.example.org'}
             assert 'source_digest_changed' in (DATA / 'source_stats.conf').read_text()
+            command('--sync-options', '1', '0', '1')
             command('--update')  # Persistent damage is repaired by a full fetch.
             assert rules() == {'a.example.org', 'b2.example.org'}
 
@@ -194,6 +196,13 @@ def main():
             command('--update')
             assert rules() == {'keep.example.org', 'old.example.org'}
             group_before = tree()
+            command('--sync-options', '1', '30', '1')
+            server.requests.clear()
+            command('--update')
+            assert server.requests == [] and tree() == group_before, 'fresh pair issued HTTP or renewed cache metadata'
+            assert rules() == {'keep.example.org', 'old.example.org'}, 'fresh pair changed the whole-set difference'
+            assert 'provenance=cache_fresh\n' in (DATA / 'source_stats.conf').read_text()
+            command('--sync-options', '1', '0', '1')
             server.sources['/pro'] = (b'*.new.example.org\n*.fake.example.org\n', '"p2"', 'ok')
             server.sources['/fake'] = (b'*.fake.example.org\n', '"f1"', 'fail')
             command('--update')

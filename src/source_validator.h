@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <set>
 
 struct SourceRuleStats {
     size_t bytes = 0;
@@ -42,6 +43,7 @@ struct SourceUpdateReport {
     int64_t checked_at = 0;
     std::string provenance = "downloaded", warning;
     int64_t cache_verified_at = 0, cache_fetched_at = 0, cache_age_seconds = 0;
+    unsigned attempts = 0, max_attempts = 1;
 };
 
 struct PublishedSourceStats {
@@ -49,6 +51,7 @@ struct PublishedSourceStats {
     size_t unique_black = 0;
     size_t unique_white = 0;
 };
+std::set<std::string> retry_source_urls(const std::string &report);
 
 SourceValidationResult validate_rule_source(const std::string &content,
                                            SourceFormat format = SourceFormat::AUTO);

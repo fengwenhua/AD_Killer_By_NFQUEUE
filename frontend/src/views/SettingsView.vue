@@ -3,8 +3,9 @@ import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import UiIcon from '../components/UiIcon.vue';
 import ActionButton from '../components/ActionButton.vue';
 import SettingSwitch from '../components/SettingSwitch.vue';
+import ModuleUpdatePanel from '../components/ModuleUpdatePanel.vue';
 import { PREVIEW_MIN, PREVIEW_MAX } from '../composables/useUiPreferences.js';
-import { SYNC_MAX } from '../composables/useSyncSettings.js';
+import { SYNC_MAX, SYNC_INTERVAL_MAX, SYNC_RETRIES_MAX } from '../composables/useSyncSettings.js';
 const props = defineProps({ moduleInfo: Object, preferences: Object, updates: Object, syncSettings: Object });
 const active = ref(''), root = ref(null), heading = ref(null);
 const scrolled = ref(false);
@@ -66,7 +67,7 @@ async function show(id) {
         <button type="button" class="settings-entry" :data-settings-entry="entry.id" :aria-controls="'settings-' + entry.id" @click="show(entry.id)">
           <span class="settings-entry-icon"><UiIcon :name="entry.icon" /></span>
           <span class="settings-entry-label">{{ entry.title }}</span>
-          <span class="settings-entry-value" :data-update="entry.id === 'updates' && updates.available || undefined">{{ entry.id === 'sync' ? (syncSettings.ready ? syncSettings.count + ' 个并发' : '未读取') : entry.id === 'preview' ? preferences.characters + ' 字符' : entry.id === 'updates' ? (updates.checking ? '检查中…' : updates.available ? '有更新' : '手动检查') : entry.id === 'releases' ? '最新发布' : 'v' + moduleInfo.version }}</span>
+          <span class="settings-entry-value" :data-update="entry.id === 'updates' && updates.available || undefined">{{ entry.id === 'sync' ? (syncSettings.ready ? syncSettings.count + ' 并发 · ' + syncSettings.interval + ' 分钟' : '未读取') : entry.id === 'preview' ? preferences.characters + ' 字符' : entry.id === 'updates' ? (updates.checking ? '检查中…' : updates.available ? '有更新' : '手动检查') : entry.id === 'releases' ? '最新发布' : 'v' + moduleInfo.version }}</span>
           <UiIcon name="chevron" />
         </button>
       </template>
@@ -77,7 +78,10 @@ async function show(id) {
         <form novalidate @submit.prevent="syncSettings.save">
           <label for="syncConcurrency">同步并发数量</label>
           <p id="syncConcurrencyHelp" class="subtle">默认 10，可设置 1–{{ SYNC_MAX }}。多个来源同时下载，全部校验通过后一次性更新规则。网络较慢或设备资源紧张时可调低。</p>
-          <div class="row"><input id="syncConcurrency" v-model="syncSettings.draft" class="search" type="number" inputmode="numeric" min="1" :max="SYNC_MAX" step="1" :disabled="!syncSettings.ready || syncSettings.busy" :aria-invalid="!!syncSettings.error" aria-describedby="syncConcurrencyHelp syncSettingsStatus"><ActionButton id="saveSyncSettings" variant="primary" :busy="syncSettings.busy" :disabled="!syncSettings.ready" @click="syncSettings.save">{{ syncSettings.busy ? '保存中…' : '保存设置' }}</ActionButton></div>
+          <input id="syncConcurrency" v-model="syncSettings.draft" class="search" type="number" inputmode="numeric" min="1" :max="SYNC_MAX" step="1" :disabled="!syncSettings.ready || syncSettings.busy" aria-describedby="syncConcurrencyHelp syncSettingsStatus">
+          <div class="setting-field"><label for="syncInterval">同步时间间隔（分钟）</label><p id="syncIntervalHelp" class="subtle">默认 30。再次手动同步时，间隔内复用成功来源的缓存，失败来源继续重试；0 表示每次重新下载。</p><input id="syncInterval" v-model="syncSettings.intervalDraft" class="search" type="number" inputmode="numeric" min="0" :max="SYNC_INTERVAL_MAX" step="1" :disabled="!syncSettings.ready || syncSettings.busy" aria-describedby="syncIntervalHelp syncSettingsStatus"></div>
+          <div class="setting-field"><label for="syncRetries">失败重试次数</label><p id="syncRetriesHelp" class="subtle">默认 2，即首次失败后最多再试 2 次。每个来源独立重试；0 表示不重试。</p><input id="syncRetries" v-model="syncSettings.retriesDraft" class="search" type="number" inputmode="numeric" min="0" :max="SYNC_RETRIES_MAX" step="1" :disabled="!syncSettings.ready || syncSettings.busy" aria-describedby="syncRetriesHelp syncSettingsStatus"></div>
+          <div class="setting-field"><ActionButton id="saveSyncSettings" variant="primary" :busy="syncSettings.busy" :disabled="!syncSettings.ready" @click="syncSettings.save">{{ syncSettings.busy ? '保存中…' : '保存设置' }}</ActionButton></div>
           <p id="syncSettingsStatus" class="sync-note" :data-kind="syncSettings.error ? 'error' : 'success'" role="status">{{ syncSettings.error || syncSettings.message }}</p>
           <button v-if="!syncSettings.ready" type="button" class="btn" :disabled="syncSettings.busy" @click="syncSettings.load">重新读取</button>
         </form>
@@ -91,26 +95,7 @@ async function show(id) {
           <p id="previewSettingsStatus" class="sync-note" :data-kind="preferences.error ? 'error' : 'success'" role="status">{{ preferences.error || preferences.message }}</p>
         </form>
       </section>
-      <section v-show="active === 'updates'" id="settings-updates" class="card update-card" aria-labelledby="updateTitle">
-        <div class="section-heading"><h2 id="updateTitle">检查更新</h2><span class="badge">v{{ moduleInfo.version }}</span></div>
-        <p class="subtle update-intro">检查新版本，下载校验后由你确认安装。</p>
-        <SettingSwitch id="updatePreview" label="包含预览版" help="关闭时只检查正式版；预览版可能尚不稳定" :checked="updates.preview" :disabled="updates.busy || updates.checking" @change="updates.setPreview" />
-        <div class="update-status" :data-kind="updates.kind" :aria-busy="updates.checking || updates.busy">
-          <span class="update-status-icon"><UiIcon :name="updates.reboot ? 'info' : updates.available ? 'download' : 'shield'" /></span>
-          <div><b>{{ updates.reboot ? '等待重启' : updates.checking ? '正在检查' : updates.busy ? '正在处理' : updates.available ? '有新版本可用' : '版本检查' }}</b><p id="moduleUpdateStatus" role="status">{{ updates.message }}</p></div>
-        </div>
-        <p v-if="updates.checkedAt" class="sync-note update-cache-note">{{ updates.checkCached ? '缓存结果 · ' : '上次检查 · ' }}{{ cacheTime(updates.checkedAt) }}{{ updates.checkCached ? '，下载前会重新核验' : '' }}</p>
-        <div class="update-actions">
-          <ActionButton id="getUpdate" icon="sync" variant="primary" :busy="updates.checking" :disabled="updates.busy" @click="updates.check">{{ updates.checking ? '检查中…' : '检查更新' }}</ActionButton>
-          <ActionButton v-if="updates.observerPaused" id="resumeModuleJob" icon="sync" :busy="updates.busy" :disabled="updates.checking" @click="updates.resume">继续查询后台任务</ActionButton>
-          <ActionButton v-if="updates.available && !updates.reboot && !updates.observerPaused" id="downloadModuleUpdate" icon="download" :busy="updates.busy && !updates.canInstall" :disabled="updates.busy || updates.checking" @click="updates.download">下载并校验</ActionButton>
-          <ActionButton v-if="updates.canInstall && !updates.confirming" id="installModuleUpdate" icon="download" :busy="updates.busy" :disabled="updates.busy || updates.checking" @click="updates.confirming = true">安装 v{{ updates.ready }}</ActionButton>
-        </div>
-        <div v-if="updates.confirming" class="update-confirm" role="group" aria-label="确认安装模块">
-          <p>将通过根管理器安装 v{{ updates.ready }}，安装完成后需手动重启设备。</p>
-          <div class="update-actions"><ActionButton id="confirmModuleInstall" variant="primary" :busy="updates.busy" @click="updates.install">确认安装</ActionButton><button type="button" class="btn" :disabled="updates.busy" @click="updates.confirming = false">取消</button></div>
-        </div>
-      </section>
+      <ModuleUpdatePanel v-show="active === 'updates'" :active="active === 'updates'" :updates="updates" :module-info="moduleInfo" />
       <div v-show="active === 'about'" id="settings-about"><section id="aboutModule" class="card about-card" aria-labelledby="aboutTitle">
         <div class="section-heading"><h2 id="aboutTitle">关于模块</h2><UiIcon name="info" /></div>
         <div class="about-identity"><span class="about-mark"><UiIcon name="shield" /></span><div class="about-brand"><h3>AD Killer</h3><span class="brand-subtitle">by NFQUEUE</span></div></div>

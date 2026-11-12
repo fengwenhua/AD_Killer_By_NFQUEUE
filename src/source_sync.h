@@ -21,6 +21,10 @@ struct SourceDownload {
     std::vector<std::string> parts;
     std::vector<DownloadResponse> responses;
     uint64_t elapsed_ms = 0;
+    bool reuse_fresh_cache = false;
+    unsigned attempt = 1;
+    uint64_t prior_downloaded_bytes = 0;
+    bool managed_retries = false;
 };
 SourceDownload prepare_source_download(const std::string &directory, const std::string &url,
                                       SourceCache *cache, size_t first_part = 0);
@@ -33,4 +37,4 @@ std::string source_identity_key(const std::string &url);
 SourceSyncResult synchronize_rule_source(const std::string &directory, const std::string &url,
                                          const RuleStreamLimits &limits, SourceCache *cache,
                                          const std::set<std::string> &protected_keys,
-                                         SourceDownload *prepared = nullptr);
+                                         SourceDownload *prepared = nullptr, bool allow_fallback = true);

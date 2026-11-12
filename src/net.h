@@ -18,7 +18,7 @@ struct DownloadResponse {
 // A 304 is successful only for an explicit validator request. It never
 // replaces path; the caller must bind/validate its own cached representation.
 DownloadResponse download_file_response(const std::string &url, const std::string &path,
-                                        const HttpValidators &validators = {});
+                                        const HttpValidators &validators = {}, bool retry_transient = true);
 
 // 下载 HTTP(S) url 到 path(原子临时文件 + rename,单源最大 64 MiB)
 // 返回空串成功,否则错误信息

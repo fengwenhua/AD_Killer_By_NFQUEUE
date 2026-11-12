@@ -56,6 +56,7 @@ int main() {
         for (const char *id : {"100-1", "200-1", "300-1"}) {
             std::ofstream(directory + "/update-" + id + ".state") << "success:0\n";
             std::ofstream(directory + "/update-" + id + ".log") << id << "\n";
+            std::ofstream(directory + "/update-" + id + ".progress") << "source_count=1\n";
         }
         std::string running_id = "400-1";
         std::ofstream(directory + "/update-" + running_id + ".state")
@@ -70,10 +71,21 @@ int main() {
                "pruning should retain the newest finished jobs");
         expect(access((directory + "/update-400-1.state").c_str(), F_OK) == 0,
                "pruning must never remove a live running job");
+        expect(access((directory + "/update-100-1.progress").c_str(), F_OK) != 0 &&
+                   access((directory + "/update-200-1.progress").c_str(), F_OK) == 0,
+               "progress snapshots follow their retained job rather than leaking forever");
+        unlink((directory + "/update-200-1.progress").c_str());
+        expect(symlink("update-300-1.progress", (directory + "/update-200-1.progress").c_str()) == 0,
+               "unsafe progress fixture should be created");
+        expect(prune_update_jobs(directory, 1) == 0 &&
+                   access((directory + "/update-200-1.state").c_str(), F_OK) == 0 &&
+                   access((directory + "/update-300-1.progress").c_str(), F_OK) == 0,
+               "unsafe progress entries refuse the whole job cleanup without following links");
 
         for (const char *id : {"100-1", "200-1", "300-1", "400-1"}) {
             unlink((directory + "/update-" + id + ".state").c_str());
             unlink((directory + "/update-" + id + ".log").c_str());
+            unlink((directory + "/update-" + id + ".progress").c_str());
         }
         rmdir(directory.c_str());
     }

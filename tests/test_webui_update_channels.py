@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Real compiled stable/preview UIs; all Android operations are mocked."""
+import os
 from playwright.sync_api import expect, sync_playwright
 from test_webui_layout import ROOT, VERSION_FIXTURE, mock_script
 import json
@@ -8,7 +9,7 @@ import json
 def main():
     errors = []
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
+        browser = playwright.chromium.launch(executable_path=os.environ.get('ADK_TEST_BROWSER_PATH'))
         try:
             for installed, target in (('preview','stable'),('stable','stable'),('stable','preview'),('unknown','stable')):
                 path = ROOT / ('dist/webui-channel-preview/index.html' if installed == 'preview' else 'module/webroot/index.html')
@@ -50,18 +51,17 @@ def main():
                 expect(page.locator('#getUpdate')).to_be_enabled()
                 if installed == 'preview' and target == 'stable':
                     expect(page.locator('#moduleUpdateStatus')).to_contain_text('预览版升级正式版')
-                    page.locator('#downloadModuleUpdate').click()
-                    expect(page.locator('#installModuleUpdate')).to_be_enabled()
+                    page.locator('#updateModule').click()
+                    expect(page.locator('#moduleUpdateDialog')).to_be_visible()
+                    assert not page.evaluate("previewCommands.some(c=>c.includes(' --module-update-download '))")
                     assert not page.evaluate("previewCommands.some(c=>c.includes(' --module-update-install '))")
-                    page.locator('#installModuleUpdate').click()
                     page.locator('#confirmModuleInstall').click()
-                    expect(page.locator('#moduleUpdateStatus')).to_contain_text('安装成功')
-                    expect(page.locator('.update-status b')).to_have_text('等待重启')
+                    expect(page.locator('#moduleUpdateStatus')).to_contain_text('软重启')
+                    expect(page.locator('.update-status b')).to_have_text('安装完成，等待软重启')
                     assert page.evaluate("previewCommands.some(c=>c.endsWith(' --module-update-download '+previewVersion.version))")
                     assert page.evaluate("previewCommands.some(c=>c.endsWith(' --module-update-install '+previewVersion.version))")
                 else:
-                    expect(page.locator('#downloadModuleUpdate')).not_to_be_visible()
-                    expect(page.locator('#installModuleUpdate')).not_to_be_visible()
+                    expect(page.locator('#updateModule')).not_to_be_visible()
                     expect(page.locator('#moduleUpdateStatus')).to_contain_text('旧包未记录发布渠道' if installed == 'unknown' else '没有可升级版本')
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
                 page.close()

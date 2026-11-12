@@ -4,9 +4,11 @@ import { getStorage } from '../services/storage.js';
 import { lastJson, parseSourceSummary, publishedSummary, validJob } from '../domain/rules.js';
 import { discoverJobs, observeJob } from '../domain/jobs.js';
 import { useLifetime } from './useLifetime.js';
+import { syncProgress as parseProgress } from '../domain/syncProgress.js';
 
-export function useSync(api, feedback, history, refresh, storage = getStorage()) {
+export function useSync(api, feedback, history, refresh, storage = getStorage(), pollMs = 1000) {
   const life = useLifetime();
+  const progress = ref(null);
   const busy = ref(false), uncertain = ref(false), pendingId = ref('');
   const message = ref('同步完成后保存到本地，并更新当前规则。'), kind = ref('');
   let tracking, pendingNotificationId = '';
@@ -19,7 +21,7 @@ export function useSync(api, feedback, history, refresh, storage = getStorage())
   async function start() {
     if (busy.value) return;
     if (uncertain.value) return resume(); // Read-only retry, never blind resubmission.
-    busy.value = true; status('正在核实后台任务…');
+    busy.value = true; progress.value = null; status('正在核实后台任务…');
     try {
       const found = await discover();
       if (!life.active || found.cancelled) return;
@@ -48,16 +50,20 @@ export function useSync(api, feedback, history, refresh, storage = getStorage())
     status(type === 'source' ? '发现后台来源测试，正在核实其结束状态；尚未同步规则。' : notify ? '后台正在下载与校验规则…' : '正在读取上次同步结果…');
     tracking = (async () => {
       const outcome = await observeJob(api, id, life, {
-        types: ['rules', 'source'],
+        types: [type], interval: pollMs,
         onLog(chunk) {
           if (chunk.reset && ['rotated', 'tail', 'truncated'].includes(chunk.reason)) feedback.log('日志已轮转或已跳至末尾，较早内容未完整显示。');
           if (chunk.delta) feedback.log(chunk.delta);
         },
         onState(state, text, logError) {
+          if (type === 'rules') {
+            const value = parseProgress(state.progress, id, state.status);
+            if (value) { progress.value = value; history.value = value.sources; }
+          }
           if (state.status === 'running') {
             notify = true;
             if (type === 'rules') pendingNotificationId = id;
-            status((type === 'source' ? '来源测试仍在后台运行' : text.trim().split(/\r?\n/).pop()?.replace(/^\[[^\]]*\]\s*\[[^\]]*\]\s*/, '') || '后台正在处理规则') + (logError ? '；日志片段暂不可用，任务状态已读取。' : ''));
+            status((type === 'source' ? '来源测试仍在后台运行' : progress.value?.title || text.trim().split(/\r?\n/).pop()?.replace(/^\[[^\]]*\]\s*\[[^\]]*\]\s*/, '') || '后台正在处理规则') + (logError ? '；日志片段暂不可用，任务状态已读取。' : ''));
           }
         },
         onRetry: () => status('暂时无法核实任务状态，正在退避重试；不会重复同步。', 'warning'),
@@ -74,20 +80,27 @@ export function useSync(api, feedback, history, refresh, storage = getStorage())
         await refresh(); return;
       }
       const ok = state.status === 'success' && state.exit_code === 0;
-      const report = parseSourceSummary(await api.readFile(PATHS.sources));
+      const sourceText = await api.readFile(PATHS.sources);
+      const report = parseSourceSummary(sourceText);
       if (!life.active) return;
-      if (report?.head.job_id === id) history.value = report.sources;
+      if (report?.head.job_id === id) {
+        history.value = report.sources;
+        progress.value = parseProgress(sourceText, id, state.status) || progress.value;
+      }
       const summary = ok ? publishedSummary(report, text, id) : null;
       const partial = ok && (summary ? summary.partial : /下载失败:|来源内容拒绝:|来源累计资源上限|注意：部分来源失败/.test(text));
       const cached = ok && (summary ? summary.cached > 0 : /整组复用.*缓存/.test(text));
-      const failure = text.trim().split(/\r?\n/).reverse().find(line => /失败|拒绝|错误|无法|不可用|超限/.test(line));
-      const final = ok ? summary?.message || (partial ? '部分来源失败，成功来源已合并保存；请查看诊断日志。' : cached ? '规则已同步，部分来源使用缓存；请查看来源核验时间。' : '规则同步任务已完成；请核实概览中的生效状态。') : state.status === 'interrupted' ? '更新进程意外中断，发布结果未确认；请核查当前规则。' : '同步失败：' + (failure || '请展开诊断日志查看详情');
+      const notUpdated = progress.value?.phase === 'incomplete_sources';
+      const final = ok ? summary?.message || (partial ? '部分来源失败，成功来源已合并保存；请查看来源结果。' : cached ? '规则已同步，部分来源使用缓存；下次会重试下载。' : '规则已保存；可在概览核实当前生效状态。') :
+        state.status === 'interrupted' ? '同步进程已中断，规则更新结果未确认；请核查概览状态。' :
+        notUpdated ? `${progress.value.failed} 个来源未通过，${progress.value.ready} 个已准备好。本次规则未更新，仍使用原规则；可处理失败来源后再次同步。` :
+        '同步未完成，请查看来源结果或诊断日志。';
       const finalKind = ok ? partial || cached ? 'warning' : 'success' : 'error';
       const resultMessage = (notify ? '' : '上次同步：') + final;
       feedback.log(resultMessage, finalKind === 'success' ? 'ok' : finalKind === 'error' ? 'error' : '');
       status(resultMessage + (outcome.logError ? ' 日志片段未能完整读取。' : ''), finalKind);
       if (notify) {
-        if (!ok) feedback.consoleOpen.value = true;
+        if (!ok && !progress.value) feedback.consoleOpen.value = true;
         feedback.toast(ok ? partial ? '同步完成，但部分来源失败' : cached ? '规则已同步，部分来源使用缓存' : '规则已同步完成' : '同步失败');
       }
       if (pendingNotificationId === id) pendingNotificationId = '';
@@ -115,5 +128,5 @@ export function useSync(api, feedback, history, refresh, storage = getStorage())
     } catch { if (life.active) unknown('后台任务恢复结果未确认，请继续查询。'); }
     finally { if (life.active && !tracking) busy.value = false; }
   }
-  return { busy, uncertain, pendingId, message, kind, start, resume };
+  return { progress, busy, uncertain, pendingId, message, kind, start, resume };
 }

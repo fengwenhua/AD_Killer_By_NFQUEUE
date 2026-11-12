@@ -105,16 +105,26 @@ def main():
             assert (result.returncode == 0) == success, (args, result.stdout, result.stderr)
             return result.stdout
 
+        def observe_job(id):
+            # The owner can exit between the journal read and process identity
+            # query. That conservative unverified response is not a terminal
+            # result; keep observing without ever resubmitting an installer.
+            result = subprocess.run([str(binary), '--update-status', id], capture_output=True, text=True, timeout=25)
+            value = json.loads(result.stdout)
+            assert value['job_id'] == id
+            assert result.returncode == 0 or (result.returncode == 1 and value['status'] == 'unverified'), (value, result.stderr)
+            return value
+
         def job(action, success=True, channel=None):
             data = json.loads(command(action, '1.1', *([channel] if channel else [])))
             assert data['status'] == 'started'
             for _ in range(200):
-                state = json.loads(command('--update-status', data['job_id']))
-                if state['status'] != 'running':
+                state = observe_job(data['job_id'])
+                if state['status'] not in ('running', 'unverified'):
                     assert state['status'] == ('success' if success else 'failed'), state
                     return
                 time.sleep(.025)
-            raise AssertionError('module update job timed out')
+            raise AssertionError(('module update job timed out', state))
 
         try:
             DATA.parent.mkdir(parents=True, exist_ok=True)
@@ -193,7 +203,9 @@ def main():
                     break
                 time.sleep(.025)
             else:
-                raise AssertionError('slow manager did not start')
+                raise AssertionError(('slow manager did not start',
+                                      command('--update-status', active),
+                                      (DATA / 'update_jobs' / f'update-{active}.log').read_text()[-4000:]))
             time.sleep(.2)  # Exceed the warning threshold with closed stdout.
             before_uninstall = (DATA/'state.conf').read_bytes()
             blocked = json.loads(command('--uninstall', success=False))
@@ -202,10 +214,10 @@ def main():
             assert json.loads(command('--update-status', active))['phase'] == 'installing'
             (DATA/'fake-manager-release').touch()
             for _ in range(200):
-                completed = json.loads(command('--update-status', active))
+                completed = observe_job(active)
                 if completed['status'] == 'success':
                     break
-                assert completed['status'] == 'running', completed
+                assert completed['status'] in ('running', 'unverified'), completed
                 time.sleep(.025)
             else:
                 raise AssertionError('slow manager did not complete')

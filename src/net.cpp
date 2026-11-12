@@ -1095,9 +1095,9 @@ static DownloadResponse download_once(const std::string &url, const std::string 
     return response;
 }
 
-DownloadResponse download_file_response(const std::string &url, const std::string &path, const HttpValidators &request) {
+DownloadResponse download_file_response(const std::string &url, const std::string &path, const HttpValidators &request, bool retry_transient) {
     auto response = download_once(url, path, request);
-    if (!response.error.empty() && response.transient && WorkBudget::active &&
+    if (retry_transient && !response.error.empty() && response.transient && WorkBudget::active &&
         WorkBudget::remaining_ms(1000) > 400 && WorkBudget::remaining_bytes(1) &&
         !task_unconfirmed_network_writer && !operation_closing()) {
         const auto first_bytes = response.bytes;

@@ -60,6 +60,8 @@ def main():
     worker.start()
     try:
         command("--install")
+        # This fixture changes HTTP content on every click to exercise publishing/GC.
+        command("--sync-options", "10", "0", "0")
         defaults = json.loads(command("--sources-list"))
         recipe_count=sum(line.startswith('RULE_SOURCE(') for line in (Path(__file__).resolve().parents[2]/'src/rule_recipe.inc').read_text().splitlines())
         assert len(defaults["sources"]) == recipe_count + 1

@@ -161,6 +161,8 @@ static int cmd_install() {
                           "version=2\n"
                           "source_defaults_version=1\n"
                           "sync_concurrency=10\n"
+                          "sync_interval_minutes=30\n"
+                          "sync_retries=2\n"
                           "mode=2\n"
                           "scope=0\n"
                           "dev_mode=true\n"
@@ -863,6 +865,8 @@ static int cmd_update(const std::string &test_url = "") {
         return 2;
     }
     const int concurrency = test_url.empty() ? sync_concurrency_value(read_conf_value(FILE_STATE_CONF, "sync_concurrency")) : 1;
+    const int interval = test_url.empty() ? sync_interval_value(read_conf_value(FILE_STATE_CONF, "sync_interval_minutes")) : 0;
+    const unsigned retries = sync_retries_value(read_conf_value(FILE_STATE_CONF, "sync_retries"));
     auto collect_history = [] {
         struct stat info {};
         if (lstat(DIR_RULESETS, &info) && errno == ENOENT) return;
@@ -912,9 +916,22 @@ static int cmd_update(const std::string &test_url = "") {
     size_t source_index = 0;
     PublishedSourceStats published;
     const char *update_job = getenv("ADK_NFQ_UPDATE_JOB");
+    const std::string progress_path = update_job && valid_update_job_id(update_job) && task_lease_fd >= 0 ?
+        std::string(DIR_UPDATE_JOBS) + "/update-" + update_job + ".progress" : "";
+    const auto save_progress = [&](const char *phase) {
+        if (progress_path.empty()) return;
+        const auto text = serialize_source_reports(source_reports, phase, now_epoch(), published, update_job);
+        if (text.size() <= 512u * 1024u) write_file_volatile_atomic(progress_path.c_str(), text);
+    };
+    for (size_t i = 0; i < urls.size(); ++i) {
+        source_reports[i].url = urls[i]; source_reports[i].status = "queued";
+        source_reports[i].max_attempts = retries + 1;
+    }
+    save_progress("processing");
     auto record_source_report = [&](SourceUpdateReport &report) {
         report.checked_at = now_epoch();
         source_reports[source_index] = report;
+        save_progress("processing");
     };
 
     auto save_source_reports = [&](const char *publish_status) {
@@ -923,6 +940,7 @@ static int cmd_update(const std::string &test_url = "") {
             update_job ? update_job : "");
         if (!write_file_atomic(FILE_SOURCE_STATS, report))
             log_line("更新", "来源统计写入失败: %s", FILE_SOURCE_STATS);
+        save_progress(publish_status);
     };
     std::set<std::string> cache_keys;
     std::unique_ptr<SourceCache> cache;
@@ -939,8 +957,16 @@ static int cmd_update(const std::string &test_url = "") {
             log_line("缓存", "来源缓存不可用或清理未确认，本次仍可完整下载: %s", cache_error.c_str());
     }
 
-    log_line("更新", "并发同步：最多 %d 个来源，下载后按完整来源集校验发布", concurrency);
-    SourcePrefetch prefetch(urls, source_staging.path(), cache.get(), concurrency, source_ms, task_budget);
+    std::string prior_reports;
+    if (test_url.empty()) read_regular_bounded(FILE_SOURCE_STATS, prior_reports, 512u * 1024u);
+    log_line("更新", "并发同步：最多 %d 个来源，成功缓存 %d 分钟，失败最多重试 %u 次", concurrency, interval, retries);
+    SourcePrefetch prefetch(urls, source_staging.path(), cache.get(), concurrency, source_ms, task_budget,
+        interval * 60, retries, retry_source_urls(prior_reports), [&](size_t i, bool cached, unsigned attempt) {
+            source_reports[i].status = cached ? "validating" : "downloading";
+            source_reports[i].attempts = attempt;
+            source_reports[i].provenance = cached ? "cache_fresh" : "downloaded";
+            save_progress("processing");
+        });
     SourceDownload download;
     while (prefetch.next(source_index, download)) {
         const auto &url = urls[source_index];
@@ -948,14 +974,22 @@ static int cmd_update(const std::string &test_url = "") {
         if (!task_progress("downloading")) return 1;
         WorkBudget source_budget(source_ms - std::min(source_ms, download.elapsed_ms), is_builtin_source(url) ?
             128u * 1024u * 1024u : MAX_RULE_INPUT_BYTES);
+        const auto validation_started = WorkBudget::Clock::now();
+        source_reports[source_index].status = "validating";
+        save_progress("processing");
         SourceUpdateReport report;
         report.url = url;
+        report.attempts = download.attempt; report.max_attempts = retries + 1;
         SourceFormat format = recipe_source_format(url);
         report.format = is_builtin_source(url) ? "hagezi-pro-minus-fake" : source_format_name(format);
         RuleStreamLimits source_limits;
         source_limits.output_bytes = MAX_RULE_DECOMPRESSED_BYTES - aggregate_content_bytes;
         source_limits.lines = MAX_RULE_LINES - aggregate_source_lines;
-        auto sync = synchronize_rule_source(source_staging.path(), url, source_limits, cache.get(), cache_keys, &download);
+        // Keep time to validate an already verified cache instead of spending
+        // the last fraction of a source deadline on another network round.
+        const bool fallback_now = download.attempt > retries || (download.cached &&
+            WorkBudget::remaining_ms(10000) < std::min<uint64_t>(5000, source_ms / 3) + 250 * download.attempt);
+        auto sync = synchronize_rule_source(source_staging.path(), url, source_limits, cache.get(), cache_keys, &download, fallback_now);
         auto validation = std::move(sync.validation);
         report.downloaded_bytes = sync.downloaded_bytes;
         report.provenance = sync.provenance; report.warning = sync.warning;
@@ -972,12 +1006,18 @@ static int cmd_update(const std::string &test_url = "") {
             report.reason = "cancelled_or_time_budget";
         }
         if (!validation.accepted) {
+            const auto elapsed = download.elapsed_ms + static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                WorkBudget::Clock::now() - validation_started).count());
+            if (report.reason.find("limit") == std::string::npos && prefetch.retry(source_index, elapsed, sync.downloaded_bytes)) {
+                log_line("更新", "来源失败，独立重试: %s (%s)", url.c_str(), report.reason.c_str());
+                continue;
+            }
             report.status = sync.download_failed && !is_builtin_source(url) ? "download_error" : "content_rejected";
             log_line("更新", "来源内容拒绝: %s (%s,有效率 %.2f%%)",
                      url.c_str(), validation.reason.c_str(),
                      validation.stats.valid_ratio_ppm / 10000.0);
             record_source_report(report);
-            break; // no complete generation is possible; stop further requests
+            continue; // Cache other successes so the next sync need not redownload them.
         }
         size_t aggregate_bytes = hosts_rules.size() + adguard_rules.size();
         size_t source_bytes = validation.hosts_rules.size() +
@@ -1008,11 +1048,13 @@ static int cmd_update(const std::string &test_url = "") {
 
     prefetch.stop(); // Reap/cancel every outstanding writer before staging or returning.
     for (size_t i = 0; i < urls.size(); ++i) {
-        if (!source_reports[i].status.empty()) continue;
+        if (source_reports[i].status == "accepted" || source_reports[i].status == "download_error" ||
+            source_reports[i].status == "content_rejected") continue;
         SourceUpdateReport skipped;
         skipped.url = urls[i]; skipped.status = prefetch.started(i) ? "content_rejected" : "not_attempted";
         skipped.format = is_builtin_source(urls[i]) ? "hagezi-pro-minus-fake" : source_format_name(recipe_source_format(urls[i]));
         skipped.reason = prefetch.started(i) ? "parallel_source_cancelled" : "earlier_source_failed_or_budget_cancelled";
+        skipped.attempts = source_reports[i].attempts; skipped.max_attempts = retries + 1;
         source_index = i;
         record_source_report(skipped);
     }
@@ -1046,6 +1088,7 @@ static int cmd_update(const std::string &test_url = "") {
     }
 
     // 两个 gzip 先进入不可见 staging,用真实规则加载器校验后只切换一次指针。
+    save_progress("publishing");
     if (!task_progress("validating")) return 1;
     std::string gz_hosts, gz_adguard;
     // A source set may legitimately contain only one category (the default
@@ -1146,13 +1189,17 @@ static std::string update_job_path(const std::string &job_id, const char *suffix
 static std::string update_job_json(const std::string &id, const UpdateJobObservation &job) {
     const auto &state = job.state;
     const bool terminal = job.status == "success" || job.status == "failed" || job.status == "interrupted";
+    std::string progress;
+    if ((state.type == "rules" || state.type == "source") &&
+        read_regular_bounded(update_job_path(id, ".progress"), progress, 512u * 1024u) != BoundedRead::OK) progress.clear();
     return "{\"status\": " + source_json_string(job.status) + ", \"job_id\": " + source_json_string(id) +
         ", \"exit_code\": " + (terminal ? std::to_string(job.status == "interrupted" ? 255 : state.exit_code) : "null") +
         ",\"type\":" + source_json_string(state.type) + ",\"phase\":" + source_json_string(state.phase) +
         ",\"target\":" + source_json_string(state.target) + ",\"channel\":" + source_json_string(state.channel) +
         ",\"started_at\":" + std::to_string(state.created_at) + ",\"updated_at\":" + std::to_string(state.updated_at) +
         ",\"reason\":" + source_json_string(job.reason.empty() ? state.reason : job.reason) +
-        ",\"lease_active\":" + (job.lease < 0 ? "null" : job.lease ? "true" : "false") + "}";
+        ",\"lease_active\":" + (job.lease < 0 ? "null" : job.lease ? "true" : "false") +
+        (progress.empty() ? "" : ",\"progress\":" + source_json_string(progress)) + "}";
 }
 
 static int cmd_jobs_list() {
@@ -1500,9 +1547,11 @@ static int cmd_diagnose() {
 }
 
 static int cmd_sync_settings() {
-    printf("{\"status\":\"ok\",\"concurrency\":%d,\"default\":%d,\"maximum\":%d}\n",
+    printf("{\"status\":\"ok\",\"concurrency\":%d,\"default\":%d,\"maximum\":%d,\"interval_minutes\":%d,\"retries\":%d}\n",
         sync_concurrency_value(read_conf_value(FILE_STATE_CONF, "sync_concurrency")),
-        SYNC_CONCURRENCY_DEFAULT, SYNC_CONCURRENCY_MAX);
+        SYNC_CONCURRENCY_DEFAULT, SYNC_CONCURRENCY_MAX,
+        sync_interval_value(read_conf_value(FILE_STATE_CONF, "sync_interval_minutes")),
+        sync_retries_value(read_conf_value(FILE_STATE_CONF, "sync_retries")));
     return 0;
 }
 static int cmd_sync_concurrency(const char *argument) {
@@ -1514,6 +1563,38 @@ static int cmd_sync_concurrency(const char *argument) {
         puts("{\"status\":\"error_storage\",\"message\":\"并发设置保存未确认，请重新读取核实\"}"); return 1;
     }
     return cmd_sync_settings(); // Next sync only; no daemon reload or start.
+}
+
+static int cmd_sync_options(const char *count_arg, const char *interval_arg, const char *retries_arg) {
+    int count = 0, interval = 0, retries = 0;
+    if (!parse_integer_arg(count_arg, count) || count < 1 || count > SYNC_CONCURRENCY_MAX ||
+        !parse_integer_arg(interval_arg, interval) || interval < 0 || interval > SYNC_INTERVAL_MAX ||
+        !parse_integer_arg(retries_arg, retries) || retries < 0 || retries > SYNC_RETRIES_MAX) {
+        puts("{\"status\":\"error_argument\",\"message\":\"并发须为 1–20，间隔须为 0–1440 分钟，重试须为 0–5 次\"}"); return 1;
+    }
+    if (!ensure_dirs()) return 1;
+    ExclusiveFileLock lock(STATE_LOCK_FILE, true, 1000);
+    std::string content;
+    if (!lock.ok() || read_regular_bounded(FILE_STATE_CONF, content, 1024u * 1024u) == BoundedRead::ERROR ||
+        content.find('\0') != std::string::npos) {
+        puts("{\"status\":\"error_storage\",\"message\":\"同步设置无法读取，请稍后重试\"}"); return 1;
+    }
+    std::istringstream input(content); std::ostringstream output; std::string line;
+    while (std::getline(input, line)) {
+        if (line.compare(0, 17, "sync_concurrency=") == 0 || line.compare(0, 22, "sync_interval_minutes=") == 0 ||
+            line.compare(0, 13, "sync_retries=") == 0) continue;
+        output << line << '\n';
+    }
+    output << "sync_concurrency=" << count << "\nsync_interval_minutes=" << interval << "\nsync_retries=" << retries << '\n';
+    const auto text = output.str();
+    if (text.size() > 1024u * 1024u) {
+        puts("{\"status\":\"error_storage\",\"message\":\"同步配置过大，未保存\"}"); return 1;
+    }
+    const auto saved = write_file_durable_atomic(FILE_STATE_CONF, text);
+    if (!saved.committed || !saved.durable) {
+        puts("{\"status\":\"error_storage\",\"message\":\"同步设置保存未确认，请重新读取核实\"}"); return 1;
+    }
+    return cmd_sync_settings();
 }
 
 // ---------------------------------------------------------------------------
@@ -1634,8 +1715,9 @@ static void usage() {
             "  AD_Killer_By_NFQUEUE --module-update-install VERSION [stable|preview] 后台安装已校验模块\n"
             "  AD_Killer_By_NFQUEUE --module-update-status 查询安装包与重启状态\n"
             "  AD_Killer_By_NFQUEUE --uninstall        停止并验证清理，默认删除本模块全部数据\n"
-            "  AD_Killer_By_NFQUEUE --sync-settings    读取规则同步并发设置\n"
+            "  AD_Killer_By_NFQUEUE --sync-settings    读取规则同步并发、间隔和重试设置\n"
             "  AD_Killer_By_NFQUEUE --sync-concurrency 1..20 保存下次同步并发数（默认 10）\n"
+            "  AD_Killer_By_NFQUEUE --sync-options COUNT MINUTES RETRIES 保存并发、缓存间隔和重试设置\n"
             "  AD_Killer_By_NFQUEUE --sources-list     读取启用/停用来源 JSON\n"
             "  AD_Killer_By_NFQUEUE --sources-save     从 stdin 校验并原子保存来源\n"
             "  AD_Killer_By_NFQUEUE --source-test URL  后台测试单源，不发布规则\n"
@@ -1769,6 +1851,7 @@ int main(int argc, char **argv) {
     if (arg == "--diagnose") { if (argc != 2) return 1; return cmd_diagnose(); }
     if (arg == "--sync-settings") { if (argc != 2) return 1; return cmd_sync_settings(); }
     if (arg == "--sync-concurrency") { if (argc != 3) return 1; return writer([&] { return cmd_sync_concurrency(argv[2]); }); }
+    if (arg == "--sync-options") { if (argc != 5) return 1; return writer([&] { return cmd_sync_options(argv[2], argv[3], argv[4]); }); }
     if (arg == "--version-status") return cmd_version_status();
     if (arg == "--mode") {
         if (argc < 3) { usage(); return 1; }

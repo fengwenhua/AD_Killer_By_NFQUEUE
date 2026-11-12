@@ -91,6 +91,7 @@ def main():
 
     try:
         command('--install')
+        command('--sync-options', '10', '0', '0')  # Always exercise real downloads in this concurrency regression.
         assert json.loads(command('--sync-settings').stdout)['concurrency'] == 10
         conf = DATA / 'state.conf'
         original = conf.read_text()
@@ -136,9 +137,8 @@ def main():
         command('--sync-concurrency', '10')
         configure(10, ['/bad/0'] + [f'/failure/{i}' for i in range(19)])
         command('--update', success=False)
-        assert set(server.requests) <= {'/bad/0', *[f'/failure/{i}' for i in range(9)]}, 'queued sources started after the first failed wave'
-        if transfer_limit == 20:
-            assert len(server.requests) == 10
+        assert set(server.requests) == {'/bad/0', *[f'/failure/{i}' for i in range(19)]}, 'one failed source prevented other sources from finishing'
+        assert len(server.requests) == 20
         assert products() == before, 'failed concurrent source replaced a complete generation'
         assert not (DATA / 'source_staging').exists()
         assert 'publish_status=incomplete_sources\n' in (DATA / 'source_stats.conf').read_text()

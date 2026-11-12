@@ -194,7 +194,7 @@ test('interrupted publishing is unknown, never a promise that the old pointer su
   const sync = scope.run(() => useSync(api, feedback(), ref([]), async () => {}, memory()));
   try {
     await sync.start();
-    assert.match(sync.message.value, /发布结果未确认/);
+    assert.match(sync.message.value, /规则更新结果未确认/);
     assert.doesNotMatch(sync.message.value, /旧规则未被替换|当前规则未改变/);
     assert.equal(sync.busy.value, false);
   } finally { scope.stop(); }

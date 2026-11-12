@@ -235,6 +235,25 @@ bool CanonicalRuleChunks::compress_gzip(std::string_view prefix, std::string &ou
     return true;
 }
 
+std::set<std::string> retry_source_urls(const std::string &report) {
+    std::set<std::string> result;
+    if (report.size() > 512u * 1024u) return result;
+    std::istringstream input(report);
+    std::string line, url, status, provenance;
+    const auto finish = [&] {
+        if (!url.empty() && (status == "download_error" || status == "content_rejected" || provenance == "cache_fallback"))
+            result.insert(url);
+    };
+    while (std::getline(input, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.compare(0, 8, "[source_") == 0) { finish(); url.clear(); status.clear(); provenance.clear(); }
+        else if (line.compare(0, 4, "url=") == 0) url = line.substr(4);
+        else if (line.compare(0, 7, "status=") == 0) status = line.substr(7);
+        else if (line.compare(0, 11, "provenance=") == 0) provenance = line.substr(11);
+    }
+    finish(); return result;
+}
+
 std::string serialize_source_reports(const std::vector<SourceUpdateReport> &reports,
                                      const std::string &publish_status,
                                      int64_t updated_at,
@@ -276,6 +295,8 @@ std::string serialize_source_reports(const std::vector<SourceUpdateReport> &repo
                << "url=" << safe_field(report.url) << "\n"
                << "format=" << safe_field(report.format) << "\n"
                << "status=" << safe_field(report.status) << "\n"
+               << "attempts=" << report.attempts << "\n"
+               << "max_attempts=" << report.max_attempts << "\n"
                << "checked_at=" << (report.checked_at > 0 ? report.checked_at : updated_at) << "\n"
                << "reason=" << safe_field(report.reason) << "\n"
                << "provenance=" << safe_field(report.provenance) << "\n"

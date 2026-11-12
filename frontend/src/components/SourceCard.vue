@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { sourceHistory } from '../domain/rules.js';
+import { sourceName } from '../domain/syncProgress.js';
 import ActionButton from './ActionButton.vue';
 const props = defineProps({ source: Object, index: Number, count: Number, eager: Boolean, history: Array, saving: Boolean, testing: Boolean, testingId: [Number, String], testLogId: [Number, String], testLog: String });
 defineEmits(['toggle', 'edit', 'test', 'delete', 'preview']);
@@ -31,19 +32,20 @@ onBeforeUnmount(() => { intersection?.disconnect(); resize?.disconnect(); });
   <article ref="card" class="source-item" role="listitem" :aria-posinset="index + 1" :aria-setsize="count" :data-builtin="source.locked" :data-source-url="source.url" :style="visible ? undefined : { minHeight: height + 'px' }" @focusin="focused = true" @focusout="focused = !!$event.relatedTarget && card.contains($event.relatedTarget)">
     <div v-if="visible" ref="body" class="source-card-content">
     <div class="source-top">
-      <label :for="`source-${source.id}`">{{ source.name || `来源 ${index + 1}` }} · {{ source.enabled ? '已启用' : '已停用' }}
-        <span class="source-url">{{ source.locked ? '内置特殊来源 · 固定配方' : source.url }}</span>
+      <label :for="`source-${source.id}`">{{ source.name || sourceName(source.url) }}
+        <span class="source-url" :title="source.url">{{ source.locked ? '内置特殊来源 · 固定配方' : source.url }}</span>
       </label>
       <input :id="`source-${source.id}`" type="checkbox" :aria-label="`启用${source.name || `来源 ${index + 1}`}`" :checked="source.enabled" :disabled="busy" @change="$emit('toggle', $event.target.checked)">
     </div>
-    <template v-if="source.locked">
+    <details v-if="source.locked" class="source-extra"><summary>规则说明与地址</summary>
       <p :id="`source-lock-${source.id}`" class="subtle">固定下载 Pro 和 Fake，组内去重后取差集；不可编辑或删除，可测试、启停。保存并同步后生效。</p>
       <span v-for="(url, n) in source.dependencies" :key="url" class="source-url">{{ n === 0 ? 'Pro' : 'Fake' }}：{{ url }}</span>
-    </template>
+    </details>
     <div class="source-history">
       <div class="source-sync-row"><span class="source-sync-state" :data-kind="record.kind">{{ record.label }}</span><time v-if="record.datetime" :datetime="record.datetime">{{ record.time }}</time><span v-else-if="record.time">{{ record.time }}</span></div>
       <span>{{ record.detail }}</span>
     </div>
+    <details v-if="record.technical" class="source-extra"><summary>查看详细原因</summary><pre>{{ record.technical }}</pre></details>
     <pre v-if="testLogId === source.id" :id="`sourceTestLog-${source.id}`" class="source-result" aria-label="来源测试日志">{{ testLog }}</pre>
     <div class="source-actions">
       <ActionButton variant="ghost" aria-haspopup="dialog" aria-controls="sourceEditorDialog" :disabled="busy || source.locked" :aria-describedby="source.locked ? `source-lock-${source.id}` : undefined" @click="$emit('edit', $event.currentTarget)">编辑</ActionButton>

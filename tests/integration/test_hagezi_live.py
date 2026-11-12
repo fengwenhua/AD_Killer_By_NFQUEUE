@@ -83,6 +83,7 @@ def main():
                 assert preview['truncated'] and not DATA.exists()
             server.requests.clear()
             command("--install")
+            command('--sync-options', '1', '0', '0')  # Every fixture mutation must reach the HTTP server.
             configure(False)
             command("--update")
             assert server.requests == ["/ordinary"], "disabled pair was downloaded"

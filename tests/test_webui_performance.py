@@ -57,7 +57,7 @@ def measure(browser, html, sources=64, cpu=4, running=False):
     assert not errors, errors
     if running and page.locator('.guard-halo').count():
         report['running_indicator'] = page.locator('.guard-halo').evaluate("e=>getComputedStyle(e).animationName==='guard-breathe'")
-    if page.locator('dialog').count():
+    if page.locator('#sourcePreviewDialog').count():
         feedback = page.evaluate('''async () => {
           document.querySelector('nav [data-page=rules]').click();
           await new Promise(resolve=>setTimeout(resolve,350));
@@ -66,7 +66,7 @@ def measure(browser, html, sources=64, cpu=4, running=False):
           button.scrollIntoView({block:'center'});
           const start=performance.now();button.click();
           await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-          const dialog=document.querySelector('dialog');
+          const dialog=document.querySelector('#sourcePreviewDialog');
           return {ms:performance.now()-start,open:dialog.open,
             loading:dialog.textContent.includes('正在读取来源开头')};
         }''')

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Visible overview: routing loss and stale image never remain green."""
+import os
 from playwright.sync_api import expect, sync_playwright
 from test_webui_layout import ROOT, mock_script
 
@@ -7,7 +8,7 @@ from test_webui_layout import ROOT, mock_script
 def main():
     errors = []
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
+        browser = playwright.chromium.launch(executable_path=os.environ.get('ADK_TEST_BROWSER_PATH'))
         try:
             page = browser.new_page(viewport={'width': 393, 'height': 852}, reduced_motion='reduce')
             page.on('pageerror', lambda error: errors.append(str(error)))

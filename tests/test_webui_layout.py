@@ -54,6 +54,8 @@ window.previewDiagnosisDelay = 0;
 window.previewDiagnosis = {status:'ok',schema:1,read_only:true,authorized:true,running:false,connmark_mask:'0xcc000000',last_error_code:'iptables_failed',last_error:'历史错误',checks:[{family:'ipv4',status:'clear',chain:''},{family:'ipv6',status:'clear',chain:''}]};
 window.previewMetrics = {status:'current',owner_verified:true,owner_pid:123,owner_started:100,owner_boot:'12345678-1234-1234-1234-123456789abc',age_ms:0,updated_at:1792610000,block_suffix_hits:120,block_exact_hits:34,blocked_retransmits:999,quic_rejects:99};
 window.previewSyncConcurrency=10;
+window.previewSyncInterval=30;
+window.previewSyncRetries=2;
 window.previewSettings = {mode:2,scope:0,autostart:false,block_quic:false,dev_mode:false};
 window.previewApplySerial=1;
 window.previewApplyResult='applied';
@@ -87,8 +89,9 @@ window.ksu = {
     else if(command.includes(" --jobs-list")) {
       errno=previewJobDiscoveryFails?1:0;text=JSON.stringify(errno?{status:'unverified'}:{status:'ok',jobs:previewJobs});
     }
-    else if(command.endsWith(" --sync-settings")) text=JSON.stringify({status:'ok',concurrency:previewSyncConcurrency,default:10,maximum:20});
-    else if(command.includes(" --sync-concurrency ")) { previewSyncConcurrency=Number(command.split(' ').pop());text=JSON.stringify({status:'ok',concurrency:previewSyncConcurrency,default:10,maximum:20}); }
+    else if(command.endsWith(" --sync-settings")) text=JSON.stringify({status:'ok',concurrency:previewSyncConcurrency,interval_minutes:previewSyncInterval,retries:previewSyncRetries,default:10,maximum:20});
+    else if(command.includes(" --sync-options ")) { [previewSyncConcurrency,previewSyncInterval,previewSyncRetries]=command.trim().split(' ').slice(-3).map(Number);text=JSON.stringify({status:'ok',concurrency:previewSyncConcurrency,interval_minutes:previewSyncInterval,retries:previewSyncRetries,default:10,maximum:20}); }
+    else if(command.includes(" --sync-concurrency ")) { previewSyncConcurrency=Number(command.split(' ').pop());text=JSON.stringify({status:'ok',concurrency:previewSyncConcurrency,interval_minutes:previewSyncInterval,retries:previewSyncRetries,default:10,maximum:20}); }
     else if(command.includes(" --config-read ")) {
       const target=command.split(' ').pop();
       text=JSON.stringify({status:'ok',target,revision:'a'.repeat(64),content:target==='custom'?'ads.example.com\n@@safe.example.org\n':''});
@@ -286,21 +289,27 @@ def sync_settings_regression(browser, errors):
         page.add_init_script(mock_script())
         page.goto((ROOT / 'module/webroot/index.html').as_uri())
         page.locator('nav [data-page="settings"]').click()
-        expect(page.locator('[data-settings-entry="sync"]')).to_contain_text('10 个并发')
+        expect(page.locator('[data-settings-entry="sync"]')).to_contain_text('10 并发')
         page.locator('[data-settings-entry="sync"]').click()
         expect(page.locator('#syncConcurrency')).to_have_value('10')
+        expect(page.locator('#syncInterval')).to_have_value('30')
+        expect(page.locator('#syncRetries')).to_have_value('2')
         page.locator('#syncConcurrency').fill('21')
         page.locator('#saveSyncSettings').click()
         expect(page.locator('#syncSettingsStatus')).to_contain_text('1–20')
-        assert not page.evaluate("previewCommands.some(c=>c.includes(' --sync-concurrency '))")
+        assert not page.evaluate("previewCommands.some(c=>c.includes(' --sync-options '))")
         page.locator('#syncConcurrency').fill('20')
+        page.locator('#syncInterval').fill('45')
+        page.locator('#syncRetries').fill('3')
         page.locator('#saveSyncSettings').click()
         expect(page.locator('#syncSettingsStatus')).to_contain_text('下次同步时生效')
-        assert page.evaluate('previewSyncConcurrency') == 20
+        assert page.evaluate('[previewSyncConcurrency,previewSyncInterval,previewSyncRetries]') == [20,45,3]
         page.locator('#settingsBack').click()
-        expect(page.locator('[data-settings-entry="sync"]')).to_contain_text('20 个并发')
+        expect(page.locator('[data-settings-entry="sync"]')).to_contain_text('20 并发')
         page.locator('[data-settings-entry="sync"]').click()
         expect(page.locator('#syncConcurrency')).to_have_value('20')
+        expect(page.locator('#syncInterval')).to_have_value('45')
+        expect(page.locator('#syncRetries')).to_have_value('3')
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
         assert not page.evaluate("previewCommands.some(c=>/ --(?:update-start|start|stop|reload)$/.test(c))")
         page.close()
@@ -346,7 +355,7 @@ previewJobs=[{job_id:'777-888',type:'source',status:'running',target:'https://un
     page.locator('nav [data-page="settings"]').click()
     page.locator('[data-settings-entry="updates"]').click()
     expect(page.locator('#resumeModuleJob')).to_be_visible()
-    assert page.locator('#installModuleUpdate').count() == 0
+    assert page.locator('#updateModule').count() == 0
     page.locator('#resumeModuleJob').click()
     assert not page.evaluate("previewCommands.some(c=>/ --(?:source-test|module-update-download|module-update-install)\b/.test(c))")
     page.evaluate('previewJobDiscoveryFails=false')
@@ -686,7 +695,7 @@ def motion_and_settings_regression(browser, errors, screenshots):
         page.locator('#getUpdate').click()
         expect(page.locator('#moduleUpdateStatus')).to_contain_text('发现 v9.0')
         assert page.evaluate('previewCommands.length') > before
-        expect(page.locator('#downloadModuleUpdate')).to_be_enabled()
+        expect(page.locator('#updateModule')).to_be_enabled()
         assert page.locator('#settings-updates img').count() == 0
         page.locator('#settingsBack').click()
         assert not any(url.startswith(('http:', 'https:')) for url in requests)
@@ -982,7 +991,7 @@ def version_fallback_regression(browser, errors):
         expect(page.locator('#moduleVersion')).to_contain_text('v' + (VERSION_FIXTURE['version'] if kind == 'offline' else '1.0.0'))
         page.locator('nav [data-page="settings"]').click()
         page.locator('[data-settings-entry="about"]').click()
-        assert page.locator('#downloadModuleUpdate').count() == 0
+        assert page.locator('#updateModule').count() == 0
         if kind == 'offline':
             expect(page.locator('#moduleUnverified')).to_contain_text('尚未核实')
         else:
@@ -1045,18 +1054,25 @@ def module_update_regression(browser, errors, screenshots=None):
         assert page.locator('#getUpdate').is_disabled()
         assert 'loading' in page.locator('#getUpdate').get_attribute('class')
         expect(page.locator('#getUpdate')).to_contain_text('检查中')
-        expect(page.locator('#downloadModuleUpdate')).to_be_visible()
+        expect(page.locator('#updateModule')).to_be_visible()
         expect(page.locator('#getUpdate')).to_have_attribute('aria-busy','false')
         assert not page.evaluate("previewCommands.some(c=>c.includes('--module-update-download'))")
-        page.locator('#downloadModuleUpdate').click()
-        expect(page.locator('#installModuleUpdate')).to_be_visible()
-        assert not page.evaluate("previewCommands.some(c=>c.includes('--module-update-install'))")
-        page.locator('#installModuleUpdate').click()
-        expect(page.locator('#confirmModuleInstall')).to_be_visible()
-        assert not page.evaluate("previewCommands.some(c=>c.includes('--module-update-install'))")
+        page.locator('#updateModule').click()
+        expect(page.locator('#moduleUpdateDialog')).to_be_visible()
+        expect(page.locator('#cancelModuleInstall')).to_be_focused()
+        assert not page.evaluate("previewCommands.some(c=>/ --module-update-(download|install) /.test(c))")
+        page.keyboard.press('Escape')
+        expect(page.locator('#moduleUpdateDialog')).not_to_be_visible()
+        expect(page.locator('#updateModule')).to_be_focused()
+        expect(page.locator('#settings-updates')).to_be_visible()
+        page.locator('#updateModule').click()
+        if screenshots:
+            page.screenshot(path=str(screenshots / f'update-confirm-{width}.png'))
         page.locator('#confirmModuleInstall').click()
-        expect(page.locator('#moduleUpdateStatus')).to_contain_text('安装成功')
-        assert page.locator('#installModuleUpdate').count() == 0
+        expect(page.locator('.update-status b')).to_have_text('安装完成，等待软重启')
+        assert page.locator('#updateModule').count() == 0
+        assert page.evaluate("previewCommands.filter(c=>c.includes(' --module-update-download ')).length") == 1
+        assert page.evaluate("previewCommands.filter(c=>c.includes(' --module-update-install ')).length") == 1
         page.locator('#settingsBack').click()
         page.evaluate('previewReleaseNotesFails=true')
         page.locator('[data-settings-entry="releases"]').click()
@@ -1128,7 +1144,7 @@ def update_failure_feedback_regression(browser, errors, screenshots=None):
         expect(page.locator('#getUpdate')).to_have_attribute('aria-busy', 'false')
         expect(page.locator('#moduleUpdateStatus')).to_contain_text('HTTP 403')
         expect(page.locator('#moduleUpdateStatus')).to_contain_text('匿名请求配额')
-        assert page.locator('#downloadModuleUpdate').count() == 0
+        assert page.locator('#updateModule').count() == 0
         page.locator('#settingsBack').click()
         page.locator('[data-settings-entry="releases"]').click()
         expect(page.locator('.release-error')).to_be_visible()
@@ -1392,6 +1408,52 @@ def quic_setting_regression(browser, errors):
         page.close()
 
 
+def sync_progress_regression(browser, errors, screenshots=None):
+    urls = ['https://cache.example.org/hosts.txt', 'https://failed.example.org/hosts.txt', 'builtin:hagezi-pro-minus-fake']
+    def report(phase, states):
+        text = f'job_id=123-456\npublish_status={phase}\nsource_count=3\naccepted_sources={sum(row[0] == "accepted" for row in states)}\n'
+        for i, (status, provenance, attempt, reason) in enumerate(states):
+            text += f'\n[source_{i}]\nurl={urls[i]}\nstatus={status}\nprovenance={provenance}\nattempts={attempt}\nmax_attempts=3\nchecked_at=1792410460\naccepted_hosts=12\nreason={reason}\n'
+        return text
+    running = report('processing', [('accepted','cache_fresh',0,''), ('downloading','downloaded',2,''), ('queued','',0,'')])
+    failed = report('incomplete_sources', [('accepted','cache_fresh',0,''), ('download_error','downloaded',3,'HTTP 404'), ('accepted','downloaded',1,'')])
+    for width, theme in ((320, 'light'), (393, 'dark')):
+        page = browser.new_page(viewport={'width': width, 'height': 852}, color_scheme=theme, reduced_motion='reduce')
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        setup = mock_script([{'url': url, 'enabled': True} for url in urls]) + '\npreviewSourceReport="";previewJobOverrides["123-456"]=' + json.dumps({'job_id':'123-456','type':'rules','status':'running','progress':running}) + ';'
+        page.add_init_script(setup)
+        page.goto((ROOT / 'module/webroot/index.html').as_uri())
+        page.locator('#syncBtn').click()
+        progress = page.locator('#home .sync-progress')
+        expect(progress.locator('progress')).to_have_attribute('value', '1')
+        expect(progress).to_contain_text('第 2 次尝试，共最多 3 次')
+        expect(progress).to_contain_text('缓存已就绪')
+        expect(page.locator('#syncBtn')).to_have_attribute('aria-busy', 'true')
+        page.evaluate('(report)=>{previewSourceReport=report;previewUpdateFails=true;previewJobOverrides["123-456"]={job_id:"123-456",type:"rules",status:"failed",exit_code:1,progress:report}}', failed)
+        expect(page.locator('#syncBtn')).to_have_attribute('aria-busy', 'false')
+        expect(progress).to_contain_text('规则未更新，继续使用原规则')
+        expect(progress.locator('progress')).to_have_attribute('value', '3')
+        expect(progress).to_contain_text('地址不存在或已失效')
+        expect(progress).to_contain_text('已尝试 3 次')
+        assert not page.locator('#consoleDetails').evaluate('e=>e.open')
+        assert page.evaluate("previewCommands.filter(c=>c.endsWith(' --update-start')).length") == 1
+        if screenshots:
+            expect(page.locator('#toast')).not_to_have_class('show')
+            progress.evaluate("e=>e.scrollIntoView({block:'start'})")
+            page.screenshot(path=str(screenshots / f'sync-results-{theme}-{width}.png'))
+        page.locator('nav [data-page="rules"]').click()
+        page.locator('#sourcesDetails > summary').click()
+        expect(page.locator('.source-filter button', has_text='需要处理 1')).to_be_visible()
+        page.locator('.source-filter button', has_text='需要处理 1').click()
+        expect(page.locator('#sourceList .source-item')).to_have_count(1)
+        expect(page.locator('.source-sync-state')).to_have_text('下载失败')
+        expect(page.locator('.source-history')).to_contain_text('地址不存在或已失效')
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1')
+        if screenshots:
+            page.screenshot(path=str(screenshots / f'source-issues-{theme}-{width}.png'))
+        page.close()
+
+
 def source_cache_regression(browser, errors):
     url = 'https://anti-ad.net/easylist.txt'
     for theme in ('light', 'dark'):
@@ -1410,18 +1472,19 @@ def source_cache_regression(browser, errors):
                 page.locator('#sourcesDetails > summary').click()
                 state = page.locator('.source-sync-state')
                 if provenance == 'cache_fallback':
-                    expect(state).to_contain_text('使用缓存')
+                    expect(state).to_contain_text('使用旧缓存')
                     expect(state).to_have_attribute('data-kind', 'warning')
                     expect(page.locator('.source-history')).to_contain_text('2.0 小时')
-                    expect(page.locator('.source-history')).to_contain_text('HTTP 503')
+                    page.locator('.source-extra > summary', has_text='查看详细原因').click()
+                    expect(page.locator('.source-extra pre')).to_contain_text('HTTP 503')
                     expect(page.locator('.source-history img')).to_have_count(0)
                     assert not page.evaluate('window.cacheInjected || false')
                 elif provenance == 'revalidated':
-                    expect(state).to_have_text('✓ 同步成功')
-                    expect(page.locator('.source-history')).to_contain_text('304')
+                    expect(state).to_have_text('无需更新')
+                    expect(page.locator('.source-history')).to_contain_text('服务器确认内容未变化')
                 else:
-                    expect(state).to_contain_text('发布未确认')
-                    expect(page.locator('.source-history')).to_contain_text('本次未发布，仍使用整份旧规则')
+                    expect(state).to_contain_text('已准备好')
+                    expect(page.locator('.source-history')).to_contain_text('等待其余来源通过后一起更新规则')
                 assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1')
                 page.close()
 
@@ -1446,6 +1509,7 @@ def main():
             sync_settings_regression(browser, errors)
             background_job_recovery_regression(browser, errors)
             source_cache_regression(browser, errors)
+            sync_progress_regression(browser, errors, args.screenshots)
             quic_setting_regression(browser, errors)
             preview_regression(browser, errors, args.screenshots)
             source_editor_dialog_regression(browser, errors, args.screenshots)
@@ -1499,7 +1563,7 @@ def main():
                             assert page.locator("#blacklist").is_visible(), "folds must be independent"
                             page.locator("#sourcesDetails > summary").click()
                             page.wait_for_function("document.querySelector('.source-item time') !== null")
-                            assert "同步成功" in page.locator(".source-item").first.inner_text()
+                            assert "已更新" in page.locator(".source-item").first.inner_text()
                             assert page.locator(".source-item time").first.get_attribute("datetime")
                         for element in page.locator("button:visible, input[type=checkbox]:visible, summary:visible").all():
                             box = element.bounding_box()
@@ -1522,15 +1586,16 @@ def main():
                         # actually see when returning, not hidden innerText.
                         page.locator('nav [data-page="rules"]').click()
                         expect(page.locator('.source-item').first).to_be_visible()
-                        assert "同步失败" in page.locator(".source-item").first.inner_text()
+                        assert "下载失败" in page.locator(".source-item").first.inner_text()
+                        page.locator(".source-item").first.locator(".source-extra > summary").click()
                         assert "network_timeout" in page.locator(".source-item").first.inner_text()
                         assert page.locator(".source-item time").first.get_attribute("datetime")
                         page.locator('nav [data-page="home"]').click()
                         page.evaluate("window.previewUpdateFails=true")
                         page.locator("#syncBtn").click()
                         page.wait_for_function("document.querySelector('#updateStatus').dataset.kind === 'error'")
-                        assert page.locator("#consoleDetails").evaluate("e=>e.open")
-                        assert "staging" in page.locator("#updateStatus").inner_text()
+                        assert not page.locator("#consoleDetails").evaluate("e=>e.open"), "structured results should not force raw logs open"
+                        expect(page.locator("#updateStatus")).to_contain_text("同步未完成")
                         # Actual UI source CRUD, disabled-source testing and
                         # explicit-save semantics; no daemon start commands.
                         page.locator('nav [data-page="rules"]').click()
@@ -1554,7 +1619,7 @@ def main():
                         page.wait_for_function("document.querySelector('#sourcesStatus').textContent.startsWith('已保存')")
                         assert not page.evaluate("previewSources[3].enabled")
                         # Disabled sources sink to the bottom after save.
-                        assert "已启用" in page.locator(".source-item").first.inner_text()
+                        expect(page.locator(".source-item").first.locator("input[type=checkbox]")).to_be_checked()
                         assert "已停用" in page.locator(".source-item").last.inner_text()
                         page.locator(".source-item").nth(3).get_by_role("button", name="测试", exact=True).click()
                         page.wait_for_function("document.querySelector('#sourcesStatus').dataset.kind === 'success'")

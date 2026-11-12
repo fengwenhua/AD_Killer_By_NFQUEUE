@@ -15,7 +15,7 @@ static void put(const std::string &path, const std::string &body) {
     assert(fd >= 0 && write(fd, body.data(), body.size()) == static_cast<ssize_t>(body.size()));
     assert(!close(fd));
 }
-DownloadResponse download_file_response(const std::string &url, const std::string &path, const HttpValidators &validators) {
+DownloadResponse download_file_response(const std::string &url, const std::string &path, const HttpValidators &validators, bool) {
     DownloadResponse response;
     response.effective_url = url; response.validators.etag = "\"v1\"";
     if (validators.etag == "\"v1\"") {

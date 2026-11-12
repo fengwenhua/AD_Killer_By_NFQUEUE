@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Mobile counters and real localStorage reload persistence, mocked root bridge."""
+import os
 from playwright.sync_api import expect, sync_playwright
 from test_webui_layout import ROOT, mock_script
 
@@ -7,7 +8,7 @@ from test_webui_layout import ROOT, mock_script
 def main():
     errors=[]
     with sync_playwright() as playwright:
-        browser=playwright.chromium.launch()
+        browser=playwright.chromium.launch(executable_path=os.environ.get('ADK_TEST_BROWSER_PATH'))
         try:
             page=browser.new_page(viewport={'width':393,'height':852},reduced_motion='reduce')
             page.on('pageerror',lambda error:errors.append(str(error)))
@@ -25,7 +26,7 @@ def main():
             page.locator('#settingsBack').click()
             page.locator('[data-settings-entry="updates"]').click()
             page.locator('#getUpdate').click()
-            expect(page.locator('#downloadModuleUpdate')).to_be_visible()
+            expect(page.locator('#updateModule')).to_be_visible()
             page.locator('#settingsBack').click()
             expect(page.locator('[data-settings-entry="updates"]')).to_contain_text('有更新')
             page.reload()
@@ -41,12 +42,15 @@ def main():
             assert page.evaluate("previewCommands.filter(c=>c.includes(' --module-release-notes')).length")==1
             page.locator('#settingsBack').click()
             page.locator('[data-settings-entry="updates"]').click()
-            expect(page.locator('#settings-updates')).to_contain_text('缓存结果')
-            page.locator('#downloadModuleUpdate').click()
-            expect(page.locator('#installModuleUpdate')).to_be_enabled()
+            expect(page.locator('#settings-updates')).to_contain_text('上次检查结果')
+            page.locator('#updateModule').click()
+            expect(page.locator('#moduleUpdateDialog')).to_be_visible()
+            assert not page.evaluate("previewCommands.some(c=>/ --module-update-(download|install) /.test(c))")
+            page.locator('#confirmModuleInstall').click()
+            expect(page.locator('.update-status b')).to_have_text('安装完成，等待软重启')
             checks=page.evaluate("previewCommands.filter(c=>c.includes(' --module-update-check '))")
             assert len(checks)==1,'cached update must be checked again before download'
-            assert not page.evaluate("previewCommands.some(c=>c.includes(' --module-update-install '))")
+            assert page.evaluate("previewCommands.filter(c=>c.includes(' --module-update-install ')).length") == 1
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
             assert not errors, errors
             print('Mobile default switches, live block counts, notes/update badge reload persistence and download recheck passed')

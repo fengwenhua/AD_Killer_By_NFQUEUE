@@ -14,12 +14,14 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
   const saved = key => { try { return storage?.getItem(key) === 'true'; } catch { return false; } };
   const save = (key, value) => { try { storage?.setItem(key, String(value)); } catch { /* session-only preference */ } };
   const life = useLifetime(), preview = ref(saved(PREVIEW_KEY)), autoCheck = ref(saved(AUTO_KEY));
-  const checking = ref(false), busy = ref(false);
+  const checking = ref(false), jobBusy = ref(false), upgrading = ref(false), operation = ref('');
+  const busy = computed(() => jobBusy.value || upgrading.value);
   const observerPaused = ref(false);
   let rememberedTask;
   const notesLoading = ref(false), latestRelease = ref(null), notesError = ref('');
   const notesUpdatedAt = ref(0), notesCached = ref(false), checkedAt = ref(0), checkCached = ref(false);
   const release = ref(null), ready = ref(''), readyChannel = ref('unknown'), reboot = ref(false), confirming = ref(false);
+  let confirmation;
   const message = ref('手动检查 GitHub 正式版；可选择包含预览版。'), kind = ref('');
   let initialized = false, channelRevision = 0;
   const supported = computed(() => info.verified.value && !info.mismatch.value);
@@ -29,7 +31,10 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
   const available = computed(() => supported.value && upgradeAllowed(release.value,info.version.value,installedChannel()));
   const canInstall = computed(() => supported.value && !observerPaused.value && !!ready.value && versionParts(ready.value) &&
     readyChannel.value !== 'unknown' &&
-    upgradeAllowed({version:ready.value,preview:readyChannel.value==='preview'},info.version.value,installedChannel()) && !reboot.value);
+    upgradeAllowed({version:ready.value,preview:readyChannel.value==='preview'},info.version.value,installedChannel()) && !reboot.value &&
+    (!release.value || (available.value && release.value.version === ready.value && release.value.preview === (readyChannel.value === 'preview'))));
+  const target = computed(() => reboot.value ? ready.value : available.value ? release.value.version : canInstall.value ? ready.value : '');
+  const phase = computed(() => reboot.value ? 'reboot' : observerPaused.value ? 'paused' : checking.value ? 'checking' : busy.value ? operation.value === 'install' ? 'installing' : 'downloading' : canInstall.value ? 'ready' : available.value ? 'available' : kind.value === 'error' ? 'error' : release.value ? 'current' : 'idle');
   const status = (text, type = '') => { message.value = text; kind.value = type; };
   const cachedNotes = readCache(storage,NOTES_CACHE_KEY,NOTES_CACHE_TTL,latestReleaseNotes);
   if (cachedNotes) { latestRelease.value=cachedNotes.value; notesUpdatedAt.value=cachedNotes.savedAt; notesCached.value=true; }
@@ -37,7 +42,7 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
     if (!release.value) return;
     const selected=release.value, prefix=cached ? '已恢复上次检查：' : '';
     if (!supported.value) status('已获取发布信息；请在匹配的已安装模块界面中下载或安装。','warning');
-    else if (available.value) status(`${prefix}发现 v${selected.version}${selected.preview ? ' 预览版' : ' 正式版'}${compareVersions(selected.version,info.version.value)===0 ? '（预览版升级正式版）' : ''}，可下载并校验。`,'success');
+    else if (available.value) status(`${prefix}发现 v${selected.version}${selected.preview ? ' 预览版' : ' 正式版'}${compareVersions(selected.version,info.version.value)===0 ? '（预览版升级正式版）' : ''}，可更新到此版本。`,'success');
     else if (compareVersions(selected.version,info.version.value)===0 && installedChannel()==='unknown') status('版本号相同，但旧包未记录发布渠道，无法确认是否与正式包一致。请手动覆盖安装正式 ZIP，或等待更高版本。','warning');
     else status(`${prefix}当前为 v${info.version.value}${installedChannel()==='preview' ? ' 预览版' : installedChannel()==='stable' ? ' 正式版' : ''}，没有可升级版本。`);
   }
@@ -114,7 +119,7 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
     finally { await finishFeedback(started); checking.value = false; }
   }
   async function observe(task) {
-    rememberedTask = task; observerPaused.value = false;
+    rememberedTask = task; observerPaused.value = false; operation.value = task.install ? 'install' : 'download';
     const outcome = await observeJob(api, task.id, life, {
       interval: pollMs, types: ['download', 'install'],
       onLog: chunk => { if (chunk.delta) feedback.log(chunk.delta); },
@@ -136,26 +141,29 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
     if (!life.active) return;
     if (task.install ? !reboot.value : ready.value !== task.version) throw new Error('任务结束，但安装包或安装状态未核实，请重新读取状态。');
     if (task.channel && readyChannel.value !== task.channel) throw new Error('下载包渠道与所选发布不一致，请重新下载。');
-    status((task.install ? '安装成功，请手动重启设备。重启前继续使用当前版本。' : `v${ready.value} 下载完成，SHA-256 校验通过。`) + (outcome.logError ? ' 日志片段未能完整读取。' : ''),'success');
+    status((task.install ? '安装成功，请手动软重启设备后使用新版本。' : `v${ready.value} 下载完成，SHA-256 校验通过。`) + (outcome.logError ? ' 日志片段未能完整读取。' : ''),'success');
+    return true;
   }
-  async function start(install) {
+  async function start(install, fromFlow = false) {
     if (observerPaused.value) return resume();
-    if (busy.value || checking.value || !supported.value || (install ? !canInstall.value : !available.value)) return;
+    if (jobBusy.value || (busy.value && !fromFlow) || checking.value || !supported.value || (install ? !canInstall.value : !available.value)) return false;
     if (!install && checkCached.value) {
       await check();
       if (!life.active || !available.value || kind.value==='error') return;
     }
     const version = install ? ready.value : release.value.version;
-    busy.value = true; confirming.value = false;
+    jobBusy.value = true; operation.value = install ? 'install' : 'download'; confirming.value = false;
     status(install ? '正在安装模块，请等待管理器返回结果…' : '正在后台下载并校验安装包…');
     try {
+      await paint();
+      if (!life.active) return false;
       const found = await discoverJobs(api, life, ['download', 'install']);
       if (!life.active || found.cancelled) return;
       if (found.unknown) { observerPaused.value = true; status('后台任务未能核实，请继续查询；不会重复下载或安装。','warning'); return; }
       if (found.job && ['running','unverified','invalid_state','not_found'].includes(found.job.status)) {
         const task = backendTask(found.job);
         if (!task) { observerPaused.value = true; status('后台任务目标或渠道未能核实，请查看管理器与诊断日志。','warning'); return; }
-        remember(task); await observe(task); return;
+        remember(task); return await observe(task);
       }
       const channel = install ? readyChannel.value : release.value.preview ? 'preview' : 'stable';
       const result = await api.command(`--module-update-${install ? 'install' : 'download'} ${version}${channel==='preview' ? ' preview' : ''}`);
@@ -163,17 +171,46 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
       const value = lastJson(result.stdout);
       if (result.code || value?.status !== 'started' || !validJobId(value.job_id)) throw new Error(result.stderr || '无法创建模块更新任务，请检查当前版本或 root 权限。');
       const task = { id: value.job_id, version, install, channel };
-      remember(task); await observe(task);
+      remember(task); return await observe(task);
     } catch (error) { if (life.active) { observerPaused.value = true; status(error.message + ' 请先继续查询结果，勿重复派发。','warning'); } }
-    finally { busy.value = false; }
+    finally { jobBusy.value = false; }
   }
+  async function upgrade() {
+    if (!confirming.value || !confirmation || busy.value || checking.value || observerPaused.value || !supported.value || (!available.value && !canInstall.value)) return;
+    const requested = confirmation;
+    confirmation = null;
+    if (checkCached.value) { await check(); if (!life.active || kind.value === 'error' || (!available.value && !canInstall.value)) return; }
+    const version = target.value;
+    const channel = available.value ? release.value.preview ? 'preview' : 'stable' : readyChannel.value;
+    if (version !== requested.version || channel !== requested.channel) {
+      confirming.value = false;
+      status('更新信息已变化，请确认当前显示的版本后再更新。', 'warning'); return;
+    }
+    upgrading.value = true; confirming.value = false;
+    try {
+      if (!canInstall.value) {
+        const downloaded = await start(false, true);
+        if (!life.active || downloaded !== true || observerPaused.value) return;
+      }
+      if (ready.value !== version || readyChannel.value !== channel || !canInstall.value) {
+        status('下载的版本与本次选择不一致，请重新检查更新后确认。', 'warning'); return;
+      }
+      await start(true, true);
+    } finally { upgrading.value = false; }
+  }
+  function requestUpgrade() {
+    if (busy.value || checking.value || observerPaused.value || (!available.value && !canInstall.value)) return;
+    confirmation = { version: target.value, channel: available.value ? release.value.preview ? 'preview' : 'stable' : readyChannel.value };
+    confirming.value = true;
+  }
+  function cancelUpgrade() { confirmation = null; confirming.value = false; }
   function backendTask(job) {
     return validJobId(job.job_id) && versionParts(job.target) && ['stable','preview'].includes(job.channel)
       ? { id: job.job_id, version: job.target, install: job.type === 'install', channel: job.channel } : null;
   }
   async function resume() {
     if (busy.value || !supported.value) return;
-    busy.value = true;
+    jobBusy.value = true;
     try {
       await state();
       let task;
@@ -190,12 +227,12 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
       } else if (found.unknown) { observerPaused.value = true; status('后台任务索引未能核实，请继续查询；不会下载或安装。','warning'); }
       else {
         observerPaused.value = false;
-        if (reboot.value) status('模块已安装，等待手动重启设备。','success');
+        if (reboot.value) status('模块已安装，等待手动软重启设备。','success');
         else if (ready.value && readyChannel.value==='unknown') status('旧下载缓存未记录渠道，请重新检查并下载后再安装。','warning');
         else if (ready.value) status(`已恢复 v${ready.value}${readyChannel.value==='preview' ? ' 预览版' : ' 正式版'}安装包，SHA-256 校验通过。`,'success');
       }
     } catch (error) { if (life.active) { observerPaused.value = true; status(error.message,'error'); } }
-    finally { busy.value = false; }
+    finally { jobBusy.value = false; }
   }
   async function initialize() {
     if (initialized) return;
@@ -207,5 +244,5 @@ export function useModuleUpdate(api, info, feedback, storage = getStorage(), pol
   }
   return { preview,autoCheck,checking,busy,observerPaused,release,ready,readyChannel,reboot,confirming,message,kind,supported,available,canInstall,
     notesLoading,latestRelease,notesError,notesUpdatedAt,notesCached,checkedAt,checkCached,loadReleaseNotes,setPreview,setAutoCheck,
-    check,download: () => start(false),install: () => start(true),resume,initialize };
+    phase,target,upgrade,requestUpgrade,cancelUpgrade,check,download: () => start(false),install: () => start(true),resume,initialize };
 }
