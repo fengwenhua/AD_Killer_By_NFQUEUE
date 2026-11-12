@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+from job_status import read_job_state
 import shutil
 import subprocess
 import sys
@@ -121,8 +122,8 @@ def main():
 
         def wait_job(started):
             for _ in range(100):
-                result = json.loads(command("--update-status", started["job_id"]).splitlines()[-1])
-                if result["status"] != "running":
+                result = read_job_state(BINARY, started["job_id"])
+                if result["status"] not in ("running", "unverified"):
                     return result
                 time.sleep(0.05)
             raise AssertionError("job did not finish")
@@ -201,8 +202,8 @@ def main():
         started = json.loads(command("--update-start").splitlines()[-1])
         assert started["status"] == "started"
         for _ in range(100):
-            result = json.loads(command("--update-status", started["job_id"]).splitlines()[-1])
-            if result["status"] != "running":
+            result = read_job_state(BINARY, started["job_id"])
+            if result["status"] not in ("running", "unverified"):
                 break
             time.sleep(0.05)
         assert result["status"] == "failed" and result["exit_code"] != 0, result

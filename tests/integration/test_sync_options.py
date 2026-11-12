@@ -3,6 +3,7 @@
 from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from job_status import read_job_state
 import gzip
 import json
 import os
@@ -64,14 +65,14 @@ def main():
         job = value['job_id']; observed = set(); last = None
         until = time.monotonic()+20
         while time.monotonic() < until:
-            state = command('--update-status', job)
+            state = read_job_state(BINARY, job)
             if state.get('progress'):
                 head, rows = report(state['progress'])
                 assert head['job_id']==job and int(head['source_count'])==len(rows)
                 assert len(rows) <= 65 and len({r['url'] for r in rows})==len(rows)
                 observed.update(r['status'] for r in rows)
                 last = (head, rows)
-            if state['status']!='running':
+            if state['status'] not in ('running', 'unverified'):
                 assert state['status']==expected, state
                 assert last is not None and (DATA/'update_jobs'/f'update-{job}.progress').exists()
                 return last, observed

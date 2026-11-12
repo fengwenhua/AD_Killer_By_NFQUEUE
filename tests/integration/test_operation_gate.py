@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+from job_status import read_job_state
 import shutil
 import subprocess
 import sys
@@ -74,7 +75,7 @@ def main():
         assert json.loads(run('--jobs-list').stdout)['jobs'][0]['job_id'] == id
         RELEASE.set()
         for _ in range(100):
-            state = json.loads(run('--update-status', id).stdout)
+            state = read_job_state(BINARY, id)
             if state['status'] in ('success', 'failed', 'interrupted'):
                 break
             time.sleep(.05)

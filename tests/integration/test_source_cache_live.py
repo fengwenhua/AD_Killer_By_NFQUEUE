@@ -5,6 +5,7 @@ import gzip
 import json
 import os
 from pathlib import Path
+from job_status import read_job_state
 import shutil
 import signal
 import subprocess
@@ -107,8 +108,8 @@ def main():
 
         def job_wait(job, expected):
             for _ in range(200):
-                state = json.loads(command('--update-status', job).splitlines()[-1])
-                if state['status'] != 'running':
+                state = read_job_state(binary, job)
+                if state['status'] not in ('running', 'unverified'):
                     assert state['status'] == expected, state
                     return
                 time.sleep(.025)

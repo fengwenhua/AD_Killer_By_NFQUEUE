@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+from job_status import read_job_state
 import shutil
 import subprocess
 import tempfile
@@ -105,21 +106,11 @@ def main():
             assert (result.returncode == 0) == success, (args, result.stdout, result.stderr)
             return result.stdout
 
-        def observe_job(id):
-            # The owner can exit between the journal read and process identity
-            # query. That conservative unverified response is not a terminal
-            # result; keep observing without ever resubmitting an installer.
-            result = subprocess.run([str(binary), '--update-status', id], capture_output=True, text=True, timeout=25)
-            value = json.loads(result.stdout)
-            assert value['job_id'] == id
-            assert result.returncode == 0 or (result.returncode == 1 and value['status'] == 'unverified'), (value, result.stderr)
-            return value
-
         def job(action, success=True, channel=None):
             data = json.loads(command(action, '1.1', *([channel] if channel else [])))
             assert data['status'] == 'started'
             for _ in range(200):
-                state = observe_job(data['job_id'])
+                state = read_job_state(binary, data['job_id'], timeout=25)
                 if state['status'] not in ('running', 'unverified'):
                     assert state['status'] == ('success' if success else 'failed'), state
                     return
@@ -214,7 +205,7 @@ def main():
             assert json.loads(command('--update-status', active))['phase'] == 'installing'
             (DATA/'fake-manager-release').touch()
             for _ in range(200):
-                completed = observe_job(active)
+                completed = read_job_state(binary, active, timeout=25)
                 if completed['status'] == 'success':
                     break
                 assert completed['status'] in ('running', 'unverified'), completed

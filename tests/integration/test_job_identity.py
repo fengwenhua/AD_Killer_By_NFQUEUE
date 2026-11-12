@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+from job_status import read_job_state
 import shutil
 import signal
 import subprocess
@@ -45,8 +46,7 @@ def command(*args, success=True):
 
 def wait(id, status):
     for _ in range(100):
-        result = subprocess.run([str(BINARY), '--update-status', id], text=True, capture_output=True, timeout=5)
-        state = json.loads(result.stdout)
+        state = read_job_state(BINARY, id, timeout=5)
         if state['status'] == status:
             return state
         time.sleep(.05)

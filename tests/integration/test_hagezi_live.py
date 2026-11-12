@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+from job_status import read_job_state
 import shutil
 import subprocess
 import tempfile
@@ -61,8 +62,8 @@ def main():
 
         def wait_job(started):
             for _ in range(200):
-                state = json.loads(command("--update-status", started["job_id"]))
-                if state["status"] != "running":
+                state = read_job_state(binary, started["job_id"])
+                if state["status"] not in ("running", "unverified"):
                     return state
                 time.sleep(0.025)
             raise AssertionError("source job timeout")
