@@ -1472,8 +1472,13 @@ static int cmd_status_fast() {
 
 static int cmd_diagnose() {
     const bool authorized = am_root();
-    const auto checks = authorized ? iptables_inspect_connmarks(BLOCK_CONNMARK_MASK)
-        : std::vector<IptablesConnmarkCheck>{{"ipv4", "unknown", ""}, {"ipv6", "unknown", ""}};
+    std::vector<IptablesConnmarkCheck> checks;
+    if (authorized) {
+        checks = iptables_inspect_connmarks(BLOCK_CONNMARK_MASK);
+    } else {
+        checks.push_back({"ipv4", "unknown", ""});
+        checks.push_back({"ipv6", "unknown", ""});
+    }
     const int pid = find_daemon_pid();
     std::ostringstream out;
     out << "{\"status\":\"ok\",\"schema\":1,\"read_only\":true,\"authorized\":"

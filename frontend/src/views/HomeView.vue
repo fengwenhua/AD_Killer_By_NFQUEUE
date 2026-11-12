@@ -31,16 +31,6 @@ defineProps({ engine: Object, sync: Object, apps: Object, feedback: Object, modu
           <ActionButton id="startBtn" :variant="engine.running ? undefined : 'primary'" icon="play" :busy="engine.action === 'start'" :disabled="!engine.ready || !!engine.action || !!engine.setting || engine.diagnosing || apps.saving || engine.running || engine.healthUnknown || engine.cleanupFailed || engine.applyIssue" @click="engine.control('start')"><span id="startLabel">{{ engine.action === 'start' ? '启动中…' : '启动守护' }}</span></ActionButton>
           <ActionButton id="stopBtn" :variant="engine.running ? 'primary' : undefined" icon="pause" :busy="engine.action === 'stop'" :disabled="!engine.ready || !!engine.action || !!engine.setting || engine.diagnosing || apps.saving || (!engine.state?.running && !engine.state?.enabled && !engine.cleanupFailed)" @click="engine.control('stop')"><span id="stopLabel">{{ engine.action === 'stop' ? '暂停中…' : '暂停守护' }}</span></ActionButton>
         </div>
-        <div class="startup-diagnosis">
-          <ActionButton id="diagnoseBtn" icon="sync" :busy="engine.diagnosing" :disabled="!engine.ready || !!engine.action || !!engine.setting" @click="engine.diagnose">{{ engine.diagnosing ? '正在自检…' : '启动自检' }}</ActionButton>
-          <p v-if="engine.diagnosisError" class="subtle" role="alert">{{ engine.diagnosisError }}</p>
-          <div v-if="engine.diagnosis" id="startupDiagnosis" :data-kind="engine.diagnosis.kind" role="status">
-            <h3 id="startupDiagTitle">{{ engine.diagnosis.title }}</h3>
-            <p class="subtle">{{ engine.diagnosis.advice }}</p>
-            <p class="subtle">读取于 {{ new Date(engine.diagnosis.collectedAt).toLocaleTimeString() }}，仅代表该次检查。</p>
-            <details><summary>查看自检详情与历史错误</summary><p class="subtle">以下为本次只读检查及上次记录，不代表已修复或启动成功。</p><pre class="source-result" tabindex="0">{{ engine.diagnosis.details }}</pre></details>
-          </div>
-        </div>
       </section>
       <section class="card sync-card">
         <div class="section-heading"><h2>本地规则库</h2></div>
@@ -69,6 +59,16 @@ defineProps({ engine: Object, sync: Object, apps: Object, feedback: Object, modu
             <SettingSwitch id="devLog" label="DNS 流量日志" help="默认开启，仅存本机；日志繁忙或写入失败时可能丢弃，数量记入运行指标。" :checked="!!engine.state?.dev_mode" @change="engine.changeSetting('dev', $event)" />
           </div>
         </fieldset>
+      </section>
+      <section class="card startup-diagnosis">
+        <ActionButton id="diagnoseBtn" icon="sync" :busy="engine.diagnosing" :disabled="!engine.ready || !!engine.action || !!engine.setting" @click="engine.diagnose">{{ engine.diagnosing ? '正在自检…' : '启动自检' }}</ActionButton>
+        <p v-if="engine.diagnosisError" class="subtle" role="alert">{{ engine.diagnosisError }}</p>
+        <div v-if="engine.diagnosis" id="startupDiagnosis" :data-kind="engine.diagnosis.kind" role="status">
+          <h3 id="startupDiagTitle">{{ engine.diagnosis.title }}</h3>
+          <p class="subtle">{{ engine.diagnosis.advice }}</p>
+          <p class="subtle">读取于 {{ new Date(engine.diagnosis.collectedAt).toLocaleTimeString() }}，仅代表该次检查。</p>
+          <details><summary>查看自检详情与历史错误</summary><p class="subtle">以下为本次只读检查及上次记录，不代表已修复或启动成功。</p><pre class="source-result" tabindex="0">{{ engine.diagnosis.details }}</pre></details>
+        </div>
       </section>
       <DiagnosticConsole :feedback="feedback" />
     </div>
