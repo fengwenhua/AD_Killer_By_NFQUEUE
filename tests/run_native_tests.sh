@@ -276,6 +276,13 @@ ${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fd
 
 ${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fdata-sections \
     -idirafter "$ROOT/tests/audit/include" -I"$ROOT/src" \
+    "$ROOT/tests/test_queue_idle_wait.cpp" "$ROOT/src/metrics.cpp" "$ROOT/src/tcp_reassembly.cpp" \
+    "$ROOT/src/dns_tcp_reassembly.cpp" "$ROOT/src/packet.cpp" \
+    $LIFECYCLE_LINK_FLAGS -o "$BUILD_DIR/test_queue_idle_wait"
+"$BUILD_DIR/test_queue_idle_wait"
+
+${CXX:-c++} $COMPILE_FLAGS -pthread -Wno-unused-function -ffunction-sections -fdata-sections \
+    -idirafter "$ROOT/tests/audit/include" -I"$ROOT/src" \
     "$ROOT/tests/test_packet_metrics.cpp" "$ROOT/src/metrics.cpp" "$ROOT/src/tcp_reassembly.cpp" \
     "$ROOT/src/dns_tcp_reassembly.cpp" "$ROOT/src/packet.cpp" \
     $LIFECYCLE_LINK_FLAGS -o "$BUILD_DIR/test_packet_metrics"

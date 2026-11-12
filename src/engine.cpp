@@ -36,6 +36,7 @@
 #include <sstream>
 #include <unistd.h>
 #include <pthread.h>
+#include <poll.h>
 #include <sys/prctl.h>
 
 // ============================================================================
@@ -406,14 +407,33 @@ static void teardown_queue(int fd, int queue_num) {
 // 工作线程:纯收包-判定-回复循环
 static void recv_loop(int fd, int queue_num, NfqPacketCb cb) {
     log_line("系统", "队列 %d 线程已启动", queue_num);
-    int idle = 0;
     while (!g_stop.load(std::memory_order_relaxed)) {
         int n = -1;
         const uint64_t policy_epoch = g_policy.epoch();
         try {
             n = nfq_recv_packets(fd, cb, (void *)(intptr_t)fd);
             g_metrics.record_stale_verdicts(nfq_receive_report().stale_verdicts);
-            if (nfq_receive_report().idle) g_policy.observe_idle(queue_num, policy_epoch);
+            if (nfq_receive_report().idle) {
+                g_policy.observe_idle(queue_num, policy_epoch);
+                // Sleep only after a genuine EAGAIN. Readiness wakes us as
+                // soon as traffic arrives; the finite timeout rechecks stop
+                // and a new policy epoch without a permanent wait or 2ms spin.
+                // Neither a poll timeout nor EINTR acknowledges a drain.
+                if (!g_stop.load(std::memory_order_relaxed)) {
+                    pollfd input{fd, POLLIN, 0};
+                    const int ready = poll(&input, 1, 100);
+                    int error = ready < 0 && errno != EINTR ? errno : 0;
+                    if (ready > 0 && (input.revents & (POLLERR | POLLHUP | POLLNVAL)))
+                        error = (input.revents & POLLNVAL) ? EBADF :
+                            (input.revents & POLLHUP) ? ECONNRESET : EIO;
+                    if (error) {
+                        nfq_receive_report() = {};
+                        nfq_receive_report().kind = NfqReceiveKind::SOCKET;
+                        nfq_receive_report().error = error;
+                        n = -1; // Same fail-open protection as a receive error.
+                    }
+                }
+            }
         } catch (const std::exception &error) {
             record_engine_error("packet_callback_exception", "队列 " + std::to_string(queue_num) +
                                 " 处理异常：" + error.what());
@@ -431,15 +451,6 @@ static void recv_loop(int fd, int queue_num, NfqPacketCb cb) {
             }
             watchdog_emergency();
             break;
-        }
-        if (n == 0) {
-            // 无包:自旋若干次后退避(降低空闲 CPU 占用)
-            if (++idle > 64) {
-                usleep(2000);
-                idle = 64;
-            }
-        } else {
-            idle = 0;
         }
     }
     log_line("系统", "队列 %d 线程退出", queue_num);

@@ -49,6 +49,14 @@ def blocked_dns(count):
             assert response[:2] == request[:2] and response[3] & 15 == 3, 'DNS did not receive NXDOMAIN'
 
 
+def idle_switches(pid):
+    result = {}
+    for task in Path(f'/proc/{pid}/task').iterdir():
+        fields = dict(line.split(':', 1) for line in (task/'status').read_text().splitlines() if ':' in line)
+        result[task.name] = int(fields['voluntary_ctxt_switches'])
+    return result
+
+
 def main():
     assert os.geteuid() == 0 and not DATA.exists(), 'requires clean disposable Linux/root'
     assert shutil.which('pgrep'), 'requires real pgrep to cover foreground self-discovery'
@@ -65,6 +73,8 @@ def main():
         assert metrics()['owner_pid'] == daemon.pid, 'foreground process did not become the metric owner'
         initial = (DATA/'metrics.conf').stat()
         initial_metrics = metrics()
+        initial_switches = idle_switches(daemon.pid)
+        idle_started = time.monotonic()
         # No packets/changes: one-second owner sampling must not rewrite this
         # file every second. The first low-frequency heartbeat is 15 s away.
         deadline = time.monotonic()+5
@@ -77,6 +87,14 @@ def main():
                 raise AssertionError(f'idle metric snapshot rewritten; changed fields: {changed}')
             assert daemon.poll() is None
             time.sleep(.1)
+        final_switches = idle_switches(daemon.pid)
+        switches = sum(value-initial_switches.get(tid, 0) for tid, value in final_switches.items())
+        elapsed = time.monotonic()-idle_started
+        # Real isolated queues have no traffic here. Two 100ms waits, owner
+        # maintenance and the logger fit comfortably below this bound; the
+        # previous pair of 2ms loops woke hundreds of times per second each.
+        assert switches/elapsed < 120, f'idle daemon wakes too often: {switches/elapsed:.1f}/s'
+        print(f'idle daemon voluntary switches: {switches/elapsed:.1f}/s', flush=True)
         # A second foreground launcher must still discover the existing owner;
         # excluding its own PID must not bypass the single-daemon protection.
         duplicate = subprocess.run([BINARY, '--daemon', '--foreground'], capture_output=True, timeout=5)
