@@ -50,6 +50,8 @@ window.previewCleanupCode = '';
 window.previewDaemonImageCurrent = true;
 window.previewStartFails = true;
 window.previewStartDelay = 0;
+window.previewDiagnosisDelay = 0;
+window.previewDiagnosis = {status:'ok',schema:1,read_only:true,authorized:true,running:false,connmark_mask:'0xcc000000',last_error_code:'iptables_failed',last_error:'历史错误',checks:[{family:'ipv4',status:'clear',chain:''},{family:'ipv6',status:'clear',chain:''}]};
 window.previewMetrics = {status:'current',owner_verified:true,owner_pid:123,owner_started:100,owner_boot:'12345678-1234-1234-1234-123456789abc',age_ms:0,updated_at:1792610000,block_suffix_hits:120,block_exact_hits:34,blocked_retransmits:999,quic_rejects:99};
 window.previewSyncConcurrency=10;
 window.previewSettings = {mode:2,scope:0,autostart:false,block_quic:false,dev_mode:false};
@@ -79,6 +81,9 @@ window.ksu = {
     previewCommands.push(command);
     let text = "", errno = 0;
     if(command.includes(" --version-status")) text = JSON.stringify(previewVersion);
+    else if(command.endsWith(' --diagnose')) {
+      setTimeout(()=>window[callback](0,JSON.stringify(previewDiagnosis),''),previewDiagnosisDelay); return;
+    }
     else if(command.includes(" --jobs-list")) {
       errno=previewJobDiscoveryFails?1:0;text=JSON.stringify(errno?{status:'unverified'}:{status:'ok',jobs:previewJobs});
     }

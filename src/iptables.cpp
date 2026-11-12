@@ -766,6 +766,31 @@ std::string iptables_connmark_conflict(const std::vector<std::string> &lines,
     return "";
 }
 
+std::vector<IptablesConnmarkCheck> iptables_inspect_connmarks(uint32_t mask) {
+    CommandBudget budget(10000, 4000);
+    std::vector<IptablesConnmarkCheck> result;
+    for (size_t i = 0; i < 2; ++i) {
+        bool readable = false;
+        const auto lines = shell_output_lines(TB_SAVE[i], &readable);
+        IptablesConnmarkCheck check{i == 0 ? "ipv4" : "ipv6", "unknown", ""};
+        if (readable) {
+            const auto conflict = iptables_connmark_conflict(lines, mask);
+            check.status = conflict.empty() ? "clear" : "conflict";
+            if (!conflict.empty()) {
+                std::string append;
+                std::istringstream rule(conflict);
+                rule >> append >> check.chain;
+                // Only export the chain identity, not foreign UID lists/comments.
+                if (check.chain.size() > 128 || check.chain.find_first_not_of(
+                        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.") != std::string::npos)
+                    check.chain.clear();
+            }
+        }
+        result.push_back(std::move(check));
+    }
+    return result;
+}
+
 std::vector<std::string> iptables_build_whitelist_commands(
         const char *table_binary, const IptablesConfig &cfg) {
     std::vector<std::string> commands;

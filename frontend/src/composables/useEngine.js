@@ -4,6 +4,7 @@ import { keyValues, lastJson, overlap } from '../domain/rules.js';
 import { useLifetime } from './useLifetime.js';
 import { confirmedApply, observeApply, validApplyRevision } from '../domain/apply.js';
 import { metricOwner, metricQuality, ruleHits } from '../domain/metrics.js';
+import { startupDiagnosis } from '../domain/engineDiagnostics.js';
 const cleanupFault = state => ['cleanup_failed', 'cleanup_unknown', 'cleanup_incomplete'].includes(state?.last_error_code);
 const applyKey = value => [value?.status, value?.desired_revision, value?.applied_revision, value?.verified, value?.verification].join(':');
 
@@ -34,6 +35,22 @@ export function useEngine(api, feedback, clock = () => globalThis.performance?.n
   const ready = computed(() => !!state.value);
   const healthUnknown = computed(() => !!state.value?.running && state.value?.freezer_state === 'unknown');
   const checking = ref(false);
+  const diagnosing = ref(false), diagnosis = ref(null), diagnosisError = ref('');
+  async function diagnose() {
+    if (!ready.value || diagnosing.value || action.value || setting.value) return;
+    diagnosing.value = true; diagnosisError.value = ''; diagnosis.value = null;
+    try {
+      await life.wait(32);
+      if (!life.active) return;
+      const result = await api.command('--diagnose'), report = lastJson(result.stdout);
+      if (!life.active) return;
+      if (result.code) throw new Error(result.stderr || '当前模块不支持自检或查询失败，请升级完整模块包并核对授权。');
+      const collectedAt = new Date().toISOString();
+      diagnosis.value = { ...startupDiagnosis(report), report, collectedAt, details: JSON.stringify({ collected_at: collectedAt, ...report }, null, 2) };
+    } catch (cause) {
+      if (life.active) diagnosisError.value = cause.message || '启动自检失败，请核对授权后重试。';
+    } finally { diagnosing.value = false; }
+  }
   const cleanupFailed = computed(() => cleanupFault(state.value));
   const outdated = computed(() => !!state.value?.running && state.value?.daemon_image_current === false);
   const applyIssue = computed(() => !!state.value?.running && !outdated.value &&
@@ -163,7 +180,7 @@ export function useEngine(api, feedback, clock = () => globalThis.performance?.n
     try { return await refreshing; } finally { refreshing = null; checking.value = false; }
   }
   async function control(verb) {
-    if (action.value || setting.value || !ready.value) return;
+    if (action.value || setting.value || diagnosing.value || !ready.value) return;
     if (verb === 'start' && healthUnknown.value) { feedback.toast('请先重新核实守护状态'); return; }
     if (verb === 'start' && cleanupFailed.value) { feedback.toast('请先重试暂停并核实清理结果'); return; }
     if (verb === 'start' && applyIssue.value) { feedback.toast('请先核实或重新应用配置，勿重复启动守护'); return; }
@@ -254,5 +271,5 @@ export function useEngine(api, feedback, clock = () => globalThis.performance?.n
       await life.wait(1000);
     }
   });
-  return { state, total, scope, action, setting, ready, running, healthUnknown, cleanupFailed, applyIssue, canRetryApply, checking, kind, badge, title, description, blockedTotal, metricsStale, metricsQuality, metricsNotice, tickMetrics, refreshMetrics, refresh, verifyHealth, retryApply, control, changeSetting };
+  return { state, total, scope, action, setting, ready, running, healthUnknown, cleanupFailed, applyIssue, canRetryApply, checking, diagnosing, diagnosis, diagnosisError, diagnose, kind, badge, title, description, blockedTotal, metricsStale, metricsQuality, metricsNotice, tickMetrics, refreshMetrics, refresh, verifyHealth, retryApply, control, changeSetting };
 }

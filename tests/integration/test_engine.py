@@ -171,6 +171,9 @@ def quic_rejection(family):
 def main() -> None:
     assert os.geteuid() == 0, "requires root in a disposable environment"
     assert not DATA.exists(), "refusing to touch an existing module data directory"
+    initial = json.loads(command(BINARY, '--diagnose'))
+    assert initial['read_only'] and initial['authorized'] and initial['schema'] == 1
+    assert len(initial['checks']) == 2 and not DATA.exists(), 'self-check recreated module data'
     for table in TABLES:
         assert "ADK_NFQ_" not in firewall(table, "-S"), "existing module firewall state"
     queue_file = Path("/proc/net/netfilter/nfnetlink_queue")
@@ -181,6 +184,7 @@ def main() -> None:
     daemon = None
     canary = False
     conflict = False
+    traffic_control = []
     foreign = ("-p", "udp", "--dport", "49557", "-j", "CONNMARK",
                "--set-xmark", "0x4000000/0x4000000")
     anonymous_drop = ("-p", "udp", "--dport", "443", "-j", "DROP")
@@ -206,6 +210,24 @@ def main() -> None:
         for table in TABLES:
             assert 'ADK_NFQ_' not in firewall(table, '-S'), 'empty startup attached traffic'
         (DATA / "custom_rules.txt").write_text("ads.example.com\n")
+        for table in TABLES:
+            firewall(table, '-N', 'tc_limiter_OUTPUT')
+            traffic_control.append(table)
+            firewall(table, '-A', 'tc_limiter_OUTPUT', '-j', 'CONNMARK', '--set-xmark', '0x30000000/0x30000000')
+            firewall(table, '-A', 'OUTPUT', '-j', 'tc_limiter_OUTPUT')
+        before_files = {str(p.relative_to(DATA)): p.read_bytes() for p in DATA.rglob('*') if p.is_file()}
+        before_routes = [firewall(table, '-S') for table in TABLES]
+        diagnosis = json.loads(command(BINARY, '--diagnose'))
+        assert diagnosis['connmark_mask'] == '0xcc000000'
+        assert all(check['status'] == 'clear' for check in diagnosis['checks']), diagnosis
+        assert before_files == {str(p.relative_to(DATA)): p.read_bytes() for p in DATA.rglob('*') if p.is_file()}, 'diagnosis modified persistent data'
+        assert before_routes == [firewall(table, '-S') for table in TABLES], 'diagnosis modified routing'
+        with tempfile.TemporaryDirectory() as tools:
+            stub = Path(tools) / 'ip6tables-save'
+            stub.write_text('#!/bin/sh\nexit 9\n'); stub.chmod(0o755)
+            checked = subprocess.run([BINARY, '--diagnose'], env={**os.environ, 'PATH': tools+':'+os.environ['PATH']}, capture_output=True, text=True, check=True, timeout=15)
+            report = json.loads(checked.stdout)
+            assert next(c for c in report['checks'] if c['family'] == 'ipv6')['status'] == 'unknown', report
         firewall("iptables", "-A", "OUTPUT", *anonymous_drop)
         canary = True
         daemon = subprocess.Popen([BINARY, "--daemon", "--foreground"])
@@ -379,12 +401,16 @@ def main() -> None:
         daemon = subprocess.Popen([BINARY, "--daemon", "--foreground"])
         assert daemon.wait(timeout=15) != 0, "external connmark conflict was not rejected"
         assert state() == "error"
+        diagnosis = json.loads(command(BINARY, '--diagnose'))
+        assert next(c for c in diagnosis['checks'] if c['family'] == 'ipv4')['status'] == 'conflict'
+        assert diagnosis['last_error_code'] == 'iptables_failed' and not diagnosis['running']
         for table in TABLES:
             assert "ADK_NFQ_" not in firewall(table, "-S"), "conflict mounted active routes"
+            firewall(table, '-C', 'tc_limiter_OUTPUT', '-j', 'CONNMARK', '--set-xmark', '0x30000000/0x30000000')
         firewall("iptables", "-C", "OUTPUT", *anonymous_drop)
         print("real engine dual-stack fast DNS NXDOMAIN/TCP reset/QUIC rejection, HTTP/TLS pass, scope reload, CLI stop, "
               "SIGKILL bypass/restart, missing-route/deleted-image recovery, healthy start idempotence, "
-              "connmark conflict and foreign-rule preservation tests passed")
+              "Xiaomi tc_limiter coexistence, read-only diagnosis, connmark conflict and foreign-rule preservation tests passed")
     except BaseException:
         log = DATA / "log/engine.log"
         if log.exists():
@@ -402,6 +428,10 @@ def main() -> None:
             firewall("iptables", "-D", "OUTPUT", *foreign)
         if canary:
             firewall("iptables", "-D", "OUTPUT", *anonymous_drop)
+        for table in traffic_control:
+            subprocess.run([table, '-w', '5', '-t', 'mangle', '-D', 'OUTPUT', '-j', 'tc_limiter_OUTPUT'], check=False)
+            firewall(table, '-F', 'tc_limiter_OUTPUT')
+            firewall(table, '-X', 'tc_limiter_OUTPUT')
         if DATA.exists():
             shutil.rmtree(DATA)
 

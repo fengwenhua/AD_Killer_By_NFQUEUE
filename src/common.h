@@ -97,15 +97,19 @@ inline std::string DATA_FILE(const char *name) {
 #define TLS_COPY_RANGE        4096u
 
 // AOSP netd 使用低 20 位保存 partial fwmark，bit 24/25 保存 StrictController
-// 状态。仅修改 bit 26..31，并在接管前检查其它 iptables 规则是否使用这些位。
+// 状态。小米 tc_limiter 使用 bit 28/29；分类仅使用 bit 26/27 和签名 bit 30/31。
+// 在接管前仍检查其它 iptables 规则，不能假定这些位永远空闲。
 // 这些位不是 Android 为第三方保留的 ABI；vendor/BPF 仍需目标设备验收。
-#define BLOCK_CONNMARK        0xa4000000u
-#define BLOCK_CONNMARK_MASK   0xfc000000u
-#define BLOCK_CONNMARK_SPEC   "0xa4000000/0xfc000000"
-#define PASS_CONNMARK         0xa8000000u
-#define PASS_CONNMARK_SPEC    "0xa8000000/0xfc000000"
-static_assert((BLOCK_CONNMARK_MASK & 0x030fffffu) == 0,
-              "connmark mask overlaps AOSP netd state");
+#define BLOCK_CONNMARK        0x84000000u
+#define BLOCK_CONNMARK_MASK   0xcc000000u
+#define BLOCK_CONNMARK_SPEC   "0x84000000/0xcc000000"
+#define PASS_CONNMARK         0x88000000u
+#define PASS_CONNMARK_SPEC    "0x88000000/0xcc000000"
+static_assert((BLOCK_CONNMARK_MASK & 0x330fffffu) == 0,
+              "connmark mask overlaps AOSP netd or Xiaomi traffic-control state");
+static_assert((0xa4000000u & BLOCK_CONNMARK_MASK) == BLOCK_CONNMARK &&
+              (0xa8000000u & BLOCK_CONNMARK_MASK) == PASS_CONNMARK,
+              "legacy classified connections must retain their verdict");
 static_assert((BLOCK_CONNMARK & ~BLOCK_CONNMARK_MASK) == 0 &&
               (PASS_CONNMARK & ~BLOCK_CONNMARK_MASK) == 0 &&
               BLOCK_CONNMARK != PASS_CONNMARK,

@@ -28,8 +28,18 @@ defineProps({ engine: Object, sync: Object, apps: Object, feedback: Object, modu
           <small :data-stale="engine.metricsQuality !== 'current'">{{ engine.metricsNotice }}</small>
         </div>
         <div class="action-grid">
-          <ActionButton id="startBtn" :variant="engine.running ? undefined : 'primary'" icon="play" :busy="engine.action === 'start'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || engine.running || engine.healthUnknown || engine.cleanupFailed || engine.applyIssue" @click="engine.control('start')"><span id="startLabel">{{ engine.action === 'start' ? '启动中…' : '启动守护' }}</span></ActionButton>
-          <ActionButton id="stopBtn" :variant="engine.running ? 'primary' : undefined" icon="pause" :busy="engine.action === 'stop'" :disabled="!engine.ready || !!engine.action || !!engine.setting || apps.saving || (!engine.state?.running && !engine.state?.enabled && !engine.cleanupFailed)" @click="engine.control('stop')"><span id="stopLabel">{{ engine.action === 'stop' ? '暂停中…' : '暂停守护' }}</span></ActionButton>
+          <ActionButton id="startBtn" :variant="engine.running ? undefined : 'primary'" icon="play" :busy="engine.action === 'start'" :disabled="!engine.ready || !!engine.action || !!engine.setting || engine.diagnosing || apps.saving || engine.running || engine.healthUnknown || engine.cleanupFailed || engine.applyIssue" @click="engine.control('start')"><span id="startLabel">{{ engine.action === 'start' ? '启动中…' : '启动守护' }}</span></ActionButton>
+          <ActionButton id="stopBtn" :variant="engine.running ? 'primary' : undefined" icon="pause" :busy="engine.action === 'stop'" :disabled="!engine.ready || !!engine.action || !!engine.setting || engine.diagnosing || apps.saving || (!engine.state?.running && !engine.state?.enabled && !engine.cleanupFailed)" @click="engine.control('stop')"><span id="stopLabel">{{ engine.action === 'stop' ? '暂停中…' : '暂停守护' }}</span></ActionButton>
+        </div>
+        <div class="startup-diagnosis">
+          <ActionButton id="diagnoseBtn" icon="sync" :busy="engine.diagnosing" :disabled="!engine.ready || !!engine.action || !!engine.setting" @click="engine.diagnose">{{ engine.diagnosing ? '正在自检…' : '启动自检' }}</ActionButton>
+          <p v-if="engine.diagnosisError" class="subtle" role="alert">{{ engine.diagnosisError }}</p>
+          <div v-if="engine.diagnosis" id="startupDiagnosis" :data-kind="engine.diagnosis.kind" role="status">
+            <h3 id="startupDiagTitle">{{ engine.diagnosis.title }}</h3>
+            <p class="subtle">{{ engine.diagnosis.advice }}</p>
+            <p class="subtle">读取于 {{ new Date(engine.diagnosis.collectedAt).toLocaleTimeString() }}，仅代表该次检查。</p>
+            <details><summary>查看自检详情与历史错误</summary><p class="subtle">以下为本次只读检查及上次记录，不代表已修复或启动成功。</p><pre class="source-result" tabindex="0">{{ engine.diagnosis.details }}</pre></details>
+          </div>
         </div>
       </section>
       <section class="card sync-card">
@@ -43,7 +53,7 @@ defineProps({ engine: Object, sync: Object, apps: Object, feedback: Object, modu
       </section>
       <section class="card settings-card">
         <h2>拦截与启动设置</h2>
-        <fieldset :disabled="!engine.ready || !!engine.setting || !!engine.action || apps.saving">
+        <fieldset :disabled="!engine.ready || !!engine.setting || !!engine.action || engine.diagnosing || apps.saving">
           <legend class="field-title">规则强度</legend>
           <div id="modeSeg" class="seg" aria-label="规则强度">
             <button v-for="(label, n) in ['仅 Hosts', 'Hosts + AdGuard']" :key="n" type="button" :data-mode="n + 1" :aria-pressed="engine.state?.mode === n + 1" :class="{ active: engine.state?.mode === n + 1 }" @click="engine.changeSetting('mode', n + 1)">{{ label }}</button>

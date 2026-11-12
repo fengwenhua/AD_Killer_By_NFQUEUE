@@ -1470,6 +1470,30 @@ static int cmd_status_fast() {
     return 0;
 }
 
+static int cmd_diagnose() {
+    const bool authorized = am_root();
+    const auto checks = authorized ? iptables_inspect_connmarks(BLOCK_CONNMARK_MASK)
+        : std::vector<IptablesConnmarkCheck>{{"ipv4", "unknown", ""}, {"ipv6", "unknown", ""}};
+    const int pid = find_daemon_pid();
+    std::ostringstream out;
+    out << "{\"status\":\"ok\",\"schema\":1,\"read_only\":true,\"authorized\":"
+        << (authorized ? "true" : "false") << ",\"version\":" << source_json_string(MODULE_VERSION)
+        << ",\"running\":" << (pid > 0 ? "true" : "false")
+        << ",\"runtime\":" << source_json_string(read_runtime_state())
+        << ",\"last_error_code\":" << source_json_string(read_conf_value(FILE_ENGINE_ERROR, "code"))
+        << ",\"last_error\":" << source_json_string(read_conf_value(FILE_ENGINE_ERROR, "message"))
+        << ",\"connmark_mask\":\"0x" << std::hex << BLOCK_CONNMARK_MASK << "\",\"checks\":[";
+    for (size_t i = 0; i < checks.size(); ++i) {
+        if (i) out << ',';
+        out << "{\"family\":" << source_json_string(checks[i].family)
+            << ",\"status\":" << source_json_string(checks[i].status)
+            << ",\"chain\":" << source_json_string(checks[i].chain) << '}';
+    }
+    out << "]}";
+    puts(out.str().c_str());
+    return 0;
+}
+
 static int cmd_sync_settings() {
     printf("{\"status\":\"ok\",\"concurrency\":%d,\"default\":%d,\"maximum\":%d}\n",
         sync_concurrency_value(read_conf_value(FILE_STATE_CONF, "sync_concurrency")),
@@ -1619,6 +1643,7 @@ static void usage() {
             "  AD_Killer_By_NFQUEUE --autostart on|off 开机自启(默认关闭，不改变当前运行状态)\n"
             "  AD_Killer_By_NFQUEUE --apps-apply       应用名单生效\n"
             "  AD_Killer_By_NFQUEUE --status           状态 JSON\n"
+            "  AD_Killer_By_NFQUEUE --diagnose         只读启动自检与连接标记冲突检查\n"
             "  AD_Killer_By_NFQUEUE --apply-status [REVISION]  查询配置生效回执（只读）\n"
             "  AD_Killer_By_NFQUEUE --version-status   版本 JSON\n",
             MODULE_VERSION);
@@ -1736,6 +1761,7 @@ int main(int argc, char **argv) {
     }
     if (arg == "--status")         return cmd_status();
     if (arg == "--status-fast")    return cmd_status_fast();
+    if (arg == "--diagnose") { if (argc != 2) return 1; return cmd_diagnose(); }
     if (arg == "--sync-settings") { if (argc != 2) return 1; return cmd_sync_settings(); }
     if (arg == "--sync-concurrency") { if (argc != 3) return 1; return writer([&] { return cmd_sync_concurrency(argv[2]); }); }
     if (arg == "--version-status") return cmd_version_status();

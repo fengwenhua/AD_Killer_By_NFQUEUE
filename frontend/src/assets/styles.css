@@ -177,6 +177,10 @@ textarea { min-height: 180px; font: 14px/1.7 ui-monospace, Menlo, monospace; res
 .preview-settings label { font-size: 13px; font-weight: 600; }
 .preview-settings input { flex: 1; width: 100px; margin: 0; }
 .source-result { white-space: pre-wrap; max-height: 220px; overflow: auto; overflow-wrap: anywhere; font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+.startup-diagnosis { margin-top: 12px; }
+.startup-diagnosis h3 { margin: 12px 0 6px; font-size: 15px; }
+.startup-diagnosis details { margin-top: 8px; color: var(--muted); font-size: 12px; }
+.startup-diagnosis pre { user-select: text; -webkit-user-select: text; }
 .source-history { margin-top: 10px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .source-sync-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-bottom: 4px; }
 .source-sync-state { font-weight: 600; }
