@@ -111,6 +111,21 @@ int main() {
     };
     expect(iptables_connmark_conflict(android_rules, BLOCK_CONNMARK_MASK).empty(),
            "classification bits must not overlap observed Android connmark rules");
+    const std::vector<std::string> xiaomi_rules = {
+        "-A tc_limiter_OUTPUT -j CONNMARK --set-xmark 0x30000000/0x30000000",
+        "-A tc_limiter_OUTPUT -j CONNMARK --set-xmark 0x20000000/0x30000000",
+        "-A INPUT -m connmark --mark 0x20000000/0x30000000 -j tc_limiter",
+    };
+    expect(!iptables_connmark_conflict(xiaomi_rules, 0xfc000000u).empty(),
+           "the installed legacy mask must reproduce the Xiaomi startup conflict");
+    expect(iptables_connmark_conflict(xiaomi_rules, BLOCK_CONNMARK_MASK).empty(),
+           "Xiaomi traffic-control bits must remain disjoint from both classifications");
+    for (uint32_t vendor : {0u, 0x10000000u, 0x20000000u, 0x30000000u}) {
+        expect(((vendor & ~BLOCK_CONNMARK_MASK) ^ BLOCK_CONNMARK) == (vendor | BLOCK_CONNMARK),
+               "blocked classification preserves every Xiaomi traffic-control value");
+        expect(((vendor & ~BLOCK_CONNMARK_MASK) ^ PASS_CONNMARK) == (vendor | PASS_CONNMARK),
+               "passed classification preserves every Xiaomi traffic-control value");
+    }
     expect(!iptables_connmark_conflict(android_rules, 0xffff0000u).empty(),
            "the old high-16-bit mask must detect an Android network mark conflict");
     for (const auto &rule : {

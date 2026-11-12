@@ -26,6 +26,15 @@ def main():
             page.evaluate('previewDaemonImageCurrent=true')
             expect(page.locator('#stateTitle')).to_have_text('拦截已开启', timeout=8000)
             assert not page.evaluate("previewCommands.some(c=>c.endsWith(' --start') || c.endsWith(' --stop'))"), 'polling must not repair/restart by itself'
+            page.evaluate('previewDiagnosisDelay=600;previewDiagnosis.checks[1]={family:"ipv6",status:"conflict",chain:"tc_limiter_OUTPUT"}')
+            page.locator('#diagnoseBtn').click()
+            expect(page.locator('#diagnoseBtn')).to_have_attribute('aria-busy', 'true')
+            expect(page.locator('#startupDiagTitle')).to_have_text('系统 WLAN 流控标记冲突')
+            expect(page.locator('#diagnoseBtn')).to_have_attribute('aria-busy', 'false')
+            page.locator('#startupDiagnosis summary').click()
+            expect(page.locator('#startupDiagnosis pre')).to_contain_text('tc_limiter_OUTPUT')
+            expect(page.locator('#stateTitle')).to_have_text('拦截已开启')
+            assert not page.evaluate("previewCommands.some(c=>c.endsWith(' --start') || c.endsWith(' --stop'))"), 'diagnosis must remain read-only'
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
             assert not errors, errors
             print('Route loss, full revalidation, stale-image warning and live recovery browser checks passed')

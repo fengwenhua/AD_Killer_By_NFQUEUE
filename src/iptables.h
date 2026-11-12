@@ -60,6 +60,14 @@ std::vector<std::string> iptables_build_whitelist_commands(
 std::string iptables_connmark_conflict(const std::vector<std::string> &lines,
                                       uint32_t mask);
 
+struct IptablesConnmarkCheck {
+    std::string family;
+    std::string status; // clear/conflict/unknown; never equate a failed read with clear
+    std::string chain;
+};
+// Bounded read-only snapshots. Does not create data/locks or modify firewall rules.
+std::vector<IptablesConnmarkCheck> iptables_inspect_connmarks(uint32_t mask);
+
 using FileLock = ExclusiveFileLock;
 
 enum class FirewallCleanupState { CLEAN, PARTIAL, UNKNOWN };
