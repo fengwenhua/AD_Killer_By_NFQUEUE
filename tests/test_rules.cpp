@@ -103,6 +103,13 @@ int main(int argc, char **argv) {
     expect(compact.classify("rule-12345.example") == RuleSet::Hit::EXACT,
            "binary-search storage should preserve exact matching semantics");
 
+    RuleSet overlap;
+    overlap.add_exact("same.example");
+    overlap.add_suffix("same.example");
+    overlap.add_suffix("other.example");
+    expect(overlap.size() == 2,
+           "exact and suffix rules for the same domain must count as one unique domain");
+
     RuleDB db;
     RuleDB invalid;
     expect(parse_hosts_line("invalid..example", invalid) == 0 && invalid.black.bad_lines == 1,

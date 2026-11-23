@@ -70,8 +70,8 @@ Linux/root 环境；用法、固定输入与前后对照见
 - `test_fast_response`：NXDOMAIN 的 ID/问题区/EDNS/压缩指针、TCP RST 序列号、
   双栈 IP/UDP/TCP/ICMP 校验和与大小边界；fuzz 同时覆盖快速响应构造。
 - `test_rules`、`test_rule_stream`、`test_source_validator`：规则语义、流式 gzip、资源上限与快照并发；
-- `test_recipe_parity.py`：12 个普通源共享配方、C++/Python 完整规则内容与计数一致，覆盖
-  显式 Hosts→AdGuard、低比例浏览器列表、gzip、部分失败、非法域名和隔离输出；
+- `test_recipe_parity.py`：20 个普通源共享配方、C++/Python 完整规则内容与计数一致，覆盖
+  显式 Hosts→AdGuard、原生 Hosts 分类、低比例浏览器列表、gzip、部分失败、非法域名和隔离输出；
 - `test_config_store`、`test_update_job`、`test_rule_bundle`：配置锁、任务状态和原子 generation；
 - `test_data_paths.py`：独立数据路径与共享根目录权限边界；
 - `test_iptables`：纯命令规划和路由快照判定，不调用宿主机防火墙；

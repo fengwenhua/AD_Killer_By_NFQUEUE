@@ -20,13 +20,13 @@ def main():
         snapshot.mkdir()
         manifest = []
         for i, (name, url, _, fmt) in enumerate(reference.ADGUARD_SOURCES):
-            kind = "hosts-as-adguard" if fmt == "hosts" else "adguard"
+            kind = fmt
             file = f"{i:02d}.txt"
             if i == 3:
                 file = "-"  # Reproducible download failure, not a live network.
             elif i == 4:
                 (snapshot / file).write_bytes(b"<!doctype html><html><body>Error</body></html>")
-            elif kind == "hosts-as-adguard":
+            elif kind in ("hosts-as-adguard", "hosts"):
                 (snapshot / file).write_text(
                     "0.0.0.0 Ads.Example\n127.0.0.1\tduplicate.example\n"
                     "*.wild.example\nroot.example.\nroot.example..\n"
@@ -77,8 +77,11 @@ def main():
         (snapshot / "sources.tsv").write_text("adguard\t../secret\thttps://example.org/a\n")
         assert subprocess.run([sys.argv[1], str(snapshot), str(base / "bad")],
                               capture_output=True).returncode != 0
-        # No HaGeZi: the dedicated Hosts output is intentionally comment-only.
-        assert (cppout / "hosts_rules.txt").read_text() == "# AD_Killer_By_NFQUEUE generated Hosts rules\n"
+        # The four typed Hosts sources aggregate into the Hosts category; the
+        # hosts-as-adguard source stays in the AdGuard category.
+        assert (cppout / "hosts_rules.txt").read_text() == (
+            "# AD_Killer_By_NFQUEUE generated Hosts rules\n"
+            "ads.example\ncomment.example\nduplicate.example\nroot.example\nwild.example\n")
     print("shared-recipe native/Python complete-set parity, typed Hosts, gzip, failures, limits and offline isolation passed")
 
 

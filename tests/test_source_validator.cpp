@@ -163,6 +163,13 @@ int main() {
     expect(typed_hosts.accepted && typed_hosts.stats.accepted_hosts == 0 &&
                typed_hosts.adguard_rules == "ads.example\nwild.example\n",
            "recipe Hosts sources must become exact rules in the AdGuard category");
+    auto typed_native_hosts = validate_rule_source(
+        "0.0.0.0 Ads.Example\n*.wild.example\n||not-adguard.example^\n", SourceFormat::HOSTS);
+    expect(typed_native_hosts.accepted && typed_native_hosts.stats.accepted_hosts == 2 &&
+               typed_native_hosts.stats.accepted_adguard == 0 &&
+               typed_native_hosts.hosts_rules == "ads.example\nwild.example\n" &&
+               typed_native_hosts.adguard_rules.empty(),
+           "native Hosts sources must populate the Hosts category");
 
     SourceValidationResult masks = validate_rule_source(
         "||valid.example^\n||adservice.google.\n||adserver1.\n@@||advertising.civitai.\n");

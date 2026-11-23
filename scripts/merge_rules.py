@@ -26,7 +26,7 @@ DOM_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[
 
 
 def read_recipe():
-    pattern = re.compile(r'RULE_SOURCE\(("[^"\n]+"), ("[^"\n]+"), (ADGUARD|HOSTS_AS_ADGUARD)\)')
+    pattern = re.compile(r'RULE_SOURCE\(("[^"\n]+"), ("[^"\n]+"), (ADGUARD|HOSTS_AS_ADGUARD|HOSTS)\)')
     result = []
     for line in (HERE.parent / "src/rule_recipe.inc").read_text().splitlines():
         if not line or line.startswith("//"):
@@ -36,9 +36,14 @@ def read_recipe():
             raise ValueError("invalid shared recipe: " + line)
         name, url, kind = match.groups()
         result.append((json.loads(name), json.loads(url), "",
-                       "hosts" if kind == "HOSTS_AS_ADGUARD" else "adguard"))
-    if not 1 <= len(result) <= 64 or len({url for _, url, _, _ in result}) != len(result) or any("hagezi" in url.lower() for _, url, _, _ in result):
-        raise ValueError("expected 1..64 unique ordinary sources without HaGeZi")
+                       {"ADGUARD": "adguard", "HOSTS_AS_ADGUARD": "hosts-as-adguard",
+                        "HOSTS": "hosts"}[kind]))
+    def ordinary_hagezi(url):
+        # The locked built-in HaGeZi Pro/Fake pair never belongs to this
+        # recipe; the single Light list is an ordinary source by design.
+        return "hagezi" in url.lower() and "light" not in url.lower()
+    if not 1 <= len(result) <= 64 or len({url for _, url, _, _ in result}) != len(result) or any(ordinary_hagezi(url) for _, url, _, _ in result):
+        raise ValueError("expected 1..64 unique ordinary sources without the HaGeZi Pro/Fake pair")
     return result
 
 
@@ -136,8 +141,9 @@ def source_rules(data, source_format):
     if lines > MAX_LINES:
         raise ValueError("line_count_limit")
     rules, generated_bytes = set(), 0
+    category = "hosts" if source_format == "hosts" else "adguard"
     for line in text.split("\n"):
-        if source_format == "hosts-as-adguard":
+        if source_format in ("hosts", "hosts-as-adguard"):
             normalized = parse_hosts_text(line)
         else:
             parsed = parse_adguard_line(line)
@@ -146,7 +152,7 @@ def source_rules(data, source_format):
         generated_bytes += sum(len(rule) + 1 for rule in normalized)
     if not rules:
         raise ValueError("no_valid_rules")
-    return rules, size, lines, generated_bytes
+    return category, rules, size, lines, generated_bytes
 
 
 def fetch_bytes(url):
@@ -179,38 +185,47 @@ def cached_fetch(url, fresh=False):
 
 
 def run_reference(inputs, out):
-    merged, reports = set(), []
+    merged = {"hosts": set(), "adguard": set()}
+    reports = []
     used_bytes, used_lines, used_generated_bytes = 0, 0, 0
     for name, url, source_format, data, error in inputs:
         report = {"name": name, "url": url, "format": source_format}
         try:
             if error:
                 raise RuntimeError(error)
-            rules, size, lines, generated_bytes = source_rules(data, source_format)
+            category, rules, size, lines, generated_bytes = source_rules(data, source_format)
             if (size > MAX_TOTAL_BYTES - used_bytes or lines > MAX_LINES - used_lines
                     or generated_bytes > MAX_TOTAL_BYTES - used_generated_bytes):
                 raise ValueError("aggregate_resource_limit")
-            merged.update(rules)
+            merged[category].update(rules)
             used_bytes += size
             used_lines += lines
             used_generated_bytes += generated_bytes
-            report.update(status="accepted", valid_unique=len(rules), bytes=size)
-            print(f"  ✓ {name}: {len(rules):,} 条（单源去重后）", flush=True)
+            report.update(status="accepted", valid_unique=len(rules), bytes=size, category=category)
+            print(f"  ✓ {name}: {len(rules):,} 条（单源去重后，{'Hosts' if category == 'hosts' else 'AdGuard'}）", flush=True)
         except Exception as exc:
             report.update(status="rejected", reason=str(exc))
             print(f"  ✗ {name}: {exc}", flush=True)
         reports.append(report)
-    if not merged:
+    if not merged["hosts"] and not merged["adguard"]:
         raise RuntimeError("所有源均不可用，不生成规则包")
-    adguard = "# AD_Killer_By_NFQUEUE generated AdGuard rules\n" + "\n".join(sorted(merged)) + "\n"
+    adguard = "# AD_Killer_By_NFQUEUE generated AdGuard rules\n"
+    if merged["adguard"]:
+        adguard += "\n".join(sorted(merged["adguard"])) + "\n"
     hosts = "# AD_Killer_By_NFQUEUE generated Hosts rules\n"
+    if merged["hosts"]:
+        hosts += "\n".join(sorted(merged["hosts"])) + "\n"
     black, white, _ = parse_adguard_text(adguard)
+    host_domains = parse_hosts_text(hosts)
+    black_domains = {domain for _, domain in black} | host_domains
+    white_domains = {domain for _, domain in white}
+    black_count, white_count = len(black_domains), len(white_domains)
     out.mkdir(parents=True, exist_ok=True)
     for stem, text in (("hosts_rules", hosts), ("adguard_rules", adguard)):
         (out / (stem + ".txt")).write_text(text, encoding="utf-8")
         (out / (stem + ".gz")).write_bytes(gzip.compress(text.encode(), mtime=0))
-    (out / "rule_stats.conf").write_text(f"mode=2\nblack={len(black)}\nwhite={len(white)}\nupdated_at=0\n")
-    summary = dict(black=len(black), white=len(white), total=len(black) + len(white),
+    (out / "rule_stats.conf").write_text(f"mode=2\nblack={black_count}\nwhite={white_count}\nupdated_at=0\n")
+    summary = dict(black=black_count, white=white_count, total=black_count + white_count,
                    accepted_sources=sum(r["status"] == "accepted" for r in reports),
                    source_count=len(reports), sources=reports)
     (out / "merge_report.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
@@ -228,8 +243,7 @@ def main():
     args = parser.parse_args()
     if args.snapshot_dir and args.from_snapshot:
         parser.error("snapshot capture and replay are mutually exclusive")
-    sources = [(name, url, "hosts-as-adguard" if fmt == "hosts" else "adguard")
-               for name, url, _, fmt in ADGUARD_SOURCES]
+    sources = [(name, url, fmt) for name, url, _, fmt in ADGUARD_SOURCES]
     if args.from_snapshot:
         manifest = (args.from_snapshot / "sources.tsv").read_text().splitlines()
         if len(manifest) != len(sources):

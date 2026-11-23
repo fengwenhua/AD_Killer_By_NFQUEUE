@@ -39,6 +39,7 @@ int merge_rule_snapshot(const std::string &input, const std::string &output) {
         SourceFormat format = SourceFormat::AUTO;
         if (format_name == "adguard") format = SourceFormat::ADGUARD;
         else if (format_name == "hosts-as-adguard") format = SourceFormat::HOSTS_AS_ADGUARD;
+        else if (format_name == "hosts") format = SourceFormat::HOSTS;
         else if (format_name != "auto") return 1;
         if (!validate_download_url(url) || file.empty() || file.find("..") != std::string::npos ||
             file.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") != std::string::npos) return 1;

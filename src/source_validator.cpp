@@ -74,6 +74,7 @@ public:
             return;
         }
         if (format_ != SourceFormat::HOSTS_AS_ADGUARD &&
+            format_ != SourceFormat::HOSTS &&
             (line.find("##") != std::string::npos ||
             line.find("#@#") != std::string::npos ||
             line.find("#$#") != std::string::npos ||
@@ -87,6 +88,15 @@ public:
         if (format_ == SourceFormat::AUTO && parse_hosts_rule(line, parsed)) {
             result_.hosts_rules += parsed.canonical() + "\n";
             result_.stats.accepted_hosts++;
+            return;
+        }
+        if (format_ == SourceFormat::HOSTS) {
+            if (parse_recipe_hosts_rule(line, parsed)) {
+                result_.hosts_rules += parsed.canonical() + "\n";
+                result_.stats.accepted_hosts++;
+                return;
+            }
+            result_.stats.rejected_unsupported++;
             return;
         }
         bool valid = format_ == SourceFormat::HOSTS_AS_ADGUARD

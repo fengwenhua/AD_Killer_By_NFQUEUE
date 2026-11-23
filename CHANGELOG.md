@@ -1,3 +1,14 @@
+# v1.2.15 · 规则源扩展与 Hosts 多源并集
+
+- 默认来源新增 HaGeZi Light、AdRules DNS List、hostsVN Threat、轻量广告拦截规则（banad）。
+- 乘风来源切换为视频规则 `mv.txt`。
+- 新增原生 Hosts 源：anti-AD domains、oisd big、1Hosts Lite、StevenBlack hosts；“仅 Hosts”模式改为多源域名并集。
+- 升级自动执行 `source_defaults_version=2` 迁移：移除失效的 `adrules.top/adrules.txt`，追加新来源；手动编辑与停用状态保留。
+- 规则统计改为精确/后缀域名并集计数，同一域名不再重复计数。
+- 文档与测试同步更新；AdRules 与 banad 的许可风险已在第三方规则清单标注。
+
+**升级保留规则、来源、应用名单和设置；卸载默认删除本模块全部数据，包括日志和下载缓存。** 安装后请自行软重启，再检查守护和规则生效状态。
+
 # v1.2.14 · 规则同步进度与更新体验
 
 - 模块更新改为确认目标版本后，连续完成下载、校验和安装；全程显示状态，完成后提示手动软重启。

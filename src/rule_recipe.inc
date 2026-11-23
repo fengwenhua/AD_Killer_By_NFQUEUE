@@ -1,4 +1,6 @@
-// Shared by native updater and Python reference. No HaGeZi subscriptions.
+// Shared by native updater and Python reference. No HaGeZi Pro/Fake pair here:
+// the locked built-in group is defined in builtin_sources.h. HaGeZi Light is a
+// normal single list and is intentionally allowed in the ordinary recipe.
 RULE_SOURCE("AdGuard DNS filter", "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt", ADGUARD)
 RULE_SOURCE("AdGuard Mobile Ads filter", "https://adguardteam.github.io/AdguardFilters/MobileFilter/sections/adservers.txt", ADGUARD)
 RULE_SOURCE("AdGuard Tracking Protection filter", "https://filters.adtidy.org/extension/ublock/filters/3.txt", ADGUARD)
@@ -7,7 +9,15 @@ RULE_SOURCE("EasyList China", "https://easylist-downloads.adblockplus.org/easyli
 RULE_SOURCE("EasyPrivacy", "https://easylist-downloads.adblockplus.org/easyprivacy.txt", ADGUARD)
 RULE_SOURCE("oisd small", "https://small.oisd.nl/abp", ADGUARD)
 RULE_SOURCE("CJX's Annoyance List", "https://raw.githubusercontent.com/cjx82630/cjxlist/master/cjx-annoyance.txt", ADGUARD)
-RULE_SOURCE("乘风广告过滤规则", "https://raw.githubusercontent.com/xinggsf/Adblock-Plus-Rule/master/rule.txt", ADGUARD)
+RULE_SOURCE("乘风 视频过滤规则", "https://raw.githubusercontent.com/xinggsf/Adblock-Plus-Rule/master/mv.txt", ADGUARD)
 RULE_SOURCE("anti-AD for AdGuard", "https://anti-ad.net/adguard.txt", ADGUARD)
 RULE_SOURCE("AWAvenue Ads Rule", "https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt", ADGUARD)
 RULE_SOURCE("hostsVN", "https://raw.githubusercontent.com/bigdargon/hostsVN/master/hosts", HOSTS_AS_ADGUARD)
+RULE_SOURCE("HaGeZi Light DNS Blocklist", "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/light.txt", ADGUARD)
+RULE_SOURCE("AdRules DNS List", "https://adrules.top/dns.txt", ADGUARD)
+RULE_SOURCE("hostsVN Threat", "https://raw.githubusercontent.com/bigdargon/hostsVN/master/extensions/threat/filter.txt", ADGUARD)
+RULE_SOURCE("轻量广告拦截规则", "https://raw.githubusercontent.com/damengzhu/banad/main/jiekouAD.txt", ADGUARD)
+RULE_SOURCE("anti-AD domains", "https://anti-ad.net/domains.txt", HOSTS)
+RULE_SOURCE("oisd big", "https://big.oisd.nl/domainswild2", HOSTS)
+RULE_SOURCE("1Hosts Lite", "https://raw.githubusercontent.com/badmojr/1Hosts/master/Lite/wildcards.txt", HOSTS)
+RULE_SOURCE("StevenBlack hosts", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts", HOSTS)
