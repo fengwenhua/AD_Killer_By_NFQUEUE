@@ -195,14 +195,30 @@ static int cmd_install() {
             fprintf(stderr, "来源更新正在运行，安装已中止，请等待任务结束\n");
             return false;
         }
-        const bool migrate=read_conf_value(FILE_STATE_CONF,"source_defaults_version")!="2";
+        const auto marker = read_conf_value(FILE_STATE_CONF, "source_defaults_version");
+        int defaults_version = 0;
+        if (!marker.empty() && (!parse_integer_arg(marker.c_str(), defaults_version) || defaults_version < 0)) {
+            fprintf(stderr, "来源迁移版本无效，未覆盖已有来源配置\n"); return false;
+        }
+        const bool migrate = defaults_version < 2;
         if (!file_exists(FILE_UPDATE_SOURCES)) {
             if (!write_initial_config(FILE_UPDATE_SOURCES, default_rule_sources_text())) return false;
             return !migrate || write_conf_value(FILE_STATE_CONF,"source_defaults_version","2");
         }
         std::string configured;
-        if (!read_file(FILE_UPDATE_SOURCES, configured)) return false;
-        auto updated=should_refresh_default_rule_sources(configured) ? default_rule_sources_text() : migrate ? migrate_source_defaults(configured) : configured;
+        if (read_regular_bounded(FILE_UPDATE_SOURCES, configured, MAX_SOURCE_CONFIG_BYTES) != BoundedRead::OK ||
+            configured.find('\0') != std::string::npos) return false;
+        std::string updated = configured;
+        if (migrate) {
+            std::vector<RuleSource> entries; std::string error;
+            if (!parse_rule_sources(configured, entries, error, true)) {
+                fprintf(stderr, "现有来源配置无效，未迁移: %s\n", error.c_str()); return false;
+            }
+            updated = should_refresh_default_rule_sources(configured) ? default_rule_sources_text() : migrate_source_defaults(configured);
+            if (!parse_rule_sources(updated, entries, error, true)) {
+                fprintf(stderr, "迁移后的来源配置无效，未保存: %s\n", error.c_str()); return false;
+            }
+        }
         if (updated!=configured && !write_initial_config(FILE_UPDATE_SOURCES,updated)) return false;
         return !migrate || write_conf_value(FILE_STATE_CONF,"source_defaults_version","2");
     }();

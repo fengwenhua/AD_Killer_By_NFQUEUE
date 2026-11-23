@@ -83,20 +83,48 @@ def main():
         assert 'https://adrules.top/adrules.txt' not in migrated_text
         assert 'https://adrules.top/dns.txt' in migrated_text
         assert 'https://anti-ad.net/domains.txt' in migrated_text
-        assert migrated_text.count(HAGEZI+'\n') == 1 and '# disabled: '+HAGEZI not in migrated_text
+        assert migrated_text.count(HAGEZI+'\n') == 1 and '# disabled: '+HAGEZI in migrated_text
         sources_file.write_text('# mine\nhttps://example.org/user\n# disabled: '+HAGEZI+'\n')
         command('--install')
         assert '# disabled: '+HAGEZI in sources_file.read_text(), 'later manual builtin opt-out must survive reinstall'
+        # Known v1 installations retain explicit choices and stay within editor
+        # limits, even if a hand-edited file has no trailing newline.
+        def marker(value):
+            config.write_text(''.join(line for line in config.read_text().splitlines(keepends=True)
+                                      if not line.startswith('source_defaults_version=')) + 'source_defaults_version=' + value + '\n')
+        marker('1')
+        full = ''.join(f'https://example.org/{i}\n' for i in range(64)).rstrip('\n')
+        sources_file.write_text(full)
+        command('--install')
+        migrated = json.loads(command('--sources-list'))['sources']
+        assert len([s for s in migrated if not s['locked']]) == 64
+        assert migrated[-1]['url'] == HAGEZI and not migrated[-1]['enabled']
+        assert sources_file.read_text().startswith(full + '\n')
+        # Migration completion is one-time; future schema markers cannot be
+        # downgraded or used to reset a deliberately selected legacy template.
+        marker('3')
+        sources_file.write_text('# custom\n# disabled: '+HAGEZI+'\n')
+        saved = sources_file.read_bytes(); command('--install')
+        assert sources_file.read_bytes() == saved and 'source_defaults_version=3\n' in config.read_text()
+        marker('1')
+        sources_file.write_text('https://example.org/dup\nhttps://example.org/dup\n')
+        saved = sources_file.read_bytes(); before_config = config.read_bytes()
+        command('--install', success=False)
+        assert sources_file.read_bytes() == saved and config.read_bytes() == before_config
+        sources_file.write_text('# custom\nhttps://example.org/last-good\n# disabled: '+HAGEZI+'\n')
+        command('--install')
+
         # Exact old defaults upgrade, but edited lists and pause state survive.
+        marker('1')
         (DATA / "update_sources.txt").write_text(
             "# 每行一个规则源 URL,支持 Hosts / AdGuard / gzip(.gz)\n"
             "# 以下为默认源,可自行增删\n"
             "https://anti-ad.net/easylist.txt\n"
             "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt\n")
-        before_config = (DATA / "state.conf").read_bytes()
+        before_config = (DATA / "state.conf").read_text().replace('source_defaults_version=1\n', 'source_defaults_version=2\n')
         command("--install")
         assert len(json.loads(command("--sources-list"))["sources"]) == recipe_count + 1
-        assert (DATA / "state.conf").read_bytes() == before_config
+        assert (DATA / "state.conf").read_text() == before_config
         (DATA / "update_sources.txt").write_text("# custom\nhttps://example.org/user\n")
         command("--install")
         assert (DATA / "update_sources.txt").read_text() == "# custom\nhttps://example.org/user\n"

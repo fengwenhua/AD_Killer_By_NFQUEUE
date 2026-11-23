@@ -1,8 +1,10 @@
 #pragma once
 #include <cstddef>
+#include <algorithm>
 #include <string>
 #include <vector>
 #include "builtin_sources.h"
+#include "source_config.h"
 
 // Formats:
 //   AUTO              user URL: try Hosts syntax into hosts_rules, then AdGuard
@@ -96,15 +98,9 @@ inline bool should_refresh_default_rule_sources(const std::string &configured) {
            configured == legacy_default_rule_sources_text_v1b();
 }
 
-// One-time source-defaults migration to version 2. Preserve every unrelated
-// line verbatim; do not download/publish rules here. Changes:
-//   - drop the retired https://adrules.top/adrules.txt landing-page URL;
-//   - switch 乘风 rule.txt to the video list mv.txt;
-//   - append newly introduced defaults (HaGeZi Light, AdRules DNS, hostsVN
-//     Threat, banad and four Hosts lists) unless the URL is already present;
-//   - keep the built-in HaGeZi pair enabled exactly once.
-// Later user choices are protected by the persisted source_defaults_version
-// marker written by --install.
+// One-time v2 migration. Explicit enablement/deletions of old sources remain
+// user policy. Only untouched frozen templates are replaced by the caller.
+// Append new defaults within the same count/byte limits as the editor.
 inline std::string migrate_source_defaults(const std::string &configured) {
     struct AddedSource { const char *name; const char *url; };
     static const AddedSource new_sources[] = {
@@ -117,78 +113,74 @@ inline std::string migrate_source_defaults(const std::string &configured) {
         {"1Hosts Lite", "https://raw.githubusercontent.com/badmojr/1Hosts/master/Lite/wildcards.txt"},
         {"StevenBlack hosts", "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"},
     };
-    constexpr size_t new_count = sizeof(new_sources) / sizeof(new_sources[0]);
     const std::string old_adrules = "https://adrules.top/adrules.txt";
+    const std::string new_adrules = "https://adrules.top/dns.txt";
     const std::string old_chengfeng = "https://raw.githubusercontent.com/xinggsf/Adblock-Plus-Rule/master/rule.txt";
     const std::string new_chengfeng = "https://raw.githubusercontent.com/xinggsf/Adblock-Plus-Rule/master/mv.txt";
     const std::string disabled = "# disabled: ";
-
+    const auto trimmed = [](const std::string &line) {
+        const auto first = line.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos) return std::string{};
+        return line.substr(first, line.find_last_not_of(" \t\r\n") - first + 1);
+    };
+    const auto address = [&](const std::string &line) {
+        const auto value = trimmed(line);
+        if (value.compare(0, disabled.size(), disabled) == 0) return value.substr(disabled.size());
+        return value.empty() || value[0] == '#' ? std::string{} : value;
+    };
     std::vector<std::string> input;
+    std::unordered_set<std::string> original;
     for (size_t begin = 0; begin < configured.size();) {
         const auto end = configured.find('\n', begin);
         const auto stop = end == std::string::npos ? configured.size() : end + 1;
         input.push_back(configured.substr(begin, stop - begin));
+        const auto url = address(input.back());
+        if (!url.empty()) original.insert(url);
         begin = stop;
     }
-    const auto trimmed = [](const std::string &line) {
-        const auto first = line.find_first_not_of(" \t\r\n");
-        if (first == std::string::npos) return std::string{};
-        const auto last = line.find_last_not_of(" \t\r\n");
-        return line.substr(first, last - first + 1);
-    };
-
     std::vector<std::string> output;
-    bool present[new_count] = {};
-    bool builtin = false;
-    size_t builtin_at = std::string::npos;
+    std::unordered_set<std::string> present;
     for (const auto &raw : input) {
-        const std::string line = trimmed(raw);
-        if (line.empty()) { output.push_back(raw); continue; }
-        if (line.rfind("# AD_Killer_By_NFQUEUE:", 0) == 0) {
-            output.push_back("# AD_Killer_By_NFQUEUE: " +
-                             std::to_string(default_rule_recipe().size()) +
-                             " ordinary sources; built-in HaGeZi pair enabled by default\n");
-            continue;
-        }
-        const bool old_adrules_line = line == old_adrules || line == disabled + old_adrules;
-        if (old_adrules_line) {
-            if (!output.empty() && trimmed(output.back()) == "# AdRules DNS List") output.pop_back();
-            continue;
-        }
-        if (line == old_chengfeng || line == disabled + old_chengfeng) {
-            if (!output.empty() && trimmed(output.back()) == "# 乘风广告过滤规则")
-                output.back() = "# 乘风 视频过滤规则\n";
-            output.push_back((line == old_chengfeng ? "" : disabled) + new_chengfeng + "\n");
-            continue;
-        }
-        if (line == HAGEZI_SOURCE_ID || line == disabled + HAGEZI_SOURCE_ID) {
-            if (!builtin) {
-                builtin_at = output.size();
-                output.push_back(std::string(HAGEZI_SOURCE_ID) + "\n");
-                builtin = true;
+        const auto url = address(raw);
+        if (url == old_adrules || url == old_chengfeng) {
+            const auto replacement = url == old_adrules ? new_adrules : new_chengfeng;
+            // An explicitly configured replacement wins, including its disabled
+            // state. Do not introduce duplicates during URL migration.
+            if (original.count(replacement)) {
+                if (!output.empty() && (trimmed(output.back()) == "# AdRules DNS List" ||
+                    trimmed(output.back()) == "# 乘风广告过滤规则")) output.pop_back();
+                continue;
             }
-            continue;
+            if (url == old_chengfeng && !output.empty() && trimmed(output.back()) == "# 乘风广告过滤规则")
+                output.back() = "# 乘风 视频过滤规则\n";
+            output.push_back((trimmed(raw).compare(0, disabled.size(), disabled) == 0 ? disabled : "") + replacement + "\n");
+            present.insert(replacement);
+        } else {
+            output.push_back(raw);
+            if (!url.empty()) present.insert(url);
         }
-        std::string probe = line;
-        if (probe.compare(0, disabled.size(), disabled) == 0) probe = probe.substr(disabled.size());
-        for (size_t k = 0; k < new_count; ++k)
-            if (probe == new_sources[k].url) present[k] = true;
-        output.push_back(raw);
-    }
-    std::vector<std::string> missing;
-    for (size_t k = 0; k < new_count; ++k) {
-        if (present[k]) continue;
-        missing.push_back(std::string("# ") + new_sources[k].name + "\n");
-        missing.push_back(std::string(new_sources[k].url) + "\n");
-    }
-    if (builtin_at != std::string::npos) {
-        output.insert(output.begin() + static_cast<std::ptrdiff_t>(builtin_at),
-                      missing.begin(), missing.end());
-    } else {
-        output.insert(output.end(), missing.begin(), missing.end());
-        output.push_back(std::string(HAGEZI_SOURCE_ID) + "\n");
     }
     std::string result;
-    for (const auto &line : output) result += line;
+    size_t builtin_at = std::string::npos;
+    for (const auto &raw : output) {
+        if (address(raw) == HAGEZI_SOURCE_ID) builtin_at = result.size();
+        result += raw;
+    }
+    if (!present.count(HAGEZI_SOURCE_ID)) {
+        const auto row = (result.empty() || result.back() == '\n' ? "" : "\n") + disabled + HAGEZI_SOURCE_ID + "\n";
+        if (row.size() <= MAX_SOURCE_CONFIG_BYTES - std::min(result.size(), MAX_SOURCE_CONFIG_BYTES)) {
+            builtin_at = result.size(); result += row; present.insert(HAGEZI_SOURCE_ID);
+        }
+    }
+    size_t ordinary = present.size() - present.count(HAGEZI_SOURCE_ID);
+    size_t insert_at = builtin_at == std::string::npos ? result.size() : builtin_at;
+    for (const auto &source : new_sources) {
+        if (present.count(source.url) || ordinary >= MAX_RULE_SOURCES) continue;
+        const std::string row = (insert_at == 0 || result[insert_at - 1] == '\n' ? "" : "\n") +
+            std::string("# ") + source.name + "\n" + source.url + "\n";
+        if (row.size() > MAX_SOURCE_CONFIG_BYTES - std::min(result.size(), MAX_SOURCE_CONFIG_BYTES)) continue;
+        result.insert(insert_at, row); insert_at += row.size();
+        present.insert(source.url); ++ordinary;
+    }
     return result;
 }

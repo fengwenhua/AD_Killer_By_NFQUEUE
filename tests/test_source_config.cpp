@@ -52,6 +52,32 @@ int main() {
     assert(cheng.find("master/rule.txt") == std::string::npos);
     auto cheng_disabled = migrate_source_defaults("# disabled: https://raw.githubusercontent.com/xinggsf/Adblock-Plus-Rule/master/rule.txt\n");
     assert(cheng_disabled.find("# disabled: https://raw.githubusercontent.com/xinggsf/Adblock-Plus-Rule/master/mv.txt\n") != std::string::npos);
+    // A custom list's explicit opt-outs survive the v2 migration.
+    assert(migrated.find("# disabled: builtin:hagezi-pro-minus-fake\n") != std::string::npos);
+    auto disabled_new = migrate_source_defaults("# disabled: https://adrules.top/dns.txt\n# disabled: " + std::string(HAGEZI_SOURCE_ID) + "\n");
+    assert(count_of(disabled_new, "https://adrules.top/dns.txt\n") == 1);
+    assert(disabled_new.find("# disabled: https://adrules.top/dns.txt\n") != std::string::npos);
+    auto disabled_old = migrate_source_defaults("# disabled: https://adrules.top/adrules.txt\n");
+    assert(disabled_old.find("# disabled: https://adrules.top/dns.txt\n") != std::string::npos);
+    auto collision = migrate_source_defaults("https://raw.githubusercontent.com/xinggsf/Adblock-Plus-Rule/master/rule.txt\n# disabled: https://raw.githubusercontent.com/xinggsf/Adblock-Plus-Rule/master/mv.txt\nhttps://adrules.top/adrules.txt\n# disabled: https://adrules.top/dns.txt\n");
+    assert(parse_rule_sources(collision, entries, error, true));
+    assert(count_of(collision, "master/mv.txt\n") == 1 && count_of(collision, "https://adrules.top/dns.txt\n") == 1);
+    assert(collision.find("# disabled: https://adrules.top/dns.txt\n") != std::string::npos);
+    assert(collision.find("# disabled: https://raw.githubusercontent.com/xinggsf/Adblock-Plus-Rule/master/mv.txt\n") != std::string::npos);
+    auto no_newline = migrate_source_defaults("# custom heading\nhttps://example.org/no-newline");
+    assert(no_newline.find("https://example.org/no-newline\n") != std::string::npos);
+    assert(parse_rule_sources(no_newline, entries, error, true));
+    std::string full;
+    for (size_t i = 0; i < MAX_RULE_SOURCES; ++i) full += "https://example.org/" + std::to_string(i) + "\n";
+    auto full_migration = migrate_source_defaults(full);
+    assert(parse_rule_sources(full_migration, entries, error, true) && entries.size() == MAX_RULE_SOURCES + 1);
+    assert(!entries.back().enabled && entries.back().url == HAGEZI_SOURCE_ID);
+    assert(full_migration.find("https://adrules.top/dns.txt") == std::string::npos);
+    const std::string ending = "\nhttps://example.org/near-byte-limit\n";
+    auto near_limit = std::string("#") + std::string(MAX_SOURCE_CONFIG_BYTES - ending.size() - 1, 'x') + ending;
+    auto bounded = migrate_source_defaults(near_limit);
+    assert(bounded == near_limit && bounded.size() == MAX_SOURCE_CONFIG_BYTES);
+    assert(parse_rule_sources(bounded, entries, error, true));
     assert(!should_refresh_default_rule_sources("# custom\nhttps://example.org/user\n"));
     for (const auto &source : default_rule_recipe()) {
         assert(std::string(source.url).find("hagezi") == std::string::npos ||
