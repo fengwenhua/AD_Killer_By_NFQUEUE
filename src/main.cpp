@@ -159,7 +159,7 @@ static int cmd_install() {
     if (!file_exists(FILE_STATE_CONF)) {
         ok = write_initial_config(FILE_STATE_CONF,
                           "version=2\n"
-                          "source_defaults_version=1\n"
+                          "source_defaults_version=2\n"
                           "sync_concurrency=10\n"
                           "sync_interval_minutes=30\n"
                           "sync_retries=2\n"
@@ -195,16 +195,16 @@ static int cmd_install() {
             fprintf(stderr, "来源更新正在运行，安装已中止，请等待任务结束\n");
             return false;
         }
-        const bool migrate=read_conf_value(FILE_STATE_CONF,"source_defaults_version")!="1";
+        const bool migrate=read_conf_value(FILE_STATE_CONF,"source_defaults_version")!="2";
         if (!file_exists(FILE_UPDATE_SOURCES)) {
             if (!write_initial_config(FILE_UPDATE_SOURCES, default_rule_sources_text())) return false;
-            return !migrate || write_conf_value(FILE_STATE_CONF,"source_defaults_version","1");
+            return !migrate || write_conf_value(FILE_STATE_CONF,"source_defaults_version","2");
         }
         std::string configured;
         if (!read_file(FILE_UPDATE_SOURCES, configured)) return false;
         auto updated=should_refresh_default_rule_sources(configured) ? default_rule_sources_text() : migrate ? migrate_source_defaults(configured) : configured;
         if (updated!=configured && !write_initial_config(FILE_UPDATE_SOURCES,updated)) return false;
-        return !migrate || write_conf_value(FILE_STATE_CONF,"source_defaults_version","1");
+        return !migrate || write_conf_value(FILE_STATE_CONF,"source_defaults_version","2");
     }();
     ok = sources_ok && ok;
     if (!ok) {

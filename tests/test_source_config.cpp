@@ -6,29 +6,56 @@
 int main() {
     std::vector<RuleSource> entries;
     std::string error;
-    assert(default_rule_recipe().size() == 12);
+    const auto count_of = [](const std::string &text, const std::string &needle) {
+        size_t count = 0;
+        for (size_t at = 0; (at = text.find(needle, at)) != std::string::npos; at += needle.size()) ++count;
+        return count;
+    };
+    assert(default_rule_recipe().size() == 20);
     assert(parse_rule_sources(default_rule_sources_text(), entries, error, true));
-    assert(entries.size() == 13 && entries.back().url == HAGEZI_SOURCE_ID && entries.back().enabled);
+    assert(entries.size() == 21 && entries.back().url == HAGEZI_SOURCE_ID && entries.back().enabled);
     assert(default_rule_sources_text().find("https://adrules.top/adrules.txt") == std::string::npos);
+    assert(default_rule_sources_text().find("https://adrules.top/dns.txt") != std::string::npos);
+    assert(default_rule_sources_text().find("https://anti-ad.net/domains.txt") != std::string::npos);
+    assert(recipe_source_format("https://anti-ad.net/domains.txt") == SourceFormat::HOSTS);
+    assert(std::string(source_format_name(SourceFormat::HOSTS)) == "hosts");
     assert(superseded_default_rule_sources_text() ==
            "# 每行一个规则源 URL,支持 Hosts / AdGuard / gzip(.gz)\n"
            "# 以下为默认源,可自行增删\n"
            "https://anti-ad.net/easylist.txt\n"
            "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt\n");
     assert(should_refresh_default_rule_sources(superseded_default_rule_sources_text()));
+    assert(should_refresh_default_rule_sources(legacy_default_rule_sources_text_v1()));
+    assert(should_refresh_default_rule_sources(legacy_default_rule_sources_text_v1b()));
     assert(!should_refresh_default_rule_sources(default_rule_sources_text()));
-    auto legacy=default_rule_sources_text();
-    legacy.replace(0,legacy.find('\n'),"# AD_Killer_By_NFQUEUE: 13 ordinary sources; built-in HaGeZi pair disabled by default");
-    legacy.insert(legacy.find("# CJX"),"# AdRules DNS List\nhttps://adrules.top/adrules.txt\n");
-    legacy.insert(legacy.find(HAGEZI_SOURCE_ID),"# disabled: ");
-    assert(should_refresh_default_rule_sources(legacy));
-    assert(!should_refresh_default_rule_sources("# my preferences\n"+legacy));
+    assert(!should_refresh_default_rule_sources("# my preferences\n"+default_rule_sources_text()));
     auto migrated=migrate_source_defaults("# mine\n  https://example.org/user  \n# disabled: https://example.org/off\nhttps://adrules.top/adrules.txt\n# disabled: builtin:hagezi-pro-minus-fake\n");
-    assert(migrated=="# mine\n  https://example.org/user  \n# disabled: https://example.org/off\nbuiltin:hagezi-pro-minus-fake\n");
-    assert(migrate_source_defaults("# disabled: https://adrules.top/adrules.txt\n")==std::string(HAGEZI_SOURCE_ID)+"\n");
+    assert(migrated.find("# mine\n  https://example.org/user  \n# disabled: https://example.org/off\n") == 0);
+    assert(migrated.find("https://adrules.top/adrules.txt") == std::string::npos);
+    for (const auto &source : default_rule_recipe())
+        assert(default_rule_sources_text().find(std::string("# ") + source.name + "\n" + source.url + "\n") != std::string::npos);
+    for (const char *url : {
+             "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/light.txt",
+             "https://adrules.top/dns.txt",
+             "https://raw.githubusercontent.com/bigdargon/hostsVN/master/extensions/threat/filter.txt",
+             "https://raw.githubusercontent.com/damengzhu/banad/main/jiekouAD.txt",
+             "https://anti-ad.net/domains.txt", "https://big.oisd.nl/domainswild2",
+             "https://raw.githubusercontent.com/badmojr/1Hosts/master/Lite/wildcards.txt",
+             "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"})
+        assert(migrated.find(url) != std::string::npos);
+    assert(count_of(migrated, std::string(HAGEZI_SOURCE_ID) + "\n") == 1);
+    assert(migrated.find(std::string(HAGEZI_SOURCE_ID) + "\n") > migrated.find("https://adrules.top/dns.txt"));
+    assert(migrate_source_defaults(migrated) == migrated);
+    assert(migrate_source_defaults("# disabled: https://adrules.top/adrules.txt\n").find("https://adrules.top/adrules.txt") == std::string::npos);
+    auto cheng = migrate_source_defaults("# 乘风广告过滤规则\nhttps://raw.githubusercontent.com/xinggsf/Adblock-Plus-Rule/master/rule.txt\n");
+    assert(cheng.find("# 乘风 视频过滤规则\nhttps://raw.githubusercontent.com/xinggsf/Adblock-Plus-Rule/master/mv.txt\n") != std::string::npos);
+    assert(cheng.find("master/rule.txt") == std::string::npos);
+    auto cheng_disabled = migrate_source_defaults("# disabled: https://raw.githubusercontent.com/xinggsf/Adblock-Plus-Rule/master/rule.txt\n");
+    assert(cheng_disabled.find("# disabled: https://raw.githubusercontent.com/xinggsf/Adblock-Plus-Rule/master/mv.txt\n") != std::string::npos);
     assert(!should_refresh_default_rule_sources("# custom\nhttps://example.org/user\n"));
     for (const auto &source : default_rule_recipe()) {
-        assert(std::string(source.url).find("hagezi") == std::string::npos);
+        assert(std::string(source.url).find("hagezi") == std::string::npos ||
+               std::string(source.url).find("light") != std::string::npos);
         assert(recipe_source_format(source.url) != SourceFormat::AUTO);
     }
     assert(parse_rule_sources("# comment\nhttps://example.org/a\n# disabled: https://example.org/b\n", entries, error, true));

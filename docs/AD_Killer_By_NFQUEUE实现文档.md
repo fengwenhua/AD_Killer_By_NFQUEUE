@@ -240,7 +240,7 @@ DNS UDP/TCP 均进入 queue 0、TCP 80/443 未分类连接均进入 queue 1，�
 - **文件**:Hosts 部分与 AdGuard 部分都是 **gzip** 格式，流式解压；单源下载
   最多 64 MiB，解压和多源累计上限 256 MiB、500 万行，超长行(>1024)跳过
 - **加载**:启动/SIGHUP 时加载三文件,写 `rule_stats.conf`(black/white 计数,
-  即 WebUI 显示的规则数来源)
+  即 WebUI 显示的规则数来源)；计数按域名去重，同一域的精确与后缀规则只计一次
 
 ### 4.5 报文解析(纯函数,无状态)
 
@@ -358,7 +358,9 @@ Hosts/AdGuard 解析器，只聚合实际可加载的域名级规则。空白/�
 有效 AdGuard、超长行和不支持语法分别计数。来源必须至少包含一条有效规则；候选
 行达到 20 行时，AUTO 有效率低于 5% 的内容也会整体拒绝，防止 HTTP 200 错误正文夹带
 少量类域名文本后被误判成功。显式浏览器列表配方允许提取非空域名子集，不套用
-AUTO 的比例门槛，HTML、gzip 和资源保护保持不变。
+AUTO 的比例门槛，HTML、gzip 和资源保护保持不变。配方中的原生 Hosts 来源
+（`HOSTS`）只写入 `hosts_rules.gz`；hostsVN 使用 `HOSTS_AS_ADGUARD` 归一化为精确域名，
+写入 AdGuard 分类。
 
 最近一次更新的每个 URL、下载/内容状态、拒绝原因、字节数、各类行数和 ppm
 有效率写入 `source_stats.conf`，另记录 downloaded/revalidated/cache_fallback、缓存

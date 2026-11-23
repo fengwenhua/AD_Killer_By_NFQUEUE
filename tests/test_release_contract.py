@@ -115,7 +115,8 @@ def main() -> None:
     require_all(third_party, (
         "AdGuard DNS filter", "AdGuard Mobile", "EasyList", "oisd", "HaGeZi",
         "AdRules", "CJX", "乘风广告过滤规则", "anti-AD", "AWAvenue", "hostsVN",
-        "GPL-3.0", "CC BY-SA-3.0", "LGPL-3.0", "MIT", "unknown",
+        "hostsVN Threat", "banad", "1Hosts", "StevenBlack",
+        "GPL-3.0", "CC BY-SA-3.0", "LGPL-3.0", "MIT", "MPL-2.0", "unknown",
     ), "third-party license inventory")
 
     documentation = [ROOT / "README.md", ROOT / "frontend/README.md",

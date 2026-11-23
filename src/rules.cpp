@@ -91,7 +91,17 @@ void RuleSet::finalize() const {
 
 size_t RuleSet::size() const {
     finalize();
-    return exact_.size() + suffix_.size();
+    // Report unique domains, not array slots: one domain may legitimately be
+    // present as both an exact and a suffix rule (for example hostsVN exact +
+    // another source's ||domain^). Both arrays store the same FNV-1a hash.
+    size_t count = 0, i = 0, j = 0;
+    while (i < exact_.size() && j < suffix_.size()) {
+        if (exact_[i] < suffix_[j]) ++i;
+        else if (suffix_[j] < exact_[i]) ++j;
+        else { ++i; ++j; }
+        ++count;
+    }
+    return count + (exact_.size() - i) + (suffix_.size() - j);
 }
 
 size_t RuleSet::storage_bytes() const {

@@ -72,13 +72,18 @@ def main():
         assert not any(s['url']=='https://adrules.top/adrules.txt' for s in ordinary)
         assert len(special) == 1 and special[0]["url"] == HAGEZI and special[0]["enabled"]
         assert len(special[0]["dependencies"]) == 2
-        assert all("hagezi" not in s["url"].lower() for s in ordinary)
+        assert all("hagezi" not in s["url"].lower() or "light" in s["url"].lower() for s in ordinary)
         config=DATA/'state.conf'
         config.write_text(''.join(line for line in config.read_text().splitlines(keepends=True) if not line.startswith('source_defaults_version=')))
         sources_file=DATA/'update_sources.txt'
         sources_file.write_text('# mine\nhttps://example.org/user\n# disabled: https://example.org/off\nhttps://adrules.top/adrules.txt\n# disabled: '+HAGEZI+'\n')
         command('--install')
-        assert sources_file.read_text()=='# mine\nhttps://example.org/user\n# disabled: https://example.org/off\n'+HAGEZI+'\n'
+        migrated_text = sources_file.read_text()
+        assert migrated_text.startswith('# mine\nhttps://example.org/user\n# disabled: https://example.org/off\n')
+        assert 'https://adrules.top/adrules.txt' not in migrated_text
+        assert 'https://adrules.top/dns.txt' in migrated_text
+        assert 'https://anti-ad.net/domains.txt' in migrated_text
+        assert migrated_text.count(HAGEZI+'\n') == 1 and '# disabled: '+HAGEZI not in migrated_text
         sources_file.write_text('# mine\nhttps://example.org/user\n# disabled: '+HAGEZI+'\n')
         command('--install')
         assert '# disabled: '+HAGEZI in sources_file.read_text(), 'later manual builtin opt-out must survive reinstall'
