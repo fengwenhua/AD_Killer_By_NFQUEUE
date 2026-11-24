@@ -20,6 +20,9 @@ test('canonical source names survive progress parsing, while old/custom reports 
   const p=syncProgress(sourceReport([{status:'accepted',name:'AdGuard DNS filter'}]),id);
   assert.equal(p.rows[0].name,'AdGuard DNS filter');
   assert.equal(p.rows[0].url,'https://example.org/0');
+  const endpoint='https://fastly.jsdelivr.net/gh/owner/repo@main/hosts.txt';
+  const downloaded=syncProgress(sourceReport([{status:'accepted',download_url_0:endpoint,download_url_1:'javascript:alert(1)'}]),id);
+  assert.deepEqual(downloaded.rows[0].display.downloads,[endpoint]);
 });
 
 test('progress separates usable, fresh cache, failures and queued work without promising publication', () => {

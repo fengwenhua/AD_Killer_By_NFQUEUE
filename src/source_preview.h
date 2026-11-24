@@ -11,9 +11,10 @@ struct SourcePreview {
     std::string error;
     size_t characters = 0;
     bool truncated = false;
+    std::string request_url;
 };
 
 // Optional gzip prefix, strict UTF-8, bounded Unicode code points. A preview
 // deliberately does not claim complete gzip/source validity or publish rules.
 SourcePreview format_source_preview(const std::string &bytes, bool limited, size_t characters = SOURCE_PREVIEW_DEFAULT);
-SourcePreview preview_source(const std::string &url, size_t characters = SOURCE_PREVIEW_DEFAULT);
+SourcePreview preview_source(const std::string &url, size_t characters = SOURCE_PREVIEW_DEFAULT, unsigned retries = 0);

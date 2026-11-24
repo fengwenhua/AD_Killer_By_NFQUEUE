@@ -44,6 +44,7 @@ struct SourceUpdateReport {
     std::string provenance = "downloaded", warning;
     int64_t cache_verified_at = 0, cache_fetched_at = 0, cache_age_seconds = 0;
     unsigned attempts = 0, max_attempts = 1;
+    std::vector<std::string> download_urls;
 };
 
 struct PublishedSourceStats {

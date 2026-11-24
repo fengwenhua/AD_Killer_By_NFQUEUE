@@ -55,6 +55,9 @@ onBeforeUnmount(() => { intersection?.disconnect(); resize?.disconnect(); });
       <div class="source-sync-row"><span class="source-sync-state" :data-kind="record.kind">{{ record.label }}</span><time v-if="record.datetime" :datetime="record.datetime">{{ record.time }}</time><span v-else-if="record.time">{{ record.time }}</span></div>
       <span>{{ record.detail }}</span>
     </div>
+    <details v-if="record.downloads?.length" class="source-extra source-downloads"><summary>{{ record.label.includes('缓存') ? '缓存内容的下载地址' : '实际下载地址' }}</summary>
+      <span v-for="url in record.downloads" :key="url" class="source-url">{{ url }}</span>
+    </details>
     <details v-if="record.technical" class="source-extra"><summary>查看详细原因</summary><pre>{{ record.technical }}</pre></details>
     <pre v-if="testLogId === source.id" :id="`sourceTestLog-${source.id}`" class="source-result" aria-label="来源测试日志">{{ testLog }}</pre>
     <div class="source-actions">

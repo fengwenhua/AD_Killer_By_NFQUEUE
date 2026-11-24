@@ -119,7 +119,8 @@ export function sourceHistory(source, entries) {
   }
   const date = new Date(Number(entry.checked_at) * 1000);
   const known = Number(entry.checked_at) > 0 && Number.isFinite(date.getTime());
-  return { label, detail, kind, needsAction, pending, technical: entry.reason || entry.warning || '',
+  const downloads = [entry.download_url_0, entry.download_url_1].filter(url => typeof url === 'string' && url.length <= 8192 && /^https?:\/\//.test(url));
+  return { label, detail, kind, needsAction, pending, downloads, technical: entry.reason || entry.warning || '',
     datetime: known ? date.toISOString() : '', time: known ? date.toLocaleString('zh-CN', { hour12: false }) : '' };
 }
 

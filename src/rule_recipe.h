@@ -25,15 +25,59 @@ inline const std::vector<RecipeSource> &default_rule_recipe() {
     };
     return sources;
 }
+// Only literal addresses from our recipe (and the locked dependencies) gain
+// mirrors. Never turn an arbitrary user URL into a different repository/path.
+inline std::string github_rule_cdn_url(const std::string &url, const std::string &host = "cdn.jsdelivr.net") {
+    const std::string prefix = "https://raw.githubusercontent.com/";
+    if (url.compare(0, prefix.size(), prefix) != 0) return "";
+    const auto repository = url.find('/', prefix.size());
+    const auto branch = repository == std::string::npos ? repository : url.find('/', repository + 1);
+    const auto file = branch == std::string::npos ? branch : url.find('/', branch + 1);
+    if (file == std::string::npos || file + 1 == url.size()) return "";
+    return "https://" + host + "/gh/" + url.substr(prefix.size(), branch - prefix.size()) +
+           "@" + url.substr(branch + 1, file - branch - 1) + url.substr(file);
+}
+inline std::string canonical_rule_source_url(const std::string &url) {
+    const auto matches = [&](const std::string &original) {
+        const auto cdn = github_rule_cdn_url(original);
+        return url == original || (!cdn.empty() && (url == cdn || url == github_rule_cdn_url(original, "fastly.jsdelivr.net")));
+    };
+    for (const auto &source : default_rule_recipe()) if (matches(source.url)) return source.url;
+    for (const char *dependency : {HAGEZI_PRO_URL, HAGEZI_FAKE_URL}) if (matches(dependency)) return dependency;
+    return url;
+}
+inline std::vector<std::string> rule_source_endpoints(const std::string &component, const std::string &configured = "") {
+    const auto canonical = canonical_rule_source_url(component);
+    bool known = canonical == HAGEZI_PRO_URL || canonical == HAGEZI_FAKE_URL;
+    for (const auto &source : default_rule_recipe()) known = known || canonical == source.url;
+    const auto cdn = github_rule_cdn_url(canonical);
+    if (!known || cdn.empty()) return {component};
+#if defined(ADK_NFQ_TEST_SOURCE_MIRROR_BASE)
+    // Disposable loopback HTTP fixtures. Production build.sh never defines it.
+    const std::string base = ADK_NFQ_TEST_SOURCE_MIRROR_BASE;
+    const auto suffix = canonical.substr(std::string("https://raw.githubusercontent.com/").size());
+    std::vector<std::string> endpoints = {base + "/cdn/" + suffix, base + "/fastly/" + suffix, base + "/origin/" + suffix};
+#else
+    std::vector<std::string> endpoints = {cdn, github_rule_cdn_url(canonical, "fastly.jsdelivr.net"), canonical};
+#endif
+    // An explicitly saved CDN alias remains the first choice for that source.
+    if (!configured.empty() && configured != canonical) {
+        if (configured == github_rule_cdn_url(canonical, "fastly.jsdelivr.net"))
+            std::rotate(endpoints.begin(), endpoints.begin() + 1, endpoints.begin() + 2);
+    }
+    return endpoints;
+}
 inline SourceFormat recipe_source_format(const std::string &url) {
+    const auto canonical = canonical_rule_source_url(url);
     for (const auto &source : default_rule_recipe())
-        if (url == source.url) return source.format;
+        if (canonical == source.url) return source.format;
     return SourceFormat::AUTO;
 }
 inline const char *recipe_source_name(const std::string &url) {
     if (is_builtin_source(url)) return HAGEZI_SOURCE_NAME;
+    const auto canonical = canonical_rule_source_url(url);
     for (const auto &source : default_rule_recipe())
-        if (url == source.url) return source.name;
+        if (canonical == source.url) return source.name;
     return "";
 }
 inline const char *source_format_name(SourceFormat format) {

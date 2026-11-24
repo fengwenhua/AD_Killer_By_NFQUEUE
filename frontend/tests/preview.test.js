@@ -13,7 +13,7 @@ test('preview opens before bridge work, defaults to 500 Unicode points, caches a
   const scope = effectScope(), commands = [];
   let painted;
   const model = scope.run(() => useSourcePreview({ command: async command => {
-    commands.push(command); return ok([{ url: source.url, text: '中😀'.repeat(501), truncated: true }]);
+    commands.push(command); return ok([{ url: source.url, request_url: 'https://cdn.jsdelivr.net/gh/example/rules@main/hosts', text: '中😀'.repeat(501), truncated: true }]);
   } }, ref(500), () => new Promise(resolve => { painted = resolve; })));
   try {
     const loading = model.open(source);
@@ -22,10 +22,12 @@ test('preview opens before bridge work, defaults to 500 Unicode points, caches a
     painted(); await loading;
     const entry = model.active.value.items[0];
     assert.equal(Array.from(entry.text).length, 500); assert.ok(entry.at);
+    assert.equal(entry.requestUrl, 'https://cdn.jsdelivr.net/gh/example/rules@main/hosts');
     assert.equal(model.pending.value, false);
     model.close(); assert.equal(model.active.value, null);
     const cached = model.open(source); painted(); await cached;
     assert.equal(commands.length, 1);
+    assert.equal(model.active.value.items[0].requestUrl, entry.requestUrl);
     const refreshed = model.refresh(); painted(); await refreshed;
     assert.deepEqual(commands, Array(2).fill('--source-preview ' + shellQuote(source.url) + ' 500'));
   } finally { scope.stop(); }

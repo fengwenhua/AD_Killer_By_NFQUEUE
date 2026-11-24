@@ -1,5 +1,7 @@
 #include "source_preview.h"
 #include "net.h"
+#include "rule_recipe.h"
+#include "work_budget.h"
 #include <cstdint>
 #include <vector>
 #include <zlib.h>
@@ -56,14 +58,26 @@ SourcePreview format_source_preview(const std::string &bytes, bool limited, size
     return result;
 }
 
-SourcePreview preview_source(const std::string &url, size_t characters) {
+SourcePreview preview_source(const std::string &url, size_t characters, unsigned retries) {
     if (characters < SOURCE_PREVIEW_MIN || characters > SOURCE_PREVIEW_MAX) {
         SourcePreview result; result.error = "预览字符数须为 100–5000"; return result;
     }
-    std::string bytes;
-    bool limited = false;
-    // UTF-8 worst case plus a small gzip/BOM margin, not an entire rules file.
-    const std::string error = download_prefix(url, bytes, limited, characters * 4 + 64);
-    if (!error.empty()) { SourcePreview result; result.error = error; return result; }
-    return format_source_preview(bytes, limited, characters);
+    WorkBudget preview(15000, UINT64_MAX);
+    const auto endpoints = rule_source_endpoints(url, url);
+    const unsigned attempts = std::min(retries, 5u) + 1;
+    SourcePreview result;
+    for (unsigned attempt = 0; attempt < attempts && !WorkBudget::expired(); ++attempt) {
+        const auto &endpoint = endpoints[std::min<size_t>(attempt, endpoints.size() - 1)];
+        WorkBudget request(std::max<uint64_t>(1, WorkBudget::remaining_ms(15000) / (attempts - attempt)), UINT64_MAX);
+        std::string bytes;
+        bool limited = false;
+        // UTF-8 worst case plus a small gzip/BOM margin, never a whole file.
+        const auto error = download_prefix(endpoint, bytes, limited, characters * 4 + 64);
+        if (!error.empty()) { result = {}; result.error = error; }
+        else result = format_source_preview(bytes, limited, characters);
+        result.request_url = endpoint;
+        if (result.error.empty()) return result;
+    }
+    if (result.error.empty()) result.error = "预览时间预算已耗尽";
+    return result;
 }

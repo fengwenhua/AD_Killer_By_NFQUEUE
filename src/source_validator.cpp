@@ -325,6 +325,8 @@ std::string serialize_source_reports(const std::vector<SourceUpdateReport> &repo
                << "rejected_unsupported=" << report.stats.rejected_unsupported << "\n"
                << "rejected_too_long=" << report.stats.rejected_too_long << "\n"
                << "valid_ratio_ppm=" << report.stats.valid_ratio_ppm << "\n";
+        for (size_t j = 0; j < report.download_urls.size() && j < 2; ++j)
+            output << "download_url_" << j << "=" << safe_field(report.download_urls[j]) << "\n";
         if (report.format == "hagezi-pro-minus-fake")
             output << "difference_base_unique=" << report.stats.difference_base_unique << "\n"
                    << "difference_exclude_unique=" << report.stats.difference_exclude_unique << "\n"

@@ -1499,7 +1499,7 @@ def source_address_regression(browser, errors, screenshots=None):
             page.add_init_script(mock_script([{'url': url, 'enabled': True, 'name': 'AWAvenue 去广告规则'}]) + """
 window.previewCopies=[];
 Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{previewCopies.push(text)}}});
-""")
+""" + 'window.previewSourceReport=' + json.dumps('publish_status=published\nsource_count=1\naccepted_sources=1\n\n[source_0]\nurl=' + url + '\nstatus=accepted\ndownload_url_0=https://fastly.jsdelivr.net/gh/example/rules@main/hosts.txt\n') + ';')
             page.goto((ROOT / 'module/webroot/index.html').as_uri())
             page.locator('nav [data-page="rules"]').click()
             page.locator('#sourcesDetails > summary').click()
@@ -1507,6 +1507,9 @@ Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:
             expect(card.locator('.source-top label')).to_have_text('AWAvenue 去广告规则')
             toggle = card.get_by_role('checkbox', name='启用AWAvenue 去广告规则', exact=True)
             expect(toggle).to_be_checked()
+            card.locator('.source-downloads > summary').click()
+            expect(card.locator('.source-downloads .source-url')).to_have_text('https://fastly.jsdelivr.net/gh/example/rules@main/hosts.txt')
+            card.locator('.source-downloads > summary').click()
             card.locator('.source-address > summary').click()
             expect(card.locator('.source-address-full code')).to_have_text(url)
             card.get_by_role('button', name='复制地址', exact=True).click()

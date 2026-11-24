@@ -41,6 +41,7 @@ onBeforeUnmount(() => dialog.value?.close());
           <p v-if="model.active.builtin" class="subtle">内置来源分别展示 Pro / Fake 原文，不是差集结果。</p>
           <section v-for="(item, index) in model.active.items" :key="item.url + index" class="preview-item" :aria-busy="item.pending">
             <b v-if="item.label">{{ item.label }}</b><span class="source-url">{{ item.url }}</span>
+            <span v-if="item.requestUrl && item.requestUrl !== item.url" class="source-url">本次请求：{{ item.requestUrl }}</span>
             <p v-if="item.pending" class="preview-loading" role="status">正在读取来源开头…<span class="subtle">首次需等待网络；成功内容缓存 5 分钟。</span></p>
             <p v-else-if="item.error" class="sync-note" data-kind="error" role="status">{{ item.error }}</p>
             <template v-else><pre class="source-result" tabindex="0">{{ item.text || '（来源内容为空）' }}</pre><p class="subtle">{{ Array.from(item.text).length }} 字符{{ item.truncated ? ' · 后续内容已省略' : ' · 已到结尾' }}</p><time v-if="item.at" class="source-url" :datetime="new Date(item.at).toISOString()">读取于 {{ new Date(item.at).toLocaleString('zh-CN', { hour12: false }) }}</time></template>

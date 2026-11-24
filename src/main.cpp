@@ -1011,6 +1011,7 @@ static int cmd_update(const std::string &test_url = "") {
         report.provenance = sync.provenance; report.warning = sync.warning;
         report.cache_verified_at = sync.cache_verified_at; report.cache_fetched_at = sync.cache_fetched_at;
         report.cache_age_seconds = sync.cache_age_seconds;
+        report.download_urls = std::move(sync.effective_urls);
         // Rejected input still consumed parsing work. Do not reset the whole
         // task's decompression/line allowance on the next source.
         aggregate_content_bytes += std::min(sync.consumed_bytes, MAX_RULE_DECOMPRESSED_BYTES - aggregate_content_bytes);
@@ -1693,11 +1694,14 @@ static int cmd_source_preview(const std::string &url, size_t characters) {
     }
     std::string entries;
     bool success = true;
+    WorkBudget preview_budget(25000, UINT64_MAX);
+    const auto retries = static_cast<unsigned>(sync_retries_value(read_conf_value(FILE_STATE_CONF, "sync_retries")));
     for (const auto &source : urls) {
-        SourcePreview preview = preview_source(source, characters);
+        SourcePreview preview = preview_source(source, characters, retries);
         if (!preview.error.empty()) success = false;
         if (!entries.empty()) entries += ',';
         entries += "{\"url\":" + source_json_string(source) + ",\"text\":" + source_json_string(preview.text) +
+            ",\"request_url\":" + source_json_string(preview.request_url) +
             ",\"error\":" + source_json_string(preview.error) + ",\"characters\":" + std::to_string(preview.characters) +
             ",\"truncated\":" + (preview.truncated ? "true" : "false") + "}";
     }

@@ -89,6 +89,7 @@ struct SourcePrefetch::Impl {
         job.download.elapsed_ms += job.elapsed_ms;
         job.download.prior_downloaded_bytes = job.bytes;
         job.download.managed_retries = true;
+        job.download.max_attempts = retries + 1;
         if (!job.started && fresh_seconds > 0 && !retry_urls.count(urls[i]) && job.download.cached &&
             job.download.previous.fresh(time(nullptr), fresh_seconds)) {
             job.download.reuse_fresh_cache = true; job.download.attempt = 0;

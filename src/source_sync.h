@@ -11,6 +11,7 @@ struct SourceSyncResult {
     std::string provenance = "downloaded", warning;
     int64_t cache_verified_at = 0, cache_fetched_at = 0, cache_age_seconds = 0;
     bool download_failed = false;
+    std::vector<std::string> effective_urls;
 };
 
 // Download processes own only their distinct files. Cache admission, parsing,
@@ -22,7 +23,7 @@ struct SourceDownload {
     std::vector<DownloadResponse> responses;
     uint64_t elapsed_ms = 0;
     bool reuse_fresh_cache = false;
-    unsigned attempt = 1;
+    unsigned attempt = 1, max_attempts = 1;
     uint64_t prior_downloaded_bytes = 0;
     bool managed_retries = false;
 };

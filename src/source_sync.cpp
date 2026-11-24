@@ -12,10 +12,10 @@
 
 std::vector<std::string> source_component_urls(const std::string &url) {
     if (is_builtin_source(url)) return {HAGEZI_PRO_URL, HAGEZI_FAKE_URL};
-    return {url};
+    return {canonical_rule_source_url(url)};
 }
 std::string source_identity_key(const std::string &url) {
-    return source_cache_key(url, is_builtin_source(url) ? "hagezi-pro-minus-fake" : source_format_name(recipe_source_format(url)), source_component_urls(url));
+    return source_cache_key(canonical_rule_source_url(url), is_builtin_source(url) ? "hagezi-pro-minus-fake" : source_format_name(recipe_source_format(url)), source_component_urls(url));
 }
 
 SourceDownload prepare_source_download(const std::string &directory, const std::string &url,
@@ -35,16 +35,32 @@ void fetch_source_download(const std::string &url, SourceDownload &download, boo
     const auto started = WorkBudget::Clock::now();
     const auto urls = source_component_urls(url);
     const auto remaining = WorkBudget::remaining_ms(90000);
-    WorkBudget network(use_cache ? std::min<uint64_t>(70000, remaining * 4 / 5) : remaining, UINT64_MAX);
+    const bool mirrored = std::any_of(urls.begin(), urls.end(), [&](const std::string &component) {
+        return rule_source_endpoints(component, url).size() > 1;
+    });
+    const auto attempts_left = mirrored && download.max_attempts > download.attempt ? download.max_attempts - download.attempt + 1 : 1;
+    const auto available = use_cache ? std::min<uint64_t>(70000, remaining * 4 / 5) : remaining;
+    // Keep a useful failover window without cutting a steadily downloading
+    // large list into equal tiny slices merely because retries are enabled.
+    const auto reserve = std::min<uint64_t>(5000, available / (static_cast<uint64_t>(attempts_left) + 1));
+    WorkBudget network(std::max<uint64_t>(1, available - reserve * (attempts_left - 1)), UINT64_MAX);
     for (size_t i = 0; i < urls.size(); ++i) {
-        log_line(is_builtin_source(url) ? "HaGeZi" : "更新", "拉取: %s", urls[i].c_str());
-        const auto validators = download.cached ? download.previous.components[i].validators : HttpValidators{};
-        auto response = download_file_response(urls[i], download.parts[i], validators, !download.managed_retries);
+        const auto endpoints = rule_source_endpoints(urls[i], url);
+        const auto &endpoint = endpoints[std::min<size_t>(std::max(1u, download.attempt) - 1, endpoints.size() - 1)];
+        log_line(is_builtin_source(url) ? "HaGeZi" : "更新", "拉取: %s", endpoint.c_str());
+        // A validator belongs to one representation endpoint. In particular a
+        // CDN's ETag must never be sent to Fastly or GitHub during failover.
+        const bool same_endpoint = download.cached && (endpoints.size() == 1 ||
+            endpoint == download.previous.components[i].effective_url);
+        const auto validators = same_endpoint ? download.previous.components[i].validators : HttpValidators{};
+        auto response = download_file_response(endpoint, download.parts[i], validators, !download.managed_retries);
+        if (response.error.empty() && response.not_modified && endpoints.size() > 1 && !same_endpoint)
+            response.error = "304_without_matching_endpoint";
         if (response.error.empty() && response.not_modified && download.cached &&
             response.effective_url != download.previous.components[i].effective_url) {
             log_line("更新", "304 最终地址与缓存不匹配，预算内重新完整下载: %s", urls[i].c_str());
             const auto bytes = response.bytes;
-            response = download_file_response(urls[i], download.parts[i], {}, !download.managed_retries);
+            response = download_file_response(endpoint, download.parts[i], {}, !download.managed_retries);
             response.bytes += bytes;
         }
         const bool failed = !response.error.empty();
@@ -159,6 +175,13 @@ SourceSyncResult synchronize_rule_source(const std::string &directory, const std
         const auto &stats = result.validation.stats;
         log_line("HaGeZi", "Pro 唯一 %zu / Fake 唯一 %zu / 差集剔除 %zu / 保留 %zu；仅本组精确 Hosts 规则",
             stats.difference_base_unique, stats.difference_exclude_unique, stats.difference_removed, stats.accepted_hosts);
+    }
+    if (result.validation.accepted) {
+        const auto &selected = result.provenance == "cache_fallback" ? previous.components : components;
+        for (const auto &component : selected) result.effective_urls.push_back(component.effective_url);
+    } else {
+        for (const auto &response : download.responses)
+            if (!response.effective_url.empty()) result.effective_urls.push_back(response.effective_url);
     }
     return result;
 }

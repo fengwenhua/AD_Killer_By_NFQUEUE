@@ -23,6 +23,7 @@ export function useSourcePreview(api, characters = ref(PREVIEW_DEFAULT), afterPa
         return { error: data?.message || result.stderr?.trim() || '来源请求未成功，请稍后重试。' };
       const text = Array.from(String(item.text || ''));
       return { text: text.slice(0, count).join(''), error: String(item.error || ''),
+        requestUrl: typeof item.request_url === 'string' && item.request_url.length <= 8192 ? item.request_url : '',
         truncated: !!item.truncated || text.length > count, at: now() };
     } catch (error) { return { error: error?.message || '读取失败，请稍后重试。' }; }
   }

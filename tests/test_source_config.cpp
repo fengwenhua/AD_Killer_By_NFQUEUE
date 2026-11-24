@@ -16,6 +16,21 @@ int main() {
     assert(std::string(recipe_source_name("https://example.org/custom")).empty());
     for (const auto &source : default_rule_recipe())
         assert(std::string(recipe_source_name(source.url)) == source.name);
+    const std::string github_source = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts";
+    const std::string cdn_source = "https://cdn.jsdelivr.net/gh/StevenBlack/hosts@master/hosts";
+    const std::string fastly_source = "https://fastly.jsdelivr.net/gh/StevenBlack/hosts@master/hosts";
+    assert(rule_source_endpoints(github_source) == std::vector<std::string>({cdn_source, fastly_source, github_source}));
+    assert(rule_source_endpoints(github_source, fastly_source).front() == fastly_source);
+    assert(canonical_rule_source_url(cdn_source) == github_source && canonical_rule_source_url(fastly_source) == github_source);
+    assert(recipe_source_format(cdn_source) == SourceFormat::HOSTS);
+    assert(std::string(recipe_source_name(fastly_source)) == "StevenBlack hosts");
+    for (const std::string unknown : {"https://raw.githubusercontent.com/StevenBlack/hosts/master/custom.txt",
+                                    "https://raw.githubusercontent.com/evil/repo/main/hosts",
+                                    "https://cdn.jsdelivr.net/gh/StevenBlack/hosts@master/other.txt"}) {
+        assert(rule_source_endpoints(unknown) == std::vector<std::string>({unknown}));
+        assert(canonical_rule_source_url(unknown) == unknown);
+        assert(recipe_source_format(unknown) == SourceFormat::AUTO);
+    }
     assert(parse_rule_sources(default_rule_sources_text(), entries, error, true));
     assert(entries.size() == 21 && entries.back().url == HAGEZI_SOURCE_ID && entries.back().enabled);
     assert(default_rule_sources_text().find("https://adrules.top/adrules.txt") == std::string::npos);
