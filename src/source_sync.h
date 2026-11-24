@@ -5,6 +5,10 @@
 #include "net.h"
 #include <set>
 
+inline uint64_t source_download_limit(const std::string &url) {
+    return url == HAGEZI_SOURCE_ID ? 128u * 1024u * 1024u : MAX_RULE_INPUT_BYTES;
+}
+
 struct SourceSyncResult {
     SourceValidationResult validation;
     size_t downloaded_bytes = 0, consumed_bytes = 0, consumed_lines = 0;

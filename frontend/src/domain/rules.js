@@ -1,4 +1,7 @@
 export const HAGEZI_ID = 'builtin:hagezi-pro-minus-fake';
+export const HAGEZI_PRO_ID = 'builtin:hagezi-pro';
+export const isBuiltinSource = url => url === HAGEZI_ID || url === HAGEZI_PRO_ID;
+export const builtinSourceName = url => url === HAGEZI_PRO_ID ? 'HaGeZi Pro' : 'HaGeZi Pro − Fake';
 export const validJob = id => typeof id === 'string' && id.length <= 96 && /^[0-9]+-[0-9]+$/.test(id);
 export const isPackage = value => /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$/.test(value);
 export const lines = text => String(text || '').split(/\r?\n/).map(s => s.trim()).filter(s => s && !s.startsWith('#') && !s.startsWith('!'));
@@ -23,7 +26,7 @@ export function jobObservation(result) {
 
 export function sourceUrlError(value, sources = [], exceptId = null) {
   if (sources.some(s => s.id !== exceptId && s.url === value)) return '该地址已存在';
-  if (value === HAGEZI_ID) return '';
+  if (isBuiltinSource(value)) return '';
   if (!value || value.length > 4096 || /[\s\x00-\x20\x7f\\]/.test(value)) return '地址为空、过长或包含空白/非法字符';
   try {
     const url = new URL(value);
@@ -33,10 +36,14 @@ export function sourceUrlError(value, sources = [], exceptId = null) {
 }
 
 export function normalizeSource(source, id) {
-  const builtin = source.url === HAGEZI_ID;
+  const builtin = isBuiltinSource(source.url);
+  const profiles = builtin && Array.isArray(source.profiles) ? source.profiles.slice(0, 2)
+    .filter(p => isBuiltinSource(p?.url) && Array.isArray(p.dependencies) && p.dependencies.length === (p.url === HAGEZI_PRO_ID ? 1 : 2) &&
+      p.dependencies.every(url => typeof url === 'string' && !isBuiltinSource(url) && !sourceUrlError(url)))
+    .map(p => ({ url: p.url, name: builtinSourceName(p.url), dependencies: [...p.dependencies] })) : [];
   return { id, url: String(source.url), enabled: !!source.enabled, locked: builtin || !!source.locked,
-    name: builtin ? 'HaGeZi Pro − Fake' : String(source.name || ''),
-    dependencies: Array.isArray(source.dependencies) ? source.dependencies.map(String) : [] };
+    name: builtin ? builtinSourceName(source.url) : String(source.name || ''), profiles,
+    dependencies: Array.isArray(source.dependencies) ? source.dependencies.slice(0, 2).map(String) : [] };
 }
 
 export const sourceSnapshot = sources => sources.map(({ url, enabled }) => ({ url, enabled }));
@@ -120,7 +127,8 @@ export function sourceHistory(source, entries) {
   const date = new Date(Number(entry.checked_at) * 1000);
   const known = Number(entry.checked_at) > 0 && Number.isFinite(date.getTime());
   const downloads = [entry.download_url_0, entry.download_url_1].filter(url => typeof url === 'string' && url.length <= 8192 && /^https?:\/\//.test(url));
-  return { label, detail, kind, needsAction, pending, downloads, technical: entry.reason || entry.warning || '',
+  const technical = [...new Set([entry.warning, entry.reason].filter(value => typeof value === 'string' && value && value !== 'accepted'))].join('\n');
+  return { label, detail, kind, needsAction, pending, downloads, technical,
     datetime: known ? date.toISOString() : '', time: known ? date.toLocaleString('zh-CN', { hour12: false }) : '' };
 }
 

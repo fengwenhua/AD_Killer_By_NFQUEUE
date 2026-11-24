@@ -72,6 +72,9 @@ Linux/root 环境；用法、固定输入与前后对照见
 - `test_rules`、`test_rule_stream`、`test_source_validator`：规则语义、流式 gzip、资源上限与快照并发；
 - `test_recipe_parity.py`：20 个普通源共享配方、C++/Python 完整规则内容与计数一致，覆盖
   显式 Hosts→AdGuard、原生 Hosts 分类、低比例浏览器列表、gzip、部分失败、非法域名和隔离输出；
+- `test_hagezi_source` / `test_hagezi_parity.py`：完整 Pro 与旧差集两种配方的原生/Python 完整集合一致、精确/后缀边界；
+- `test_source_mirrors.py`：真实 HTTP 镜像回退、慢响应、304 验证器隔离、共享重试/期限、缓存及别名、旧差集整组回退、预览不写数据；
+- `test_hagezi_profiles.py`：新装默认完整 Pro、旧安装启停保持、显式切换、缓存隔离/过期、失败保留旧 generation 及停用状态下测试/预览无副作用；
 - `test_config_store`、`test_update_job`、`test_rule_bundle`：配置锁、任务状态和原子 generation；
 - `test_data_paths.py`：独立数据路径与共享根目录权限边界；
 - `test_iptables`：纯命令规划和路由快照判定，不调用宿主机防火墙；

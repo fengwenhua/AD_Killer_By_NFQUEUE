@@ -19,6 +19,18 @@ std::vector<std::string> unique_domains(const std::string &text) {
 }
 }
 
+SourceValidationResult merge_hagezi_pro(const std::string &pro_file, const RuleStreamLimits &limits) {
+    auto result = validate_rule_source_file(pro_file.c_str(), limits, SourceFormat::HOSTS_AS_ADGUARD);
+    if (!result.accepted) { result.reason = "pro: " + result.reason; return result; }
+    const auto domains = unique_domains(result.adguard_rules);
+    result.adguard_rules.clear();
+    for (const auto &domain : domains) result.hosts_rules += domain + "\n";
+    result.stats.accepted_hosts = domains.size();
+    result.stats.accepted_adguard = 0;
+    result.stats.difference_base_unique = domains.size();
+    return result;
+}
+
 SourceValidationResult merge_hagezi_pair(const std::string &pro_file,
                                         const std::string &fake_file,
                                         const RuleStreamLimits &limits) {

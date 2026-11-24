@@ -4,7 +4,7 @@ import { effectScope, ref } from 'vue';
 import { useSourcePreview } from '../src/composables/useSourcePreview.js';
 import { useUiPreferences } from '../src/composables/useUiPreferences.js';
 import { shellQuote } from '../src/services/bridge.js';
-import { HAGEZI_ID } from '../src/domain/rules.js';
+import { HAGEZI_ID, HAGEZI_PRO_ID } from '../src/domain/rules.js';
 
 const ok = previews => ({ code: 0, stdout: JSON.stringify({ status: 'ok', previews }), stderr: '' });
 const source = { url: "https://example.org/a'b" };
@@ -84,6 +84,17 @@ test('builtin dependencies run in parallel, independently show partial errors, d
     await loading;
     assert.match(model.active.value.items[1].error, /TLS/); assert.equal(builtin.enabled, false); assert.equal(builtin.locked, true);
   } finally { scope.stop(); }
+});
+
+test('full Pro previews only its single Pro dependency and retains builtin identity on refresh', async () => {
+  const scope=effectScope(),commands=[],url='https://example.org/pro';
+  const model=scope.run(()=>useSourcePreview({command:async c=>{commands.push(c);return ok([{url,text:'*.fake.example.org\n'}]);}}));
+  try {
+    await model.open({url:HAGEZI_PRO_ID,dependencies:[url]});
+    assert.equal(model.active.value.builtin,true);assert.equal(model.active.value.items.length,1);
+    assert.equal(model.active.value.items[0].label,'Pro');assert.equal(commands.length,1);
+    await model.refresh();assert.equal(model.active.value.builtin,true);assert.equal(commands.length,2);
+  } finally {scope.stop();}
 });
 
 test('preview deduplicates in-flight reopen, blocks invalid protocols, rejects safely and discards late/disposed results', async () => {

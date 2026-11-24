@@ -13,6 +13,7 @@ int main() {
     };
     assert(default_rule_recipe().size() == 20);
     assert(std::string(recipe_source_name(HAGEZI_SOURCE_ID)) == HAGEZI_SOURCE_NAME);
+    assert(std::string(recipe_source_name(HAGEZI_PRO_SOURCE_ID)) == HAGEZI_PRO_SOURCE_NAME);
     assert(std::string(recipe_source_name("https://example.org/custom")).empty());
     for (const auto &source : default_rule_recipe())
         assert(std::string(recipe_source_name(source.url)) == source.name);
@@ -32,7 +33,13 @@ int main() {
         assert(recipe_source_format(unknown) == SourceFormat::AUTO);
     }
     assert(parse_rule_sources(default_rule_sources_text(), entries, error, true));
-    assert(entries.size() == 21 && entries.back().url == HAGEZI_SOURCE_ID && entries.back().enabled);
+    assert(entries.size() == 21 && entries.back().url == HAGEZI_PRO_SOURCE_ID && entries.back().enabled);
+    assert(parse_rule_sources(default_rule_sources_text(HAGEZI_SOURCE_ID, false), entries, error, true));
+    assert(entries.back().url == HAGEZI_SOURCE_ID && !entries.back().enabled);
+    const auto retained_pro = migrate_source_defaults(std::string("# disabled: ") + HAGEZI_PRO_SOURCE_ID + "\n");
+    assert(retained_pro.find(HAGEZI_SOURCE_ID) == std::string::npos);
+    assert(parse_rule_sources(retained_pro, entries, error, true));
+    assert(std::count_if(entries.begin(), entries.end(), [](const RuleSource &s) { return is_builtin_source(s.url); }) == 1);
     assert(default_rule_sources_text().find("https://adrules.top/adrules.txt") == std::string::npos);
     assert(default_rule_sources_text().find("https://adrules.top/dns.txt") != std::string::npos);
     assert(default_rule_sources_text().find("https://anti-ad.net/domains.txt") != std::string::npos);
@@ -127,6 +134,10 @@ int main() {
     entries[0].enabled=false; previous=entries;
     entries.clear(); retain_builtin_source(entries,previous);
     assert(entries.size()==1 && !entries[0].enabled);
+    previous = {{HAGEZI_PRO_SOURCE_ID, true}};
+    entries.clear(); retain_builtin_source(entries, previous);
+    assert(entries.size() == 1 && entries[0].url == HAGEZI_PRO_SOURCE_ID && entries[0].enabled);
+    assert(!parse_rule_sources(std::string(HAGEZI_PRO_SOURCE_ID) + "\n# disabled: " + HAGEZI_SOURCE_ID + "\n", entries, error, true));
     assert(!parse_rule_sources("builtin:edited-hagezi\n", entries, error, true));
     assert(!parse_rule_sources(std::string(HAGEZI_SOURCE_ID) + "\n" + HAGEZI_SOURCE_ID + "\n", entries, error));
     many.clear();

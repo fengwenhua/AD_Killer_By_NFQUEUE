@@ -1,5 +1,5 @@
 import { computed, onScopeDispose, ref } from 'vue';
-import { committedSourceOrder, HAGEZI_ID, lastJson, normalizeSource, parseSourceSummary, sourceSnapshot, sourcesDiffer, sourceUrlError, validJob } from '../domain/rules.js';
+import { committedSourceOrder, isBuiltinSource, lastJson, normalizeSource, parseSourceSummary, sourceSnapshot, sourcesDiffer, sourceUrlError, validJob } from '../domain/rules.js';
 import { discoverJobs, observeJob } from '../domain/jobs.js';
 import { PATHS } from '../services/api.js';
 import { shellQuote } from '../services/bridge.js';
@@ -41,6 +41,13 @@ export function useSources(api, feedback, storage = getStorage()) {
     const wasDirty = dirty.value; row.enabled = enabled; changed();
     if (!wasDirty && dirty.value) feedback.toast('来源有修改，请点击「保存来源」，再到概览同步重建规则');
   }
+  function changeProfile(row, url) {
+    if (!row.locked || !isBuiltinSource(row.url) || saving.value || testingId.value === row.id || row.url === url) return;
+    const profile = row.profiles.find(p => p.url === url);
+    if (!profile) return;
+    row.url = profile.url; row.name = profile.name; row.dependencies = [...profile.dependencies];
+    changed(); feedback.toast('HaGeZi 配方已修改，请保存来源，再同步规则后生效');
+  }
   function edit(row = null) {
     if (!ready.value || saving.value || row?.locked || (row && testingId.value === row.id)) return;
     editor.value = { id: row?.id ?? null, url: row?.url || '' }; editorError.value = '';
@@ -50,7 +57,7 @@ export function useSources(api, feedback, storage = getStorage()) {
     const row = rows.value.find(s => s.id === editor.value.id);
     if (row?.locked || (row && testingId.value === row.id)) return false;
     const url = editor.value.url.trim(), error = sourceUrlError(url, rows.value, row?.id);
-    if (error || (!row && (ordinaryCount.value >= 64 || url === HAGEZI_ID))) { editorError.value = error || '无法添加此来源'; return false; }
+    if (error || (!row && (ordinaryCount.value >= 64 || isBuiltinSource(url)))) { editorError.value = error || '无法添加此来源'; return false; }
     if (row) { if (row.url !== url) row.name = ''; row.url = url; }
     else { const next = normalizeSource({ url, enabled: true }, sequence++); rows.value.push(next); order.value.push(next.id); }
     editor.value = null; changed(); return true;
@@ -164,5 +171,5 @@ export function useSources(api, feedback, storage = getStorage()) {
   globalThis.window?.addEventListener('beforeunload', beforeUnload);
   onScopeDispose(() => globalThis.window?.removeEventListener('beforeunload', beforeUnload));
   return { rows, displayRows, history, ready, saving, dirty, testing, testingId, testLogId, testLog, testPaused, orphanTest, recoveringTest, message, kind,
-    editor, editorError, enabledCount, ordinaryCount, load, toggle, edit, applyEdit, remove, save, test, resumeTest };
+    editor, editorError, enabledCount, ordinaryCount, load, toggle, changeProfile, edit, applyEdit, remove, save, test, resumeTest };
 }

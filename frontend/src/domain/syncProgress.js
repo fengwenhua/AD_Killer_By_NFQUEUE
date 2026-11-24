@@ -1,9 +1,9 @@
-import { HAGEZI_ID, parseSourceSummary, sourceHistory, sourceUrlError, validJob } from './rules.js';
+import { builtinSourceName, isBuiltinSource, parseSourceSummary, sourceHistory, sourceUrlError, validJob } from './rules.js';
 
 const states = new Set(['queued', 'downloading', 'validating', 'accepted', 'download_error', 'content_rejected', 'not_attempted']);
 export function sourceName(url, name = '') {
   if (typeof name === 'string' && name.trim() && name.length <= 160) return name.trim();
-  if (url === HAGEZI_ID) return 'HaGeZi Pro − Fake';
+  if (isBuiltinSource(url)) return builtinSourceName(url);
   try { const value = new URL(url), file = value.pathname.split('/').filter(Boolean).pop(); return value.hostname + (file ? ' · ' + file.slice(0, 50) : ''); }
   catch { return '规则来源'; }
 }

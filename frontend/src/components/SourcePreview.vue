@@ -38,7 +38,7 @@ onBeforeUnmount(() => dialog.value?.close());
         <header class="preview-heading"><div><span class="eyebrow">SOURCE PREVIEW</span><h2 id="previewTitle">来源内容预览</h2></div><ActionButton autofocus aria-label="关闭内容预览" @click="model.close">关闭</ActionButton></header>
         <div class="preview-scroll">
           <p id="previewHelp" class="subtle">只读查看原始来源开头，每份最多 {{ model.active.characters }} 个字符；不修改规则或同步记录。字符数可在设置中调整。</p>
-          <p v-if="model.active.builtin" class="subtle">内置来源分别展示 Pro / Fake 原文，不是差集结果。</p>
+          <p v-if="model.active.builtin" class="subtle">{{ model.active.items.length === 1 ? '展示完整 Pro 原文，未执行 Fake 差集。' : '分别展示 Pro / Fake 原文，不是差集结果。' }}</p>
           <section v-for="(item, index) in model.active.items" :key="item.url + index" class="preview-item" :aria-busy="item.pending">
             <b v-if="item.label">{{ item.label }}</b><span class="source-url">{{ item.url }}</span>
             <span v-if="item.requestUrl && item.requestUrl !== item.url" class="source-url">本次请求：{{ item.requestUrl }}</span>

@@ -17,6 +17,7 @@ import time
 DATA = Path("/data/adb/AD_Killer_By_NFQUEUE")
 BINARY = sys.argv[1]
 HAGEZI = "builtin:hagezi-pro-minus-fake"
+FULL_PRO = "builtin:hagezi-pro"
 FIXTURES = {
     "/adguard": b"||ads.example.com^\n@@||safe.example.com^\n||ads.example.com^\n",
     "/prefix-mask": b"||ads.example.com^\n||adservice.google.\n@@||allow.example.\n",
@@ -71,8 +72,9 @@ def main():
         assert len(ordinary) == recipe_count and all(s["enabled"] for s in ordinary)
         assert all(s['name'] for s in ordinary), 'known recipe names must reach source cards'
         assert not any(s['url']=='https://adrules.top/adrules.txt' for s in ordinary)
-        assert len(special) == 1 and special[0]["url"] == HAGEZI and special[0]["enabled"]
-        assert len(special[0]["dependencies"]) == 2
+        assert len(special) == 1 and special[0]["url"] == FULL_PRO and special[0]["enabled"]
+        assert len(special[0]["dependencies"]) == 1
+        assert {p['url'] for p in special[0]['profiles']} == {HAGEZI, FULL_PRO}
         assert all("hagezi" not in s["url"].lower() or "light" in s["url"].lower() for s in ordinary)
         config=DATA/'state.conf'
         config.write_text(''.join(line for line in config.read_text().splitlines(keepends=True) if not line.startswith('source_defaults_version=')))
@@ -103,10 +105,10 @@ def main():
         assert sources_file.read_text().startswith(full + '\n')
         # Migration completion is one-time; future schema markers cannot be
         # downgraded or used to reset a deliberately selected legacy template.
-        marker('3')
+        marker('4')
         sources_file.write_text('# custom\n# disabled: '+HAGEZI+'\n')
         saved = sources_file.read_bytes(); command('--install')
-        assert sources_file.read_bytes() == saved and 'source_defaults_version=3\n' in config.read_text()
+        assert sources_file.read_bytes() == saved and 'source_defaults_version=4\n' in config.read_text()
         marker('1')
         sources_file.write_text('https://example.org/dup\nhttps://example.org/dup\n')
         saved = sources_file.read_bytes(); before_config = config.read_bytes()
@@ -122,9 +124,11 @@ def main():
             "# 以下为默认源,可自行增删\n"
             "https://anti-ad.net/easylist.txt\n"
             "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt\n")
-        before_config = (DATA / "state.conf").read_text().replace('source_defaults_version=1\n', 'source_defaults_version=2\n')
+        before_config = (DATA / "state.conf").read_text().replace('source_defaults_version=1\n', 'source_defaults_version=3\n')
         command("--install")
         assert len(json.loads(command("--sources-list"))["sources"]) == recipe_count + 1
+        historical_builtin = next(s for s in json.loads(command('--sources-list'))['sources'] if s['locked'])
+        assert historical_builtin['url'] == HAGEZI and not historical_builtin['enabled'], 'historical missing builtin must not gain enabled full Pro'
         assert (DATA / "state.conf").read_text() == before_config
         (DATA / "update_sources.txt").write_text("# custom\nhttps://example.org/user\n")
         command("--install")

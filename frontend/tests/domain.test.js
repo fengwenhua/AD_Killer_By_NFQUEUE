@@ -43,7 +43,7 @@ test('sync counts, history timestamps, stale publication rejection and non-HTML 
 });
 
 test('source cache fallback stays visible with its age; verified 304 and incomplete publication stay distinct', () => {
-  const summary = parseSourceSummary('publish_status=published\nsource_count=1\naccepted_sources=1\n\n[source_0]\nurl=https://a.org\nstatus=accepted\nprovenance=cache_fallback\ncache_age_seconds=7200\ncache_verified_at=1700000000\nwarning=HTTP 503\n');
+  const summary = parseSourceSummary('publish_status=published\nsource_count=1\naccepted_sources=1\n\n[source_0]\nurl=https://a.org\nstatus=accepted\nreason=accepted\nprovenance=cache_fallback\ncache_age_seconds=7200\ncache_verified_at=1700000000\nwarning=HTTP 503\n');
   assert.equal(summary.cached, 1); assert.equal(summary.partial, false); assert.match(summary.message, /使用缓存/);
   let history = sourceHistory({ url: 'https://a.org', enabled: true }, summary.sources);
   assert.equal(history.kind, 'warning'); assert.equal(history.label, '使用旧缓存'); assert.match(history.detail, /2\.0 小时/); assert.match(history.technical, /HTTP 503/);

@@ -1,12 +1,21 @@
 #include "hagezi_source.h"
+#include "rules.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
 
 static void write(const std::string &path, const std::string &text) { std::ofstream(path) << text; }
 int main(int argc, char **argv) {
+    if (argc == 4 && std::string(argv[1]) == "--pro") {
+        auto result = merge_hagezi_pro(argv[2]);
+        if (!result.accepted) { std::cerr << result.reason << '\n'; return 1; }
+        write(argv[3], result.hosts_rules);
+        std::cout << "full Pro: " << result.stats.accepted_hosts << " exact domains\n";
+        return 0;
+    }
     if (argc == 4) {
         auto result = merge_hagezi_pair(argv[1], argv[2]);
         if (!result.accepted) { std::cerr << result.reason << '\n'; return 1; }
@@ -21,6 +30,17 @@ int main(int argc, char **argv) {
     const std::string pro_text = "# Pro\n*.KEEP.example.com\n*.fake.example.com\nkeep.example.com\n0.0.0.0 other.example.com\ninvalid/path\n";
     const std::string fake_text = "# Fake\n*.fake.example.com\nnot-in-pro.example.org\n";
     write(pro, pro_text); write(fake, fake_text);
+    const auto full = merge_hagezi_pro(pro);
+    assert(full.accepted && full.hosts_rules == "fake.example.com\nkeep.example.com\nother.example.com\n");
+    assert(full.adguard_rules.empty() && full.stats.accepted_hosts == 3 && full.stats.accepted_adguard == 0);
+    assert(full.stats.bytes == pro_text.size());
+    RuleDB full_rules, light_rules;
+    std::istringstream domains(full.hosts_rules); std::string domain;
+    while (std::getline(domains, domain)) parse_hosts_line(domain, full_rules);
+    assert(parse_adguard_line("||keep.example.com^", light_rules) == 1);
+    assert(full_rules.black.match("keep.example.com") && light_rules.black.match("keep.example.com"));
+    assert(!full_rules.black.match("child.keep.example.com") && light_rules.black.match("child.keep.example.com"));
+    assert(full_rules.black.match("fake.example.com"));
     auto result = merge_hagezi_pair(pro, fake);
     assert(result.accepted && result.hosts_rules == "keep.example.com\nother.example.com\n");
     assert(result.adguard_rules.empty()); // Not a global allow list.

@@ -71,9 +71,15 @@ window.previewEngineError = "NFQUEUE 队列 0 已被 YH_hosts 占用，请先停
 window.previewBuiltinSource={url:"builtin:hagezi-pro-minus-fake",enabled:false,locked:true,name:"HaGeZi Pro − Fake",dependencies:[
   "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/pro.txt",
   "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/fake.txt"]};
+window.previewBuiltinProfiles=[{url:'builtin:hagezi-pro',name:'HaGeZi Pro',dependencies:[previewBuiltinSource.dependencies[0]]},
+ {url:previewBuiltinSource.url,name:previewBuiltinSource.name,dependencies:[...previewBuiltinSource.dependencies]}];
+window.previewSourceMetadata=s=>{
+ const profile=previewBuiltinProfiles.find(p=>p.url===s.url);
+ return profile?{...profile,locked:true,profiles:previewBuiltinProfiles,...s}:s;
+};
 window.previewSources = (__SOURCE_FIXTURE__ || [{url:"https://anti-ad.net/easylist.txt",enabled:true},
   {url:"https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",enabled:false},{...previewBuiltinSource}])
-  .map(s=>s.url===previewBuiltinSource.url?{...previewBuiltinSource,...s}:s);
+  .map(previewSourceMetadata);
 window.ksu = {
   listPackages() { return '["org.example.browser","org.example.chat"]'; },
   getPackagesInfo() { return JSON.stringify([
@@ -145,7 +151,7 @@ window.ksu = {
       if(previewSaveFails){setTimeout(()=>window[callback](2,"","规则同步正在运行"),0);return}
       const encoded=command.match(/^printf '%s' '([A-Za-z0-9+/=]+)'/)[1];
       previewSources=decodeURIComponent(escape(atob(encoded))).trim().split("\n").filter(Boolean).map(line=>({
-        enabled:!line.startsWith("# disabled: "),url:line.replace(/^# disabled: /,"")})).map(s=>s.url===previewBuiltinSource.url?{...previewBuiltinSource,...s}:s);
+        enabled:!line.startsWith("# disabled: "),url:line.replace(/^# disabled: /,"")})).map(previewSourceMetadata);
       text=JSON.stringify({status:"ok",sources:previewSources});
     }
     else if(command.includes(" --source-preview")) {
@@ -1489,6 +1495,60 @@ def source_cache_regression(browser, errors):
                 page.close()
 
 
+def hagezi_profile_regression(browser, errors, screenshots=None):
+    for theme in ('light', 'dark'):
+        page = browser.new_page(viewport={'width': 320, 'height': 852}, color_scheme=theme, reduced_motion='reduce')
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.add_init_script(mock_script([{'url': 'builtin:hagezi-pro-minus-fake', 'enabled': False}]))
+        page.goto((ROOT / 'module/webroot/index.html').as_uri())
+        page.locator('nav [data-page="rules"]').click()
+        page.locator('#sourcesDetails > summary').click()
+        card = page.locator('.source-item').first
+        selector = card.get_by_label('HaGeZi 配方', exact=True)
+        expect(selector).to_have_value('builtin:hagezi-pro-minus-fake')
+        selector.select_option('builtin:hagezi-pro')
+        expect(card.locator('.source-top label')).to_have_text('HaGeZi Pro')
+        expect(card.get_by_role('checkbox')).not_to_be_checked()
+        expect(page.locator('#saveSources')).to_be_enabled()
+        assert page.evaluate('previewSources[0].url') == 'builtin:hagezi-pro-minus-fake', 'draft changed persisted source'
+        assert not page.evaluate("previewCommands.some(c=>/ --(?:sources-save|update-start|reload|start|stop)(?: |$)/.test(c))")
+        page.evaluate('previewSaveFails=true')
+        page.locator('#saveSources').click()
+        expect(page.locator('#sourcesStatus')).to_contain_text('保存失败')
+        expect(selector).to_have_value('builtin:hagezi-pro')
+        page.evaluate('previewSaveFails=false')
+        page.locator('#saveSources').click()
+        expect(page.locator('#sourcesStatus')).to_contain_text('已保存')
+        saved_native_sources = page.evaluate('previewSources')
+        assert saved_native_sources[0]['url'] == 'builtin:hagezi-pro' and not saved_native_sources[0]['enabled']
+        page.close()
+        # Recreate the WebView with the source list returned by the saved
+        # native fixture. Real on-disk persistence is covered by the CLI test.
+        page = browser.new_page(viewport={'width': 320, 'height': 852}, color_scheme=theme, reduced_motion='reduce')
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.add_init_script(mock_script(saved_native_sources))
+        page.goto((ROOT / 'module/webroot/index.html').as_uri())
+        page.locator('nav [data-page="rules"]').click()
+        page.locator('#sourcesDetails > summary').click()
+        selector = page.locator('.source-item').first.get_by_label('HaGeZi 配方', exact=True)
+        assert page.evaluate('previewSources[0].url') == 'builtin:hagezi-pro'
+        assert not page.evaluate('previewSources[0].enabled')
+        expect(selector).to_have_value('builtin:hagezi-pro')
+        card = page.locator('.source-item').first
+        card.get_by_role('button', name='查看内容', exact=True).click()
+        dialog = page.get_by_role('dialog', name='来源内容预览')
+        expect(dialog.locator('.preview-item')).to_have_count(1)
+        expect(dialog).to_contain_text('完整 Pro 原文')
+        expect(dialog.locator('.source-result')).to_be_visible()
+        assert not page.evaluate("previewCommands.some(c=>c.includes(' --source-preview ') && c.includes('wildcard/fake.txt'))")
+        dialog.get_by_role('button', name='关闭内容预览', exact=True).click()
+        if screenshots:
+            page.screenshot(path=str(screenshots / f'hagezi-profile-{theme}.png'))
+        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
+        assert not page.evaluate("previewCommands.some(c=>/ --(?:update-start|reload|start|stop)(?: |$)/.test(c))")
+        page.close()
+
+
 def source_address_regression(browser, errors, screenshots=None):
     """Real names, mobile long-link disclosure/copy and independent switches."""
     url = 'https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/' + 'long-' * 100 + '.txt?format=hosts'
@@ -1527,6 +1587,7 @@ Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:
             page.evaluate("document.documentElement.style.fontSize='22px'")
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
             assert card.evaluate('e=>e.scrollWidth<=e.clientWidth+1')
+            assert card.locator('.source-actions button').evaluate_all("items=>items.every(e=>{const r=document.createRange();r.selectNodeContents(e);return r.getClientRects().length<=1&&e.scrollWidth<=e.clientWidth+1})"), 'source action labels wrapped or clipped'
             page.close()
 
 
@@ -1544,6 +1605,7 @@ def main():
         try:
             fixture_regression(browser, errors)
             source_address_regression(browser, errors, args.screenshots)
+            hagezi_profile_regression(browser, errors, args.screenshots)
             freezer_health_regression(browser, errors)
             cleanup_health_regression(browser, errors)
             apply_health_regression(browser, errors)

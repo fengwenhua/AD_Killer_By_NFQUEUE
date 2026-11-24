@@ -11,11 +11,11 @@
 #include <unistd.h>
 
 std::vector<std::string> source_component_urls(const std::string &url) {
-    if (is_builtin_source(url)) return {HAGEZI_PRO_URL, HAGEZI_FAKE_URL};
+    if (is_builtin_source(url)) return builtin_source_urls(url);
     return {canonical_rule_source_url(url)};
 }
 std::string source_identity_key(const std::string &url) {
-    return source_cache_key(canonical_rule_source_url(url), is_builtin_source(url) ? "hagezi-pro-minus-fake" : source_format_name(recipe_source_format(url)), source_component_urls(url));
+    return source_cache_key(canonical_rule_source_url(url), is_builtin_source(url) ? builtin_source_kind(url) : source_format_name(recipe_source_format(url)), source_component_urls(url));
 }
 
 SourceDownload prepare_source_download(const std::string &directory, const std::string &url,
@@ -119,7 +119,8 @@ SourceSyncResult synchronize_rule_source(const std::string &directory, const std
         RuleStreamLimits remaining = limits;
         remaining.output_bytes -= std::min(remaining.output_bytes, result.consumed_bytes);
         remaining.lines -= std::min(remaining.lines, result.consumed_lines);
-        auto value = is_builtin_source(url) ? merge_hagezi_pair(selected[0].path, selected[1].path, remaining) :
+        auto value = url == HAGEZI_SOURCE_ID ? merge_hagezi_pair(selected[0].path, selected[1].path, remaining) :
+            url == HAGEZI_PRO_SOURCE_ID ? merge_hagezi_pro(selected[0].path, remaining) :
             validate_rule_source_file(selected[0].path.c_str(), remaining, recipe_source_format(url));
         result.consumed_bytes += value.stats.bytes;
         result.consumed_lines += value.stats.total_lines;
@@ -171,10 +172,12 @@ SourceSyncResult synchronize_rule_source(const std::string &directory, const std
             } else result.validation.reason = fresh_error + "; cached_validation: " + fallback.reason;
         }
     }
-    if (result.validation.accepted && is_builtin_source(url)) {
+    if (result.validation.accepted && url == HAGEZI_SOURCE_ID) {
         const auto &stats = result.validation.stats;
         log_line("HaGeZi", "Pro 唯一 %zu / Fake 唯一 %zu / 差集剔除 %zu / 保留 %zu；仅本组精确 Hosts 规则",
             stats.difference_base_unique, stats.difference_exclude_unique, stats.difference_removed, stats.accepted_hosts);
+    } else if (result.validation.accepted && url == HAGEZI_PRO_SOURCE_ID) {
+        log_line("HaGeZi", "完整 Pro 保留 %zu 条精确 Hosts 规则（不做 Fake 差集，无独立 Fake 请求）", result.validation.stats.accepted_hosts);
     }
     if (result.validation.accepted) {
         const auto &selected = result.provenance == "cache_fallback" ? previous.components : components;

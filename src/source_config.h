@@ -65,9 +65,8 @@ inline bool parse_rule_sources(const std::string &text,
 inline void retain_builtin_source(std::vector<RuleSource> &entries,
                                   const std::vector<RuleSource> &previous = {}) {
     for (const auto &entry : entries) if (is_builtin_source(entry.url)) return;
-    bool enabled = false;
-    for (const auto &entry : previous) if (is_builtin_source(entry.url)) enabled = entry.enabled;
-    entries.push_back({HAGEZI_SOURCE_ID, enabled});
+    for (const auto &entry : previous) if (is_builtin_source(entry.url)) { entries.push_back(entry); return; }
+    entries.push_back({HAGEZI_SOURCE_ID, false});
 }
 
 inline std::string serialize_rule_sources(const std::vector<RuleSource> &entries) {

@@ -48,7 +48,7 @@ function remove(row) { if (confirm('删除这个来源？当前已加载规则�
           <p v-else-if="incomplete" class="sync-note" data-kind="warning">上次有来源未通过，规则未更新。先处理“需要处理”的来源，再次同步即可。</p>
           <div class="source-filter" role="group" aria-label="筛选规则来源"><button type="button" :aria-pressed="filter === 'all'" @click="filter = 'all'">全部 {{ sources.rows.length }}</button><button type="button" :aria-pressed="filter === 'enabled'" @click="filter = 'enabled'">已启用 {{ sources.enabledCount }}</button><button type="button" :aria-pressed="filter === 'issues'" @click="filter = 'issues'">需要处理 {{ attentionCount }}</button></div>
           <div id="sourceList" role="list" aria-describedby="sourcesHelp">
-            <SourceCard v-for="(source, index) in rows" :key="source.id" :source="source" :index="index" :count="rows.length" :eager="sourceKeyboard" :history="sources.history" :saving="sources.saving" :testing="sources.testing" :testing-id="sources.testingId" :test-log-id="sources.testLogId" :test-log="sources.testLog" @toggle="sources.toggle(source, $event)" @edit="edit(source, $event)" @test="sources.test(source)" @delete="remove(source)" @preview="previews.open(source)" />
+            <SourceCard v-for="(source, index) in rows" :key="source.id" :source="source" :index="index" :count="rows.length" :eager="sourceKeyboard" :history="sources.history" :saving="sources.saving" :testing="sources.testing" :testing-id="sources.testingId" :test-log-id="sources.testLogId" :test-log="sources.testLog" @toggle="sources.toggle(source, $event)" @profile="sources.changeProfile(source, $event)" @edit="edit(source, $event)" @test="sources.test(source)" @delete="remove(source)" @preview="previews.open(source)" />
             <p v-if="sources.ready && sources.rows.length && !rows.length" class="subtle">当前筛选下没有来源。</p>
             <p v-if="sources.ready && !sources.rows.length" class="subtle">暂无来源。新增并保存后才能同步。</p>
           </div>
@@ -56,7 +56,7 @@ function remove(row) { if (confirm('删除这个来源？当前已加载规则�
           <p id="sourcesStatus" class="sync-note" :data-kind="sources.kind" role="status">{{ sources.message }}</p>
           <ActionButton v-if="sources.testPaused" id="resumeSourceTest" icon="sync" :busy="sources.recoveringTest" @click="sources.resumeTest">继续查询测试</ActionButton>
           <div v-if="sources.orphanTest" class="source-history"><p class="subtle">恢复的来源测试：{{ sources.orphanTest }}（不加入来源配置）</p><pre class="source-result" aria-label="恢复的来源测试日志">{{ sources.testLog }}</pre></div>
-          <p class="subtle">普通来源支持 Hosts、域名及模块可识别的 AdGuard 网络规则。HaGeZi Pro − Fake 为不可编辑/删除的固定配方。测试只下载和解析，不替换规则或启动引擎。</p>
+          <p class="subtle">普通来源支持 Hosts、域名及模块可识别的 AdGuard 网络规则。HaGeZi 可选择完整 Pro 或兼容旧版配方；新安装默认完整 Pro，升级保留原选择。测试不替换规则或启动引擎。</p>
         </div>
       </details>
       <details id="customRulesDetails" class="card rule-section">

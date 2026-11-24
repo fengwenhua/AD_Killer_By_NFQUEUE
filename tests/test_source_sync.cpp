@@ -63,6 +63,9 @@ int main() {
         const std::string original = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts";
         const auto endpoints = rule_source_endpoints(original);
         const auto known_key = source_identity_key(original);
+        assert(source_identity_key(HAGEZI_PRO_SOURCE_ID) != source_identity_key(HAGEZI_SOURCE_ID));
+        assert(source_component_urls(HAGEZI_PRO_SOURCE_ID) == std::vector<std::string>({HAGEZI_PRO_URL}));
+        assert(source_download_limit(HAGEZI_PRO_SOURCE_ID) == MAX_RULE_INPUT_BYTES);
         assert(known_key == source_identity_key(endpoints[0]) && known_key == source_identity_key(endpoints[1]));
         const auto attempt = [&](unsigned number, bool reuse = false) {
             auto download = prepare_source_download(downloads, original, &cache);

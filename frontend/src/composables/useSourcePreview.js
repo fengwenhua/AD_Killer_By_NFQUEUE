@@ -1,5 +1,5 @@
 import { computed, onScopeDispose, ref } from 'vue';
-import { HAGEZI_ID, lastJson, sourceUrlError } from '../domain/rules.js';
+import { isBuiltinSource, lastJson, sourceUrlError } from '../domain/rules.js';
 import { shellQuote } from '../services/bridge.js';
 import { PREVIEW_DEFAULT, previewCharacters } from './useUiPreferences.js';
 import { afterPaint as paint } from '../services/paint.js';
@@ -58,10 +58,10 @@ export function useSourcePreview(api, characters = ref(PREVIEW_DEFAULT), afterPa
   }
   function open(source, force = false) {
     const count = previewCharacters(characters.value) ?? PREVIEW_DEFAULT;
-    const builtin = source.url === HAGEZI_ID;
+    const builtin = isBuiltinSource(source.url);
     const urls = builtin ? source.dependencies : [source.url];
     active.value = { url: source.url, builtin, characters: count, items: (urls?.length ? urls : [source.url]).map((url, index) => {
-      const error = sourceUrlError(url) || (url === HAGEZI_ID ? '内置来源缺少下载地址，请重新加载来源列表。' : '');
+      const error = sourceUrlError(url) || (isBuiltinSource(url) ? '内置来源缺少下载地址，请重新加载来源列表。' : '');
       if (force) cache.delete(keyFor(url, count));
       const entry = !force && !error ? cached(url, count) : null;
       return { url, label: builtin ? (index === 0 ? 'Pro' : 'Fake') : '', text: '', truncated: false,

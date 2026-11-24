@@ -118,7 +118,7 @@ struct SourcePrefetch::Impl {
             // the bounded job log. Foreground CLI keeps ordinary stdout logs.
             configure_process_log(nullptr, 0, 0);
             WorkBudget source(source_ms - std::min(source_ms, job.download.elapsed_ms),
-                (is_builtin_source(urls[i]) ? 128u * 1024u * 1024u : MAX_RULE_INPUT_BYTES) - job.bytes);
+                source_download_limit(urls[i]) - job.bytes);
             if (job.attempts > 1) {
                 const auto waiting = WorkBudget::Clock::now();
                 const auto until = WorkBudget::Clock::now() + std::chrono::milliseconds(250 * (job.attempts - 1));
@@ -196,7 +196,7 @@ struct SourcePrefetch::Impl {
         if (index >= jobs.size() || jobs[index].pid >= 0 || jobs[index].ready ||
             jobs[index].attempts >= retries + 1 || elapsed_ms >= source_ms ||
             source_ms - elapsed_ms <= 250 * jobs[index].attempts + 100 ||
-            bytes >= (is_builtin_source(urls[index]) ? 128u * 1024u * 1024u : MAX_RULE_INPUT_BYTES) ||
+            bytes >= source_download_limit(urls[index]) ||
             task_unconfirmed_network_writer || WorkBudget::expired() || operation_closing()) return false;
         jobs[index].elapsed_ms = elapsed_ms;
         jobs[index].bytes = bytes;

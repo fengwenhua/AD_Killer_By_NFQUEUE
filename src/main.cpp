@@ -159,7 +159,7 @@ static int cmd_install() {
     if (!file_exists(FILE_STATE_CONF)) {
         ok = write_initial_config(FILE_STATE_CONF,
                           "version=2\n"
-                          "source_defaults_version=2\n"
+                          "source_defaults_version=3\n"
                           "sync_concurrency=10\n"
                           "sync_interval_minutes=30\n"
                           "sync_retries=2\n"
@@ -201,9 +201,10 @@ static int cmd_install() {
             fprintf(stderr, "来源迁移版本无效，未覆盖已有来源配置\n"); return false;
         }
         const bool migrate = defaults_version < 2;
+        const bool record_version = defaults_version < 3;
         if (!file_exists(FILE_UPDATE_SOURCES)) {
             if (!write_initial_config(FILE_UPDATE_SOURCES, default_rule_sources_text())) return false;
-            return !migrate || write_conf_value(FILE_STATE_CONF,"source_defaults_version","2");
+            return !record_version || write_conf_value(FILE_STATE_CONF,"source_defaults_version","3");
         }
         std::string configured;
         if (read_regular_bounded(FILE_UPDATE_SOURCES, configured, MAX_SOURCE_CONFIG_BYTES) != BoundedRead::OK ||
@@ -214,13 +215,18 @@ static int cmd_install() {
             if (!parse_rule_sources(configured, entries, error, true)) {
                 fprintf(stderr, "现有来源配置无效，未迁移: %s\n", error.c_str()); return false;
             }
-            updated = should_refresh_default_rule_sources(configured) ? default_rule_sources_text() : migrate_source_defaults(configured);
+            if (should_refresh_default_rule_sources(configured)) {
+                std::string profile = HAGEZI_SOURCE_ID;
+                bool enabled = false;
+                for (const auto &entry : entries) if (is_builtin_source(entry.url)) { profile = entry.url; enabled = entry.enabled; }
+                updated = default_rule_sources_text(profile, enabled);
+            } else updated = migrate_source_defaults(configured);
             if (!parse_rule_sources(updated, entries, error, true)) {
                 fprintf(stderr, "迁移后的来源配置无效，未保存: %s\n", error.c_str()); return false;
             }
         }
         if (updated!=configured && !write_initial_config(FILE_UPDATE_SOURCES,updated)) return false;
-        return !migrate || write_conf_value(FILE_STATE_CONF,"source_defaults_version","2");
+        return !record_version || write_conf_value(FILE_STATE_CONF,"source_defaults_version","3");
     }();
     ok = sources_ok && ok;
     if (!ok) {
@@ -988,8 +994,7 @@ static int cmd_update(const std::string &test_url = "") {
         const auto &url = urls[source_index];
         if (task_unconfirmed_network_writer || WorkBudget::expired() || operation_closing()) break;
         if (!task_progress("downloading")) return 1;
-        WorkBudget source_budget(source_ms - std::min(source_ms, download.elapsed_ms), is_builtin_source(url) ?
-            128u * 1024u * 1024u : MAX_RULE_INPUT_BYTES);
+        WorkBudget source_budget(source_ms - std::min(source_ms, download.elapsed_ms), source_download_limit(url));
         const auto validation_started = WorkBudget::Clock::now();
         source_reports[source_index].status = "validating";
         save_progress("processing");
@@ -997,7 +1002,7 @@ static int cmd_update(const std::string &test_url = "") {
         report.url = url;
         report.attempts = download.attempt; report.max_attempts = retries + 1;
         SourceFormat format = recipe_source_format(url);
-        report.format = is_builtin_source(url) ? "hagezi-pro-minus-fake" : source_format_name(format);
+        report.format = is_builtin_source(url) ? builtin_source_kind(url) : source_format_name(format);
         RuleStreamLimits source_limits;
         source_limits.output_bytes = MAX_RULE_DECOMPRESSED_BYTES - aggregate_content_bytes;
         source_limits.lines = MAX_RULE_LINES - aggregate_source_lines;
@@ -1069,7 +1074,7 @@ static int cmd_update(const std::string &test_url = "") {
             source_reports[i].status == "content_rejected") continue;
         SourceUpdateReport skipped;
         skipped.url = urls[i]; skipped.status = prefetch.started(i) ? "content_rejected" : "not_attempted";
-        skipped.format = is_builtin_source(urls[i]) ? "hagezi-pro-minus-fake" : source_format_name(recipe_source_format(urls[i]));
+        skipped.format = is_builtin_source(urls[i]) ? builtin_source_kind(urls[i]) : source_format_name(recipe_source_format(urls[i]));
         skipped.reason = prefetch.started(i) ? "parallel_source_cancelled" : "earlier_source_failed_or_budget_cancelled";
         skipped.attempts = source_reports[i].attempts; skipped.max_attempts = retries + 1;
         source_index = i;
@@ -1670,9 +1675,22 @@ static int cmd_sources(bool save) {
         printf("{\"url\":%s,\"enabled\":%s,\"locked\":%s,\"name\":%s",
                source_json_string(entries[i].url).c_str(), entries[i].enabled ? "true" : "false",
                builtin ? "true" : "false", source_json_string(recipe_source_name(entries[i].url)).c_str());
-        if (builtin)
-            printf(",\"kind\":\"hagezi-pro-minus-fake\",\"dependencies\":[%s,%s]",
-                   source_json_string(HAGEZI_PRO_URL).c_str(), source_json_string(HAGEZI_FAKE_URL).c_str());
+        if (builtin) {
+            printf(",\"kind\":%s,\"dependencies\":[", source_json_string(builtin_source_kind(entries[i].url)).c_str());
+            const auto dependencies = builtin_source_urls(entries[i].url);
+            for (size_t j = 0; j < dependencies.size(); ++j)
+                printf("%s%s", j ? "," : "", source_json_string(dependencies[j]).c_str());
+            printf("],\"profiles\":[");
+            size_t profile_index = 0;
+            for (const char *profile : {HAGEZI_PRO_SOURCE_ID, HAGEZI_SOURCE_ID}) {
+                printf("%s{\"url\":%s,\"name\":%s,\"dependencies\":[", profile_index++ ? "," : "",
+                    source_json_string(profile).c_str(), source_json_string(builtin_source_name(profile)).c_str());
+                const auto parts = builtin_source_urls(profile);
+                for (size_t j = 0; j < parts.size(); ++j) printf("%s%s", j ? "," : "", source_json_string(parts[j]).c_str());
+                printf("]}");
+            }
+            printf("]");
+        }
         printf("}");
     }
     printf("]}\n");
@@ -1683,7 +1701,7 @@ static int cmd_sources(bool save) {
 // explicitly not the post-difference rule set. No config/history/job writes.
 static int cmd_source_preview(const std::string &url, size_t characters) {
     std::vector<std::string> urls;
-    if (is_builtin_source(url)) urls = {HAGEZI_PRO_URL, HAGEZI_FAKE_URL};
+    if (is_builtin_source(url)) urls = builtin_source_urls(url);
     else {
         std::string error;
         if (!validate_download_url(url, &error)) {

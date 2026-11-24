@@ -1,11 +1,11 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { sourceHistory } from '../domain/rules.js';
+import { HAGEZI_PRO_ID, sourceHistory } from '../domain/rules.js';
 import { sourceName } from '../domain/syncProgress.js';
 import ActionButton from './ActionButton.vue';
 import { copyText } from '../services/clipboard.js';
 const props = defineProps({ source: Object, index: Number, count: Number, eager: Boolean, history: Array, saving: Boolean, testing: Boolean, testingId: [Number, String], testLogId: [Number, String], testLog: String });
-defineEmits(['toggle', 'edit', 'test', 'delete', 'preview']);
+defineEmits(['toggle', 'profile', 'edit', 'test', 'delete', 'preview']);
 const record = computed(() => sourceHistory(props.source, props.history));
 const busy = computed(() => props.saving || props.testingId === props.source.id);
 const title = computed(() => sourceName(props.source.url, props.source.name));
@@ -47,8 +47,15 @@ onBeforeUnmount(() => { intersection?.disconnect(); resize?.disconnect(); });
       <div class="source-address-full"><code tabindex="0" aria-label="完整来源地址">{{ source.url }}</code><ActionButton variant="ghost" @click="copyAddress">复制地址</ActionButton><span class="subtle" role="status">{{ copyStatus }}</span></div>
     </details>
     <p v-else class="source-url source-builtin-hint">内置特殊来源 · 固定配方</p>
+    <div v-if="source.locked && source.profiles?.length > 1" class="source-profile">
+      <label :for="`source-profile-${source.id}`">HaGeZi 配方</label>
+      <select :id="`source-profile-${source.id}`" class="search" :value="source.url" :disabled="busy" :aria-describedby="`source-profile-help-${source.id}`" @change="$emit('profile', $event.target.value)">
+        <option v-for="profile in source.profiles" :key="profile.url" :value="profile.url">{{ profile.url === HAGEZI_PRO_ID ? '完整 Pro（推荐）' : '兼容旧版：排除 Fake' }}</option>
+      </select>
+      <p :id="`source-profile-help-${source.id}`" class="subtle">Fake 是假冒、诈骗站点列表。完整 Pro 保留上游 Pro 内容；兼容旧版减去与 Fake 重合的域名。修改后需保存并同步生效。</p>
+    </div>
     <details v-if="source.locked" class="source-extra"><summary>规则说明与地址</summary>
-      <p :id="`source-lock-${source.id}`" class="subtle">固定下载 Pro 和 Fake，组内去重后取差集；不可编辑或删除，可测试、启停。保存并同步后生效。</p>
+      <p :id="`source-lock-${source.id}`" class="subtle">{{ source.url === HAGEZI_PRO_ID ? '仅下载完整 Pro，不做 Fake 差集，不再单独下载 Fake。' : '固定下载 Pro 和 Fake，组内去重后取差集。' }}配方地址不可编辑，内置项不可删除，可测试、启停。保存并同步后生效。</p>
       <span v-for="(url, n) in source.dependencies" :key="url" class="source-url">{{ n === 0 ? 'Pro' : 'Fake' }}：{{ url }}</span>
     </details>
     <div class="source-history">

@@ -4,6 +4,7 @@
 #include <functional>
 
 using RuleSourceDownload = std::function<std::string(const std::string &, const std::string &)>;
+SourceValidationResult merge_hagezi_pro(const std::string &pro_file, const RuleStreamLimits &limits = {});
 SourceValidationResult merge_hagezi_pair(const std::string &pro_file,
                                         const std::string &fake_file,
                                         const RuleStreamLimits &limits = {});

@@ -74,7 +74,7 @@ inline SourceFormat recipe_source_format(const std::string &url) {
     return SourceFormat::AUTO;
 }
 inline const char *recipe_source_name(const std::string &url) {
-    if (is_builtin_source(url)) return HAGEZI_SOURCE_NAME;
+    if (is_builtin_source(url)) return builtin_source_name(url);
     const auto canonical = canonical_rule_source_url(url);
     for (const auto &source : default_rule_recipe())
         if (canonical == source.url) return source.name;
@@ -86,13 +86,13 @@ inline const char *source_format_name(SourceFormat format) {
     if (format == SourceFormat::HOSTS) return "hosts";
     return "auto";
 }
-inline std::string default_rule_sources_text() {
+inline std::string default_rule_sources_text(const std::string &builtin = HAGEZI_PRO_SOURCE_ID, bool enabled = true) {
     std::string text = "# AD_Killer_By_NFQUEUE: " +
                        std::to_string(default_rule_recipe().size()) +
-                       " ordinary sources; built-in HaGeZi pair enabled by default\n";
+                       " ordinary sources; built-in " + builtin_source_name(builtin) + (enabled ? " enabled\n" : " disabled\n");
     for (const auto &source : default_rule_recipe())
         text += std::string("# ") + source.name + "\n" + source.url + "\n";
-    text += std::string(HAGEZI_SOURCE_ID) + "\n";
+    text += std::string(enabled ? "" : "# disabled: ") + builtin + "\n";
     return text;
 }
 
@@ -213,16 +213,16 @@ inline std::string migrate_source_defaults(const std::string &configured) {
     std::string result;
     size_t builtin_at = std::string::npos;
     for (const auto &raw : output) {
-        if (address(raw) == HAGEZI_SOURCE_ID) builtin_at = result.size();
+        if (is_builtin_source(address(raw))) builtin_at = result.size();
         result += raw;
     }
-    if (!present.count(HAGEZI_SOURCE_ID)) {
+    if (!present.count(HAGEZI_SOURCE_ID) && !present.count(HAGEZI_PRO_SOURCE_ID)) {
         const auto row = (result.empty() || result.back() == '\n' ? "" : "\n") + disabled + HAGEZI_SOURCE_ID + "\n";
         if (row.size() <= MAX_SOURCE_CONFIG_BYTES - std::min(result.size(), MAX_SOURCE_CONFIG_BYTES)) {
             builtin_at = result.size(); result += row; present.insert(HAGEZI_SOURCE_ID);
         }
     }
-    size_t ordinary = present.size() - present.count(HAGEZI_SOURCE_ID);
+    size_t ordinary = present.size() - present.count(HAGEZI_SOURCE_ID) - present.count(HAGEZI_PRO_SOURCE_ID);
     size_t insert_at = builtin_at == std::string::npos ? result.size() : builtin_at;
     for (const auto &source : new_sources) {
         if (present.count(source.url) || ordinary >= MAX_RULE_SOURCES) continue;

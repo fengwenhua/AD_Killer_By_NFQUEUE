@@ -7,7 +7,7 @@ import { useEngine, waitEngine } from '../src/composables/useEngine.js';
 import { useApps } from '../src/composables/useApps.js';
 import { useCustomRules } from '../src/composables/useCustomRules.js';
 import { useFeedback } from '../src/composables/useFeedback.js';
-import { HAGEZI_ID } from '../src/domain/rules.js';
+import { HAGEZI_ID, HAGEZI_PRO_ID } from '../src/domain/rules.js';
 import { PATHS } from '../src/services/api.js';
 import { applied } from './fixtures/apply.js';
 
@@ -53,6 +53,31 @@ test('dispose source observer leaves resumable job and prevents delayed status p
   const sources = scope.run(() => useSources(api, feedback(), storage));
   await sources.load(); await nextTick(); scope.stop();
   assert.ok(storage.getItem('ad-killer-by-nfqueue-source-test')); assert.equal(sources.history.value.length, 0);
+});
+
+test('HaGeZi profiles are explicit drafts, preserve enablement/order and save without applying rules', async () => {
+  const scope=effectScope(), calls=[], notices=[];
+  const pro='https://example.org/pro',fake='https://example.org/fake';
+  const profiles=[{url:HAGEZI_PRO_ID,dependencies:[pro]},{url:HAGEZI_ID,dependencies:[pro,fake]}];
+  let current={url:HAGEZI_ID,enabled:false,locked:true,dependencies:[pro,fake],profiles}, fail=true;
+  const api={command:async c=>{calls.push(c);return c==='--sources-list'?ok({status:'ok',sources:[current]}):ok({status:'ok',jobs:[]});},readFile:async()=>'',
+    saveSources:async text=>{calls.push(text);if(fail)return {code:1,stdout:'',stderr:'busy'};
+      current={...current,url:HAGEZI_PRO_ID,dependencies:[pro]};return ok({status:'ok',sources:[current]});}};
+  const model=scope.run(()=>useSources(api,{...feedback(),toast:x=>notices.push(x)},memory()));
+  try {
+    await model.load();const row=model.rows.value[0],id=row.id;
+    model.changeProfile(row,HAGEZI_PRO_ID);
+    assert.equal(row.url,HAGEZI_PRO_ID);assert.equal(row.enabled,false);assert.deepEqual(row.dependencies,[pro]);
+    assert.equal(row.id,id);assert.equal(model.dirty.value,true);assert.equal(calls.length,2);
+    model.changeProfile(row,HAGEZI_ID);assert.equal(model.dirty.value,false);
+    model.changeProfile(row,'builtin:unknown');assert.equal(row.url,HAGEZI_ID);
+    model.changeProfile(row,HAGEZI_PRO_ID);await model.save();assert.equal(model.dirty.value,true);
+    fail=false;await model.save();assert.equal(model.dirty.value,false);
+    assert.equal(model.rows.value[0].url,HAGEZI_PRO_ID);assert.equal(model.rows.value[0].enabled,false);
+    assert.ok(calls.some(x=>x==='# disabled: '+HAGEZI_PRO_ID+'\n'));
+    assert.ok(!calls.some(x=>/^--(?:start|stop|reload|update-start|source-test)/.test(x)));
+    model.edit();model.editor.value.url=HAGEZI_ID;assert.equal(model.applyEdit(),false);
+  } finally {scope.stop();}
 });
 
 test('engine waits distinguish error, query, early exit, bad route and actual timeout', async () => {

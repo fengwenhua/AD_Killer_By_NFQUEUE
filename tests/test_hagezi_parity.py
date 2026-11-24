@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independent Python-set oracle for native Pro-minus-Fake, fixtures or real inputs."""
+"""Independent full-set oracles for full Pro and legacy Pro-minus-Fake."""
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -24,4 +24,9 @@ with tempfile.TemporaryDirectory(prefix="ad_killer_by_nfqueue_hagezi_parity_") a
     expected = reference.parse_hosts_text(pro.read_text()) - reference.parse_hosts_text(fake.read_text())
     actual = output.read_text().splitlines()
     assert actual == sorted(expected), "native/Python full sets differ"
-    print(f"native HaGeZi full-set Python parity passed: {len(actual)} exact domains")
+    legacy_count = len(actual)
+    subprocess.run([sys.argv[1], '--pro', str(pro), str(output)], check=True)
+    expected_full = reference.parse_hosts_text(pro.read_text())
+    actual_full = output.read_text().splitlines()
+    assert actual_full == sorted(expected_full), 'full Pro native/Python sets differ'
+    print(f"native HaGeZi full-set Python parity passed: legacy {legacy_count}, full Pro {len(actual_full)} exact domains")
