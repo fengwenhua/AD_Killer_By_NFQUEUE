@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { effectScope, ref } from 'vue';
-import { syncProgress } from '../src/domain/syncProgress.js';
+import { sourceName, syncProgress } from '../src/domain/syncProgress.js';
 import { sourceHistory } from '../src/domain/rules.js';
 import { useSync } from '../src/composables/useSync.js';
 const id = '123-456';
@@ -10,6 +10,17 @@ export function sourceReport(rows, phase = 'processing', job = id) {
 }
 const ok = value => ({code:0,stdout:JSON.stringify(value),stderr:''});
 const storage = () => { const m=new Map();return {getItem:k=>m.get(k),setItem:(k,v)=>m.set(k,v),removeItem:k=>m.delete(k)}; };
+
+test('canonical source names survive progress parsing, while old/custom reports retain readable fallbacks', () => {
+  const url='https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/AWAvenue-Ads-Rule.txt';
+  assert.equal(sourceName(url,'AWAvenue 去广告规则'),'AWAvenue 去广告规则');
+  assert.equal(sourceName(url,''),'raw.githubusercontent.com · AWAvenue-Ads-Rule.txt');
+  assert.equal(sourceName(url,'x'.repeat(161)),sourceName(url));
+  assert.equal(sourceName('builtin:hagezi-pro-minus-fake'),'HaGeZi Pro − Fake');
+  const p=syncProgress(sourceReport([{status:'accepted',name:'AdGuard DNS filter'}]),id);
+  assert.equal(p.rows[0].name,'AdGuard DNS filter');
+  assert.equal(p.rows[0].url,'https://example.org/0');
+});
 
 test('progress separates usable, fresh cache, failures and queued work without promising publication', () => {
   const text=sourceReport([{status:'accepted',provenance:'cache_fresh'},{status:'download_error',reason:'HTTP 404',attempts:3,max_attempts:3},{status:'downloading',attempts:2,max_attempts:3},{status:'queued'}]);

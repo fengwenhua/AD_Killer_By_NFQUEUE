@@ -30,6 +30,12 @@ inline SourceFormat recipe_source_format(const std::string &url) {
         if (url == source.url) return source.format;
     return SourceFormat::AUTO;
 }
+inline const char *recipe_source_name(const std::string &url) {
+    if (is_builtin_source(url)) return HAGEZI_SOURCE_NAME;
+    for (const auto &source : default_rule_recipe())
+        if (url == source.url) return source.name;
+    return "";
+}
 inline const char *source_format_name(SourceFormat format) {
     if (format == SourceFormat::ADGUARD) return "adguard";
     if (format == SourceFormat::HOSTS_AS_ADGUARD) return "hosts-as-adguard";

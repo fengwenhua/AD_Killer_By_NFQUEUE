@@ -5,6 +5,7 @@ import { PATHS } from '../services/api.js';
 import { shellQuote } from '../services/bridge.js';
 import { getStorage } from '../services/storage.js';
 import { useLifetime } from './useLifetime.js';
+import { sourceName } from '../domain/syncProgress.js';
 
 export function useSources(api, feedback, storage = getStorage()) {
   const life = useLifetime();
@@ -50,7 +51,7 @@ export function useSources(api, feedback, storage = getStorage()) {
     if (row?.locked || (row && testingId.value === row.id)) return false;
     const url = editor.value.url.trim(), error = sourceUrlError(url, rows.value, row?.id);
     if (error || (!row && (ordinaryCount.value >= 64 || url === HAGEZI_ID))) { editorError.value = error || '无法添加此来源'; return false; }
-    if (row) row.url = url;
+    if (row) { if (row.url !== url) row.name = ''; row.url = url; }
     else { const next = normalizeSource({ url, enabled: true }, sequence++); rows.value.push(next); order.value.push(next.id); }
     editor.value = null; changed(); return true;
   }
@@ -137,7 +138,7 @@ export function useSources(api, feedback, storage = getStorage()) {
   async function trackTest(id, row) {
     if (testTracking) return testTracking;
     testingId.value = row.id; testLogId.value = row.id; testPaused.value = false;
-    status(`正在测试：${row.url}（不替换当前规则）`);
+    status(`正在测试：${sourceName(row.url, row.name)}（不替换当前规则）`);
     testTracking = (async () => {
       const outcome = await observeJob(api, id, life, {
         types: ['source'],

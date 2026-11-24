@@ -1,7 +1,8 @@
 import { HAGEZI_ID, parseSourceSummary, sourceHistory, sourceUrlError, validJob } from './rules.js';
 
 const states = new Set(['queued', 'downloading', 'validating', 'accepted', 'download_error', 'content_rejected', 'not_attempted']);
-export function sourceName(url) {
+export function sourceName(url, name = '') {
+  if (typeof name === 'string' && name.trim() && name.length <= 160) return name.trim();
   if (url === HAGEZI_ID) return 'HaGeZi Pro − Fake';
   try { const value = new URL(url), file = value.pathname.split('/').filter(Boolean).pop(); return value.hostname + (file ? ' · ' + file.slice(0, 50) : ''); }
   catch { return '规则来源'; }
@@ -15,7 +16,7 @@ export function syncProgress(text, id, jobStatus = 'running') {
       report.sources.some(s => sourceUrlError(s.url) || !states.has(s.status))) return null;
   const sources = report.sources.map(s => (jobStatus !== 'running' && ['queued', 'downloading', 'validating'].includes(s.status)) || /parallel_source_cancelled/.test(s.reason || '')
     ? { ...s, status: 'not_attempted' } : s);
-  const rows = sources.map(source => ({ ...source, name: sourceName(source.url),
+  const rows = sources.map(source => ({ ...source, name: sourceName(source.url, source.name),
     display: sourceHistory({ url: source.url, enabled: true }, sources) }));
   const count = predicate => rows.filter(predicate).length;
   const ready = count(s => s.status === 'accepted');

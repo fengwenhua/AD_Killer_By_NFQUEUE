@@ -12,6 +12,10 @@ int main() {
         return count;
     };
     assert(default_rule_recipe().size() == 20);
+    assert(std::string(recipe_source_name(HAGEZI_SOURCE_ID)) == HAGEZI_SOURCE_NAME);
+    assert(std::string(recipe_source_name("https://example.org/custom")).empty());
+    for (const auto &source : default_rule_recipe())
+        assert(std::string(recipe_source_name(source.url)) == source.name);
     assert(parse_rule_sources(default_rule_sources_text(), entries, error, true));
     assert(entries.size() == 21 && entries.back().url == HAGEZI_SOURCE_ID && entries.back().enabled);
     assert(default_rule_sources_text().find("https://adrules.top/adrules.txt") == std::string::npos);

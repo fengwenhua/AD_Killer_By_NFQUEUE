@@ -1489,6 +1489,44 @@ def source_cache_regression(browser, errors):
                 page.close()
 
 
+def source_address_regression(browser, errors, screenshots=None):
+    """Real names, mobile long-link disclosure/copy and independent switches."""
+    url = 'https://raw.githubusercontent.com/TG-Twilight/AWAvenue-Ads-Rule/main/' + 'long-' * 100 + '.txt?format=hosts'
+    for theme in ('light', 'dark'):
+        for width in (320, 393, 768):
+            page = browser.new_page(viewport={'width': width, 'height': 852}, color_scheme=theme, reduced_motion='reduce')
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.add_init_script(mock_script([{'url': url, 'enabled': True, 'name': 'AWAvenue 去广告规则'}]) + """
+window.previewCopies=[];
+Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{previewCopies.push(text)}}});
+""")
+            page.goto((ROOT / 'module/webroot/index.html').as_uri())
+            page.locator('nav [data-page="rules"]').click()
+            page.locator('#sourcesDetails > summary').click()
+            card = page.locator('.source-item').first
+            expect(card.locator('.source-top label')).to_have_text('AWAvenue 去广告规则')
+            toggle = card.get_by_role('checkbox', name='启用AWAvenue 去广告规则', exact=True)
+            expect(toggle).to_be_checked()
+            card.locator('.source-address > summary').click()
+            expect(card.locator('.source-address-full code')).to_have_text(url)
+            card.get_by_role('button', name='复制地址', exact=True).click()
+            expect(card.locator('.source-address [role="status"]')).to_have_text('地址已复制')
+            assert page.evaluate('previewCopies') == [url]
+            expect(toggle).to_be_checked()
+            assert card.locator('.source-address-full code').evaluate('e=>getComputedStyle(e).userSelect') == 'text'
+            page.evaluate("Object.defineProperty(navigator,'clipboard',{value:{writeText:async()=>{throw new Error('denied')}}});document.execCommand=()=>false")
+            card.get_by_role('button', name='复制地址', exact=True).click()
+            expect(card.locator('.source-address [role="status"]')).to_contain_text('长按完整地址复制')
+            expect(toggle).to_be_checked()
+            assert not page.evaluate("previewCommands.some(c=>/ --(?:sources-save|update-start|source-test|start|stop|reload)(?: |$)/.test(c))")
+            if screenshots and width == 393:
+                page.screenshot(path=str(screenshots / f'source-address-{theme}.png'))
+            page.evaluate("document.documentElement.style.fontSize='22px'")
+            assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
+            assert card.evaluate('e=>e.scrollWidth<=e.clientWidth+1')
+            page.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--browser-path")
@@ -1502,6 +1540,7 @@ def main():
         errors = []
         try:
             fixture_regression(browser, errors)
+            source_address_regression(browser, errors, args.screenshots)
             freezer_health_regression(browser, errors)
             cleanup_health_regression(browser, errors)
             apply_health_regression(browser, errors)

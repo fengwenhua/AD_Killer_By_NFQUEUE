@@ -303,6 +303,7 @@ std::string serialize_source_reports(const std::vector<SourceUpdateReport> &repo
         const auto &report = reports[i];
         output << "\n[source_" << i << "]\n"
                << "url=" << safe_field(report.url) << "\n"
+               << "name=" << safe_field(recipe_source_name(report.url)) << "\n"
                << "format=" << safe_field(report.format) << "\n"
                << "status=" << safe_field(report.status) << "\n"
                << "attempts=" << report.attempts << "\n"

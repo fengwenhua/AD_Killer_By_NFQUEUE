@@ -226,6 +226,11 @@ int main() {
                report.find("html_content\nstatus") == std::string::npos,
            "source report fields must not permit newline injection");
     accepted.stats.accepted_hosts = 3;
+    auto named = accepted;
+    named.url = default_rule_recipe().front().url;
+    expect(serialize_source_reports({named}, "processing", 123).find(
+               std::string("name=") + default_rule_recipe().front().name + "\n") != std::string::npos,
+           "live and persisted reports must carry the same canonical recipe name as source cards");
     accepted.stats.accepted_adguard = 2;
     // A rejected source can contain a valid prefix, but none of its lines
     // reached the published bundle and must not inflate duplicate counts.

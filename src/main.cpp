@@ -1668,7 +1668,7 @@ static int cmd_sources(bool save) {
         const bool builtin = is_builtin_source(entries[i].url);
         printf("{\"url\":%s,\"enabled\":%s,\"locked\":%s,\"name\":%s",
                source_json_string(entries[i].url).c_str(), entries[i].enabled ? "true" : "false",
-               builtin ? "true" : "false", source_json_string(builtin ? HAGEZI_SOURCE_NAME : "").c_str());
+               builtin ? "true" : "false", source_json_string(recipe_source_name(entries[i].url)).c_str());
         if (builtin)
             printf(",\"kind\":\"hagezi-pro-minus-fake\",\"dependencies\":[%s,%s]",
                    source_json_string(HAGEZI_PRO_URL).c_str(), source_json_string(HAGEZI_FAKE_URL).c_str());

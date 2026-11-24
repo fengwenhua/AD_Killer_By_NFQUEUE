@@ -69,6 +69,7 @@ def main():
         ordinary = [s for s in defaults["sources"] if not s["locked"]]
         special = [s for s in defaults["sources"] if s["locked"]]
         assert len(ordinary) == recipe_count and all(s["enabled"] for s in ordinary)
+        assert all(s['name'] for s in ordinary), 'known recipe names must reach source cards'
         assert not any(s['url']=='https://adrules.top/adrules.txt' for s in ordinary)
         assert len(special) == 1 and special[0]["url"] == HAGEZI and special[0]["enabled"]
         assert len(special[0]["dependencies"]) == 2
